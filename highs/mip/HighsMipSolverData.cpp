@@ -101,6 +101,9 @@ std::string HighsMipSolverData::solutionSourceToString(
   } else if (solution_source == kSolutionSourceFeasibilityPump) {
     if (code) return "F";
     return "Feasibility pump";
+  } else if (solution_source == kSolutionSourceGraphLns) {
+    if (code) return "G";
+    return "Graph LNS";
   } else if (solution_source == kSolutionSourceHeuristic) {
     if (code) return "H";
     return "Heuristic";
@@ -2113,6 +2116,8 @@ restart:
   profiling->stop(kMipClockRandomizedRounding);
   if (mipsolver.options_mip_->mip_heuristic_run_shifting)
     heuristics.shifting(worker, firstlpsol);
+  if (mipsolver.options_mip_->mip_heuristic_run_graph_lns)
+    heuristics.graphLNS(worker, firstlpsol);
 
   heuristics.flushStatistics(mipsolver, worker);
 

@@ -47,6 +47,7 @@ enum MipSolutionSource : int {
   kSolutionSourceBranching,           // B
   kSolutionSourceCentralRounding,     // C
   kSolutionSourceFeasibilityPump,     // F
+  kSolutionSourceGraphLns,            // G
   kSolutionSourceHeuristic,           // H
   kSolutionSourceShifting,            // I
   kSolutionSourceFeasibilityJump,     // J

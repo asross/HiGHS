@@ -22,6 +22,8 @@ class HighsPrimalHeuristics {
  private:
   const HighsMipSolver& mipsolver;
   std::vector<HighsInt> intcols;
+  std::vector<HighsInt> decisioncols;
+  bool decisionColsSetUp = false;
   double successObservations;
   HighsInt numSuccessObservations;
   double infeasObservations;
@@ -33,6 +35,11 @@ class HighsPrimalHeuristics {
   HighsPrimalHeuristics(HighsMipSolver& mipsolver);
 
   void setupIntCols();
+
+  void setupDecisionCols();
+
+  void graphLNS(HighsMipWorker& worker,
+                const std::vector<double>& relaxationsol);
 
   bool solveSubMip(HighsMipWorker& worker, const HighsLp& lp,
                    const HighsBasis& basis, double fixingRate,
