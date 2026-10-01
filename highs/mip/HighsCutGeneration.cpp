@@ -540,6 +540,12 @@ bool HighsCutGeneration::cmirCutGenerationHeuristic(double minEfficacy,
         if (delta <= 1e-4 || delta == maxabsdelta) continue;
         maxabsdelta = max(maxabsdelta, delta);
         deltas.push_back(delta);
+        // GMI-strength experiment: richer scale search. In addition to delta =
+        // |coeff|, also try half and double that scale. The dedup + best-
+        // efficacy selection below keeps only the strongest resulting cut, so
+        // extra candidates can only strengthen (never weaken) the cut.
+        deltas.push_back(0.5 * delta);
+        deltas.push_back(2.0 * delta);
       }
     } else {
       updateViolationAndNorm(i, vals[i], continuouscontribution,
