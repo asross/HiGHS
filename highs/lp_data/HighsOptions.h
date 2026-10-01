@@ -501,6 +501,7 @@ struct HighsOptionsStruct {
   bool mip_heuristic_run_feasibility_jump;
   bool mip_heuristic_run_rins;
   bool mip_heuristic_run_rens;
+  bool mip_heuristic_run_graph_lns;
   bool mip_heuristic_run_root_reduced_cost;
   bool mip_heuristic_run_zi_round;
   bool mip_heuristic_run_shifting;
@@ -667,6 +668,7 @@ struct HighsOptionsStruct {
         mip_heuristic_run_feasibility_jump(false),
         mip_heuristic_run_rins(false),
         mip_heuristic_run_rens(false),
+        mip_heuristic_run_graph_lns(false),
         mip_heuristic_run_root_reduced_cost(false),
         mip_heuristic_run_zi_round(false),
         mip_heuristic_run_shifting(false),
@@ -1239,6 +1241,13 @@ class HighsOptions : public HighsOptionsStruct {
     record_bool =
         new OptionRecordBool("mip_heuristic_run_rens", "Use the RENS heuristic",
                              advanced, &mip_heuristic_run_rens, true);
+    records.push_back(record_bool);
+
+    record_bool = new OptionRecordBool(
+        "mip_heuristic_run_graph_lns",
+        "Use the graph-neighbourhood LNS heuristic (LP-guided dives on "
+        "constraint-graph neighbourhoods) at the root",
+        advanced, &mip_heuristic_run_graph_lns, true);
     records.push_back(record_bool);
 
     record_bool =

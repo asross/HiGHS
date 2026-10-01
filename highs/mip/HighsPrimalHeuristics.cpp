@@ -42,6 +42,9 @@ HighsPrimalHeuristics::HighsPrimalHeuristics(HighsMipSolver& mipsolver)
 
 void HighsPrimalHeuristics::setupIntCols() {
   intcols = mipsolver.mipdata_->integer_cols;
+  // the model changes on restarts: recompute the graph-LNS decision columns
+  decisionColsSetUp = false;
+  decisioncols.clear();
 
   pdqsort(intcols.begin(), intcols.end(), [&](HighsInt c1, HighsInt c2) {
     const FP_32BIT_VOLATILE double lockScore1 =
@@ -389,6 +392,342 @@ static double calcFixVal(double rootchange, double fracval, double cost) {
     return std::floor(fracval);
   else
     return std::floor(fracval + 0.5);
+}
+
+// Graph-neighbourhood LNS
+// -----------------------
+// A primal heuristic for models whose LP relaxation has a tight bound but a
+// misleading vertex (dispatch, unit commitment, lot sizing, scheduling).
+//
+// 1. Decision columns. An integer column whose every row has coefficient +-1 on
+//    it, only integral columns, integral coefficients and integral finite
+//    sides is confined to an interval with integer endpoints once the other
+//    integers are fixed, and shares no row with a continuous column, so every
+//    LP vertex has it integral (e.g. |x_t - x_{t-1}| indicators). Diving on
+//    such a column is wasted and, worse, fixes it before the columns that
+//    determine it. They are excluded; the tree still branches on them if a
+//    fractional value ever survives.
+// 2. Root dive. Fix the most integral unfixed decision columns toward the LP
+//    point, a chunk per LP re-solve; a pruned node is repaired by backtracking
+//    (which flips the deepest decision) and a smaller chunk.
+// 3. Neighbourhoods. Breadth-first search over the variable/constraint graph
+//    from a seed decision column collects ~400 decision columns; the rest are
+//    fixed to the incumbent. The neighbourhood LP is pruned by the incumbent
+//    cutoff, otherwise dived with 10 fixings per LP. Stops after 5
+//    consecutive non-improving neighbourhoods.
+void HighsPrimalHeuristics::setupDecisionCols() {
+  decisionColsSetUp = true;
+  decisioncols.clear();
+  const HighsLp& model = *mipsolver.model_;
+  const HighsMipSolverData& mipdata = *mipsolver.mipdata_;
+  const HighsSparseMatrix& A = model.a_matrix_;
+  if (!A.isColwise() || mipdata.ARstart_.empty()) {
+    decisioncols = intcols;
+    return;
+  }
+  auto integral = [](double v) { return std::fabs(v - std::round(v)) <= 1e-9; };
+  std::vector<uint8_t> implied(model.num_col_, 0);
+  for (HighsInt col : intcols) {
+    bool ok = true;
+    for (HighsInt p = A.start_[col]; ok && p != A.start_[col + 1]; ++p) {
+      if (std::fabs(std::fabs(A.value_[p]) - 1.0) > 1e-9) {
+        ok = false;
+        break;
+      }
+      HighsInt row = A.index_[p];
+      if ((model.row_lower_[row] != -kHighsInf &&
+           !integral(model.row_lower_[row])) ||
+          (model.row_upper_[row] != kHighsInf &&
+           !integral(model.row_upper_[row]))) {
+        ok = false;
+        break;
+      }
+      for (HighsInt q = mipdata.ARstart_[row]; q != mipdata.ARstart_[row + 1];
+           ++q) {
+        HighsInt k = mipdata.ARindex_[q];
+        if (!integral(mipdata.ARvalue_[q]) || !mipsolver.isColIntegral(k) ||
+            (k != col && implied[k])) {
+          ok = false;
+          break;
+        }
+      }
+    }
+    if (ok)
+      implied[col] = 1;
+    else
+      decisioncols.push_back(col);
+  }
+}
+
+void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
+                                     const std::vector<double>& relaxationsol) {
+  if (mipsolver.submip) return;
+  if (worker.getGlobalDomain().infeasible()) return;
+  if (!decisionColsSetUp) setupDecisionCols();
+  if (decisioncols.empty() || relaxationsol.empty()) return;
+
+  HighsMipSolverData& mipdata = *mipsolver.mipdata_;
+  const HighsLp& model = *mipsolver.model_;
+  const HighsSparseMatrix& A = model.a_matrix_;
+  const HighsInt numCol = mipsolver.numCol();
+  const double feastol = mipdata.feastol;
+  const HighsDomain& globaldom = worker.getGlobalDomain();
+
+  std::vector<uint8_t> isDecision(numCol, 0);
+  for (HighsInt col : decisioncols) isDecision[col] = 1;
+
+  // one LP relaxation copy for the whole heuristic; bounds live in a domain
+  HighsLpRelaxation lp(worker.getLpRelaxation());
+  lp.setMipWorker(worker);
+  lp.setProfiling(mipsolver.profiling_);
+  lp.setAdjustSymmetricBranchingCol(false);
+  const int64_t lpItersStart = lp.getNumLpIterations();
+  auto chargeIterations = [&]() {
+    worker.getHeurLpIterations() += lp.getNumLpIterations() - lpItersStart;
+  };
+  auto usable = [&](HighsLpRelaxation::Status st) {
+    return st == HighsLpRelaxation::Status::kOptimal ||
+           st == HighsLpRelaxation::Status::kUnscaledPrimalFeasible;
+  };
+  auto solve = [&](HighsDomain& dom) {
+    lp.setObjectiveLimit(worker.upper_limit);
+    return lp.resolveLp(&dom);
+  };
+  // an LP solution with every integral column integral is a new incumbent
+  auto tryIncumbent = [&](HighsLpRelaxation::Status st) {
+    if (!usable(st) || !lp.getFractionalIntegers().empty()) return false;
+    return addIncumbent(lp.getLpSolver().getSolution().col_value,
+                        lp.getObjective(), kSolutionSourceGraphLns, worker);
+  };
+  // put `dom` back to `snap` and push the undone bounds back into the LP
+  auto restore = [&](HighsDomain& dom, const HighsDomain& snap,
+                     size_t stackPos) {
+    const auto& stack = dom.getDomainChangeStack();
+    std::vector<HighsInt> cols;
+    for (size_t i = stackPos; i < stack.size(); ++i)
+      cols.push_back(stack[i].column);
+    dom = snap;
+    for (HighsInt c : cols)
+      lp.getLpSolver().changeColBounds(c, dom.col_lower_[c], dom.col_upper_[c]);
+  };
+  auto fixTo = [&](HighsDomain& dom, HighsInt col, double val) {
+    if (dom.col_lower_[col] < val)
+      dom.changeBound(HighsBoundType::kLower, col, val,
+                      HighsDomain::Reason::unspecified());
+    if (dom.col_upper_[col] > val)
+      dom.changeBound(HighsBoundType::kUpper, col, val,
+                      HighsDomain::Reason::unspecified());
+    dom.propagate();
+    return !dom.infeasible();
+  };
+
+  // Dive: fix the most integral unfixed candidates toward the current LP
+  // point, `chunk` per LP re-solve. A failed chunk is undone and retried at a
+  // quarter of the size; a single failed fixing is flipped the other way.
+  auto dive = [&](HighsDomain& dom, std::vector<HighsInt> candidates,
+                  HighsInt chunk0) {
+    HighsInt chunk = std::max(HighsInt{1}, chunk0);
+    const HighsInt maxSolves = 5 * HighsInt(candidates.size()) + 100;
+    HighsInt solves = 0;
+    bool fallback = false;
+    std::vector<std::pair<double, HighsInt>> order;
+    while (solves < maxSolves) {
+      if (worker.terminatorTerminated() || mipdata.checkLimits()) return false;
+      const std::vector<double> sol = lp.getLpSolver().getSolution().col_value;
+      order.clear();
+      for (HighsInt col : candidates)
+        if (dom.col_lower_[col] < dom.col_upper_[col])
+          order.emplace_back(std::fabs(sol[col] - std::round(sol[col])), col);
+      if (order.empty()) {
+        if (lp.getFractionalIntegers().empty()) return false;
+        if (fallback) return false;
+        // non-decision integers left fractional: dive on them too
+        fallback = true;
+        candidates.clear();
+        for (const auto& f : lp.getFractionalIntegers())
+          candidates.push_back(f.first);
+        continue;
+      }
+      pdqsort(order.begin(), order.end());
+      const HighsInt nfix = std::min<HighsInt>(chunk, order.size());
+      HighsDomain snap = dom;
+      const size_t pos = dom.getDomainChangeStack().size();
+      bool feasible = true;
+      for (HighsInt i = 0; i < nfix && feasible; ++i) {
+        HighsInt col = order[i].second;
+        double val =
+            std::min(std::max(std::round(sol[col]), dom.col_lower_[col]),
+                     dom.col_upper_[col]);
+        feasible = fixTo(dom, col, val);
+      }
+      HighsLpRelaxation::Status st = HighsLpRelaxation::Status::kInfeasible;
+      if (feasible) {
+        st = solve(dom);
+        ++solves;
+      }
+      if (usable(st)) {
+        if (tryIncumbent(st)) return true;
+        chunk = std::min(chunk0, 2 * chunk);
+        continue;
+      }
+      restore(dom, snap, pos);
+      if (nfix > 1) {
+        chunk = std::max(HighsInt{1}, chunk / 4);
+        continue;
+      }
+      // a single fixing failed: try the other rounding direction
+      HighsInt col = order[0].second;
+      double val = std::min(std::max(std::round(sol[col]), dom.col_lower_[col]),
+                            dom.col_upper_[col]);
+      double other = sol[col] > val ? val + 1 : val - 1;
+      other =
+          std::min(std::max(other, dom.col_lower_[col]), dom.col_upper_[col]);
+      if (other == val || !fixTo(dom, col, other)) return false;
+      st = solve(dom);
+      ++solves;
+      if (!usable(st)) return false;
+      if (tryIncumbent(st)) return true;
+    }
+    return false;
+  };
+
+  // 1. root dive from the LP point
+  HighsDomain dom(globaldom);
+  lp.getLpSolver().changeColsBounds(0, numCol - 1, dom.col_lower_.data(),
+                                    dom.col_upper_.data());
+  dom.clearChangedCols();
+  HighsLpRelaxation::Status st = solve(dom);
+  if (!usable(st)) {
+    chargeIterations();
+    return;
+  }
+  lp.storeBasis();
+  if (!tryIncumbent(st))
+    dive(dom, decisioncols, std::max<HighsInt>(20, decisioncols.size() / 12));
+  if (mipdata.upper_limit == kHighsInf ||
+      mipdata.incumbent.size() != size_t(numCol)) {
+    chargeIterations();
+    return;
+  }
+
+  // 2. neighbourhoods. Stop on stall, on the heuristic LP budget, on an
+  // LP-iteration cap relative to the root LP, or once the incumbent is within
+  // the target gap of the current bound (the solve then stops at the root).
+  const HighsInt size0 = std::min<HighsInt>(400, decisioncols.size());
+  HighsInt size = size0;
+  HighsInt since = 0;
+  const int64_t heurItersCap = 3 * mipdata.total_lp_iterations + 5000;
+  const double relGap = mipsolver.options_mip_->mip_rel_gap;
+  auto withinGap = [&]() {
+    return mipdata.upper_bound < kHighsInf &&
+           mipdata.upper_bound - mipdata.lower_bound <=
+               relGap * std::fabs(mipdata.upper_bound);
+  };
+  auto lpBudgetExceeded = [&]() {
+    int64_t heurIters =
+        worker.getHeurLpIterations() + lp.getNumLpIterations() - lpItersStart;
+    return heurIters + mipdata.heuristic_lp_iterations >
+               100000 + ((mipdata.total_lp_iterations -
+                          mipdata.heuristic_lp_iterations -
+                          mipdata.sb_lp_iterations) >>
+                         1) ||
+           lp.getNumLpIterations() - lpItersStart > heurItersCap;
+  };
+  std::vector<HighsInt> neighbourhood, frontier, next, touchedRows, disagree;
+  std::vector<uint8_t> inN(numCol, 0), seenRow(mipsolver.numRow(), 0);
+  for (HighsInt it = 0; since < 5 && it < 100; ++it) {
+    if (worker.terminatorTerminated() || mipdata.checkLimits() ||
+        lpBudgetExceeded() || withinGap())
+      break;
+    const std::vector<double>& inc = mipdata.incumbent;
+
+    // seed: a decision column where the incumbent disagrees with the root LP
+    // solution (70%), otherwise any decision column
+    HighsInt seed = -1;
+    if (randgen.fraction() < 0.7) {
+      disagree.clear();
+      for (HighsInt col : decisioncols)
+        if (std::fabs(inc[col] - relaxationsol[col]) > 0.5)
+          disagree.push_back(col);
+      if (!disagree.empty()) seed = disagree[randgen.integer(disagree.size())];
+    }
+    if (seed == -1) seed = decisioncols[randgen.integer(decisioncols.size())];
+
+    // BFS over the variable/constraint graph, counting decision columns
+    for (HighsInt col : neighbourhood) inN[col] = 0;
+    for (HighsInt row : touchedRows) seenRow[row] = 0;
+    neighbourhood.assign(1, seed);
+    inN[seed] = 1;
+    touchedRows.clear();
+    frontier.assign(1, seed);
+    while (!frontier.empty() && HighsInt(neighbourhood.size()) < size) {
+      next.clear();
+      for (HighsInt j : frontier) {
+        for (HighsInt p = A.start_[j]; p != A.start_[j + 1]; ++p) {
+          HighsInt row = A.index_[p];
+          if (seenRow[row]) continue;
+          seenRow[row] = 1;
+          touchedRows.push_back(row);
+          for (HighsInt q = mipdata.ARstart_[row];
+               q != mipdata.ARstart_[row + 1]; ++q) {
+            HighsInt k = mipdata.ARindex_[q];
+            if (!isDecision[k] || inN[k]) continue;
+            inN[k] = 1;
+            neighbourhood.push_back(k);
+            next.push_back(k);
+            if (HighsInt(neighbourhood.size()) >= size) break;
+          }
+          if (HighsInt(neighbourhood.size()) >= size) break;
+        }
+        if (HighsInt(neighbourhood.size()) >= size) break;
+      }
+      frontier.swap(next);
+    }
+
+    // fix everything outside the neighbourhood to the incumbent, warm from
+    // the root basis
+    dom = globaldom;
+    bool feasible = true;
+    for (HighsInt col : decisioncols) {
+      if (inN[col]) continue;
+      double val = std::min(std::max(std::round(inc[col]), dom.col_lower_[col]),
+                            dom.col_upper_[col]);
+      if (!fixTo(dom, col, val)) {
+        feasible = false;
+        break;
+      }
+    }
+    if (!feasible) {
+      ++since;
+      continue;
+    }
+    lp.recoverBasis();
+    lp.getLpSolver().changeColsBounds(0, numCol - 1, dom.col_lower_.data(),
+                                      dom.col_upper_.data());
+    dom.clearChangedCols();
+    const double before = mipdata.upper_bound;
+    st = solve(dom);
+    if (!usable(st) || lp.getObjective() >= worker.upper_limit) {
+      // the neighbourhood LP cannot beat the incumbent: look wider
+      ++since;
+      size = std::min(4 * size0, size + size / 4);
+      continue;
+    }
+    if (!tryIncumbent(st))
+      dive(dom, neighbourhood,
+           std::max<HighsInt>(2, neighbourhood.size() / 40));
+    // only an improvement that closes at least 5% of the remaining gap counts
+    // as progress; smaller ones are kept but do not reset the stall counter
+    const double gapBefore = before - mipdata.lower_bound;
+    if (mipdata.upper_bound < before - std::max(feastol, 0.05 * gapBefore)) {
+      since = 0;
+      size = size0;
+    } else {
+      ++since;
+      size = std::max(size0 / 2, size - size / 5);
+    }
+  }
+  chargeIterations();
 }
 
 void HighsPrimalHeuristics::RENS(HighsMipWorker& worker,

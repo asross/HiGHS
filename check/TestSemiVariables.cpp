@@ -337,8 +337,17 @@ TEST_CASE("3015", "[highs_test_semi_variables]") {
   highs.setOptionValue("output_flag", dev_run);
   highs.readModel(filename);
   HighsStatus status = highs.run();
-  REQUIRE(status == HighsStatus::kError);
-  REQUIRE(highs.getModelStatus() == HighsModelStatus::kSolveError);
+  // At the default tolerance this solve used to fail with semi-variable
+  // infeasibilities; a heuristic may now find the optimum directly, so
+  // either outcome is acceptable here.
+  if (status == HighsStatus::kOk) {
+    REQUIRE(highs.getModelStatus() == HighsModelStatus::kOptimal);
+    REQUIRE(std::fabs(highs.getObjectiveValue() - optimal_objective_value) <
+            1e-4 * std::fabs(optimal_objective_value));
+  } else {
+    REQUIRE(status == HighsStatus::kError);
+    REQUIRE(highs.getModelStatus() == HighsModelStatus::kSolveError);
+  }
 
   REQUIRE(highs.setOptionValue("mip_feasibility_tolerance", 7e-08) ==
           HighsStatus::kOk);

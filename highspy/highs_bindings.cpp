@@ -1323,6 +1323,8 @@ PYBIND11_MODULE(_core, m, py::mod_gil_not_used()) {
                      &HighsOptions::mip_heuristic_run_rins)
       .def_readwrite("mip_heuristic_run_rens",
                      &HighsOptions::mip_heuristic_run_rens)
+      .def_readwrite("mip_heuristic_run_graph_lns",
+                     &HighsOptions::mip_heuristic_run_graph_lns)
       .def_readwrite("mip_heuristic_run_root_reduced_cost",
                      &HighsOptions::mip_heuristic_run_root_reduced_cost)
       .def_readwrite("mip_heuristic_run_zi_round",
