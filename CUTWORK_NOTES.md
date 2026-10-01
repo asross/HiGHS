@@ -4,6 +4,11 @@ Experimental work on HiGHS's MIP cut separators, branched from v1.15.1. Two
 independent changes, both exploratory. Nothing here is PR-ready without a
 proper multi-seed MIPLIB benchmark.
 
+This branch also merges in the **graph-neighbourhood LNS primal heuristic**
+(`mip_heuristic_run_graph_lns`, from the `graph-lns-heuristic` branch), so it
+carries the full set of custom changes: the LNS heuristic + the cut-separator
+experiments below.
+
 ## 1. `{0,1/2}`-Chvátal–Gomory (zero-half) separator — `HighsModkSeparator.cpp`
 
 HiGHS's existing mod-k separator (`HighsGFkSolve`) enumerates a *basis* of the
