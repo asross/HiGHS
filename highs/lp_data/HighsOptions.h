@@ -1566,8 +1566,8 @@ class HighsOptions : public HighsOptionsStruct {
     record_int = new OptionRecordInt(
         "simplex_dse_exact_init_max_rows",
         "Max number of rows for which dual steepest edge weights of a "
-        "non-logical basis are computed exactly; above it they start from "
-        "unit weights",
+        "non-logical basis are computed exactly; above it they are kept "
+        "over LP changes that preserve them, or start from unit weights",
         advanced, &simplex_dse_exact_init_max_rows, 0, kHighsIInf, kHighsIInf);
     records.push_back(record_int);
 

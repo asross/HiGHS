@@ -2118,8 +2118,11 @@ restart:
   profiling->stop(kMipClockRandomizedRounding);
   if (mipsolver.options_mip_->mip_heuristic_run_shifting)
     heuristics.shifting(worker, firstlpsol);
+  // A first, short neighbourhood search: on easy models it finds a
+  // solution within the gap, so the cut loop can stop early
   if (mipsolver.options_mip_->mip_heuristic_run_graph_lns)
-    heuristics.graphLNS(worker, firstlpsol, false);
+    heuristics.graphLNS(worker, firstlpsol,
+                        getenv("LNS_EARLY") ? atoi(getenv("LNS_EARLY")) : 5);
 
   heuristics.flushStatistics(mipsolver, worker);
 
@@ -2363,11 +2366,12 @@ restart:
     mipsolver.callbackGetCutPool();
   if (checkLimits()) return clockOff(profiling);
 
-  // The neighbourhood search runs on the LP with the root cuts, whose
-  // solution guides it much better than the first LP solution
+  // The main neighbourhood search runs on the LP with the root cuts, whose
+  // solution and bound guide it much better than the first LP's
   if (mipsolver.options_mip_->mip_heuristic_run_graph_lns &&
       !rootlpsol.empty()) {
-    heuristics.graphLNS(worker, rootlpsol, true);
+    heuristics.graphLNS(worker, rootlpsol,
+                        getenv("LNS_LATE") ? atoi(getenv("LNS_LATE")) : 10);
     heuristics.flushStatistics(mipsolver, worker);
     if (checkLimits()) return clockOff(profiling);
     if (getenv("LNS_EXIT")) {

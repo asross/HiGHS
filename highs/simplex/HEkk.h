@@ -197,7 +197,6 @@ class HEkk {
   bool simplex_in_scaled_space_;
   HighsSparseMatrix ar_matrix_;
   bool ar_matrix_is_scaled_ = false;
-  bool random_vectors_drawn_for_solve_ = false;
   HighsSparseMatrix scaled_a_matrix_;
   HSimplexNla simplex_nla_;
 

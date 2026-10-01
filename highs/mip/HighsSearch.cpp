@@ -13,7 +13,6 @@
 #include "mip/HighsCutGeneration.h"
 #include "mip/HighsDomainChange.h"
 #include "mip/HighsMipSolverData.h"
-#include "../extern/pdqsort/pdqsort.h"
 
 HighsSearch::HighsSearch(HighsMipWorker& mipworker, HighsPseudocost& pseudocost)
     : mipworker(mipworker),
@@ -326,16 +325,6 @@ HighsInt HighsSearch::selectBranchingCandidate(int64_t maxSbIters,
   std::vector<HighsInt> evalqueue;
   evalqueue.resize(numfrac);
   std::iota(evalqueue.begin(), evalqueue.end(), 0);
-  // Strong branch on the candidates with the best pseudocost scores
-  // first, so that the lookahead below stops on the unpromising ones
-  {
-    std::vector<double> pscore(numfrac);
-    for (HighsInt k = 0; k != numfrac; ++k)
-      pscore[k] = pseudocost.getScore(fracints[k].first, fracints[k].second);
-    pdqsort(evalqueue.begin(), evalqueue.end(), [&](HighsInt a, HighsInt b) {
-      return std::make_pair(pscore[a], b) > std::make_pair(pscore[b], a);
-    });
-  }
 
   auto numNodesUp = [&](HighsInt k) {
     return getNodeQueue().numNodesUp(fracints[k].first);
@@ -400,20 +389,9 @@ HighsInt HighsSearch::selectBranchingCandidate(int64_t maxSbIters,
 
   HighsLpRelaxation::Playground playground = lp->playground();
 
-  // Reliability branching lookahead: stop strong branching once this
-  // many candidates in a row fail to improve the best score
-  const HighsInt kStrongBranchLookahead = 8;
-  HighsInt numNoImprove = 0;
-  double bestReliableScore = -1.0;
-  for (HighsInt k = 0; k != numfrac; ++k)
-    if (upscorereliable[k] && downscorereliable[k])
-      bestReliableScore = std::max(
-          bestReliableScore, pseudocost.getScore(fracints[k].first, upscore[k],
-                                                 downscore[k]));
-
   while (true) {
-    bool mustStop = getStrongBranchingLpIterations() >= maxSbIters ||
-                    numNoImprove >= kStrongBranchLookahead || checkLimits();
+    bool mustStop =
+        getStrongBranchingLpIterations() >= maxSbIters || checkLimits();
 
     HighsInt candidate = selectBestScore(mustStop);
 
@@ -728,17 +706,6 @@ HighsInt HighsSearch::selectBranchingCandidate(int64_t maxSbIters,
       //  printf("up eval col=%d fracval=%g\n", col, fracval);
       // evaluate up branch
       if (strongBranch(true)) return -1;
-    }
-
-    if (upscorereliable[candidate] && downscorereliable[candidate]) {
-      const double score =
-          pseudocost.getScore(col, upscore[candidate], downscore[candidate]);
-      if (score > bestReliableScore) {
-        bestReliableScore = score;
-        numNoImprove = 0;
-      } else {
-        ++numNoImprove;
-      }
     }
   }
 }

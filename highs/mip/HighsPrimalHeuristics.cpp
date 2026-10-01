@@ -461,7 +461,8 @@ void HighsPrimalHeuristics::setupDecisionCols() {
 
 void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                                      const std::vector<double>& relaxationsol,
-                                     bool neighbourhoods) {
+                                     HighsInt stallLimit) {
+  const bool neighbourhoods = stallLimit > 0;
   if (mipsolver.submip) return;
   if (worker.getGlobalDomain().infeasible()) return;
   if (!decisionColsSetUp) setupDecisionCols();
@@ -603,8 +604,10 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     return;
   }
   lp.storeBasis();
-  if (!tryIncumbent(st) &&
-      (!neighbourhoods || mipdata.incumbent.size() != size_t(numCol)))
+  // dive from the first LP solution; later calls only need it without an
+  // incumbent
+  if (!tryIncumbent(st) && (relaxationsol == mipdata.firstlpsol ||
+                            mipdata.incumbent.size() != size_t(numCol)))
     dive(dom, decisioncols, std::max<HighsInt>(20, decisioncols.size() / 12));
   if (!neighbourhoods || mipdata.upper_limit == kHighsInf ||
       mipdata.incumbent.size() != size_t(numCol)) {
@@ -618,7 +621,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // the target gap of the current bound (the solve then stops at the root).
   const bool trace = getenv("LNS_TRACE") != nullptr;
   const HighsInt maxStall =
-      getenv("LNS_STALL") ? atoi(getenv("LNS_STALL")) : 10;
+      getenv("LNS_STALL") ? atoi(getenv("LNS_STALL")) : stallLimit;
   const HighsInt maxIt = getenv("LNS_ITS") ? atoi(getenv("LNS_ITS")) : 1000;
   const HighsInt nodeLimit =
       getenv("LNS_NODES") ? atoi(getenv("LNS_NODES")) : 300;
@@ -633,20 +636,22 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   const int64_t heurItersCap =
       int64_t(itersFac * mipdata.total_lp_iterations) + 5000;
   const double relGap = mipsolver.options_mip_->mip_rel_gap;
+  const double absGap = mipsolver.options_mip_->mip_abs_gap;
+  auto targetGap = [&]() {
+    return std::max(relGap * std::fabs(mipdata.upper_bound), absGap);
+  };
   auto withinGap = [&]() {
     return mipdata.upper_bound < kHighsInf &&
-           mipdata.upper_bound - mipdata.lower_bound <=
-               relGap * std::fabs(mipdata.upper_bound);
+           mipdata.upper_bound - mipdata.lower_bound <= targetGap();
   };
+  // The neighbourhood search is for a loose target gap (as for dispatch
+  // or unit commitment models solved to 1%), when a good incumbent may be
+  // all that is needed: then it continues while it keeps improving. A
+  // small target gap needs the tree search, and the usual sub-MIP
+  // heuristics are better value.
+  auto certifying = [&]() { return relGap >= 1e-3; };
   auto lpBudgetExceeded = [&]() {
-    int64_t heurIters =
-        worker.getHeurLpIterations() + lp.getNumLpIterations() - lpItersStart;
-    return heurIters + mipdata.heuristic_lp_iterations >
-               100000 + ((mipdata.total_lp_iterations -
-                          mipdata.heuristic_lp_iterations -
-                          mipdata.sb_lp_iterations) >>
-                         1) ||
-           lp.getNumLpIterations() - lpItersStart > heurItersCap;
+    return lp.getNumLpIterations() - lpItersStart > heurItersCap;
   };
 
   // Depth-first branch and bound over the neighbourhood from the solved LP
@@ -655,6 +660,10 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // value; backtracking flips the deepest open decision first. Returns the
   // number of LP solves, and whether the neighbourhood was exhausted.
   std::vector<uint8_t> inCands(numCol, 0);
+  struct DfsStats {
+    HighsInt leaves = 0, boundPrunes = 0, infeasPrunes = 0, propPrunes = 0,
+             maxDepth = 0;
+  } dfsStats;
   auto searchNeighbourhood = [&](HighsDomain& dom,
                                  const std::vector<HighsInt>& cands,
                                  HighsInt nodeLimit, bool& exhausted) {
@@ -666,6 +675,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     std::vector<Decision> path;
     HighsInt nodes = 0;
     exhausted = false;
+    dfsStats = DfsStats();
     HighsLpRelaxation::Status st = HighsLpRelaxation::Status::kOptimal;
     bool solved = true;  // the LP is solved on entry
     while (true) {
@@ -676,8 +686,13 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       }
       solved = false;
       bool prune = !usable(st) || lp.getObjective() >= worker.upper_limit;
+      if (prune) {
+        if (usable(st)) ++dfsStats.boundPrunes; else ++dfsStats.infeasPrunes;
+      }
+      dfsStats.maxDepth = std::max<HighsInt>(dfsStats.maxDepth, path.size());
       if (!prune) {
         if (tryIncumbent(st)) {
+          ++dfsStats.leaves;
           prune = true;
         } else {
           const std::vector<double>& sol =
@@ -705,6 +720,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
           path.push_back({goUp ? down : up, false});
           dom.propagate();
           if (!dom.infeasible()) continue;
+          ++dfsStats.propPrunes;
           prune = true;
         }
       }
@@ -760,8 +776,8 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   std::vector<HighsInt> neighbourhood, frontier, next, touchedRows, disagree;
   std::vector<uint8_t> inN(numCol, 0), seenRow(mipsolver.numRow(), 0);
   for (HighsInt it = 0; since < maxStall && it < maxIt; ++it) {
-    if (worker.terminatorTerminated() || mipdata.checkLimits() ||
-        lpBudgetExceeded() || withinGap())
+    if (!certifying() || worker.terminatorTerminated() ||
+        mipdata.checkLimits() || lpBudgetExceeded() || withinGap())
       break;
     const std::vector<double>& inc = mipdata.incumbent;
 
@@ -885,14 +901,15 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     if (improved) ++nt.improved;
     if (trace)
       printf("LNS it %3d type %d size %4d nodes %3d %s%s obj %.4f  time %.2f "
-             "lpiters %lld\n",
+             "lpiters %lld  leaves %d bnd %d inf %d prop %d depth %d\n",
              int(it), int(type), int(neighbourhood.size()), int(nodes),
              pruned ? "pruned" : "      ", exhausted ? " exh" : "    ",
              mipdata.upper_bound, mipsolver.timer_.read(),
-             (long long)(lp.getNumLpIterations() - lpItersStart));
-    // only an improvement that closes at least 5% of the remaining gap counts
-    // as progress; smaller ones are kept but do not reset the stall counter
-    if (mipdata.upper_bound < before - std::max(feastol, 0.05 * gapBefore))
+             (long long)(lp.getNumLpIterations() - lpItersStart),
+             int(dfsStats.leaves), int(dfsStats.boundPrunes),
+             int(dfsStats.infeasPrunes), int(dfsStats.propPrunes),
+             int(dfsStats.maxDepth));
+    if (improved)
       since = 0;
     else
       ++since;

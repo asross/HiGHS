@@ -1617,7 +1617,6 @@ void HEkk::initialiseEkk() {
   setSimplexOptions();
   initialiseControl();
   initialiseSimplexLpRandomVectors();
-  random_vectors_drawn_for_solve_ = false;
   simplex_nla_.clear();
   clearBadBasisChange();
   status_.initialised_for_new_lp = true;
@@ -1641,15 +1640,7 @@ void HEkk::initialiseForSolve() {
   assert(status_.has_basis);
 
   updateSimplexOptions();
-  // The random vectors only depend on the LP dimensions, so keep them
-  // over re-solves (eg in MIP), drawing them afresh for the first solve
-  if (!random_vectors_drawn_for_solve_ ||
-      static_cast<HighsInt>(info_.numTotRandomValue_.size()) !=
-          lp_.num_col_ + lp_.num_row_ ||
-      static_cast<HighsInt>(info_.numColPermutation_.size()) != lp_.num_col_) {
-    initialiseSimplexLpRandomVectors();
-    random_vectors_drawn_for_solve_ = true;
-  }
+  initialiseSimplexLpRandomVectors();
   initialisePartitionedRowwiseMatrix();  // Timed
   allocateWorkAndBaseArrays();
   initialiseCost(SimplexAlgorithm::kPrimal, kSolvePhaseUnknown, false);
@@ -2160,7 +2151,11 @@ std::vector<double> HEkk::scatterDualEdgeWeights(
   if (num_weighted_row <= 0 || num_weighted_row > num_row || num_col < 0 ||
       static_cast<HighsInt>(dual_edge_weight_.size()) < num_weighted_row)
     return saved;
+  // -1: no weight (variable was nonbasic); -2: logical of a new row
   saved.assign(num_col + new_num_row, -1.0);
+  if (!new_row_index)
+    for (HighsInt iRow = num_weighted_row; iRow < new_num_row; iRow++)
+      saved[num_col + iRow] = -2.0;
   for (HighsInt iRow = 0; iRow < num_weighted_row; iRow++) {
     HighsInt iVar = basis_.basicIndex_[iRow];
     if (iVar >= num_col) {
@@ -2174,21 +2169,27 @@ std::vector<double> HEkk::scatterDualEdgeWeights(
   return saved;
 }
 
-// Set the DSE weights from saved_dual_edge_weight_, computing those of
-// basic variables without a saved weight. Exact if the basis is the
-// saved one up to added/deleted logicals, otherwise a warm start.
+// Set the DSE weights from saved_dual_edge_weight_ if the basis is the
+// saved one up to added/deleted logicals, so that they are exact:
+// computing those of new rows' logicals. A basis that differs in other
+// variables gets weights afresh.
 bool HEkk::restoreDualEdgeWeights(const bool near_optimal) {
   std::vector<double> saved = std::move(saved_dual_edge_weight_);
   saved_dual_edge_weight_.clear();
   const HighsInt num_row = lp_.num_row_;
+  // For small LPs computing the weights afresh is cheap
+  if (num_row <= options_->simplex_dse_exact_init_max_rows) return false;
   if (static_cast<HighsInt>(saved.size()) != lp_.num_col_ + num_row)
     return false;
-  HighsInt num_missing = 0;
-  for (HighsInt iRow = 0; iRow < num_row; iRow++)
-    num_missing += saved[basis_.basicIndex_[iRow]] < 0;
+  HighsInt num_new = 0;
+  for (HighsInt iRow = 0; iRow < num_row; iRow++) {
+    const double weight = saved[basis_.basicIndex_[iRow]];
+    if (weight == -1.0) return false;
+    num_new += weight < 0;
+  }
   // Near-optimal solves otherwise use Devex rather than computing all
   // weights, so only pay for a few
-  if (near_optimal && num_missing > 0.1 * num_row) return false;
+  if (near_optimal && num_new > 0.1 * num_row) return false;
   HVector row_ep;
   row_ep.setup(num_row);
   for (HighsInt iRow = 0; iRow < num_row; iRow++) {
