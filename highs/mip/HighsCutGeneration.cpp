@@ -541,7 +541,7 @@ bool HighsCutGeneration::cmirCutGenerationHeuristic(double minEfficacy,
         maxabsdelta = max(maxabsdelta, delta);
         deltas.push_back(delta);
         // GMI-strength experiment: richer scale search. In addition to delta =
-        // |coeff|, also try half and double that scale. The dedup + best-
+        // |coeff|, try a small ladder of sub-/super-scalings. The dedup + best-
         // efficacy selection below keeps only the strongest resulting cut, so
         // extra candidates can only strengthen (never weaken) the cut.
         deltas.push_back(0.5 * delta);

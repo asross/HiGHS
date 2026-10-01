@@ -501,11 +501,7 @@ void HighsModkSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
       lpAggregator.clear();
       ++emitted;
     }
-    static HighsInt cfCallCount = 0;
-    if (!cuts.empty() && ++cfCallCount <= 40)
-      fprintf(stderr, "CFDBG candRows=%d cutcand=%d emitted=%d poolAdded=%d\n",
-              (int)nrow, (int)cuts.size(), (int)emitted,
-              (int)(cutpool.getNumCuts() - poolBefore));
+    (void)poolBefore;
   }
 
   if (separateModKCuts<2>(intSystemValue, intSystemIndex, intSystemStart,
