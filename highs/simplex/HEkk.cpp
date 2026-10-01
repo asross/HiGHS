@@ -1617,6 +1617,7 @@ void HEkk::initialiseEkk() {
   setSimplexOptions();
   initialiseControl();
   initialiseSimplexLpRandomVectors();
+  random_vectors_drawn_for_solve_ = false;
   simplex_nla_.clear();
   clearBadBasisChange();
   status_.initialised_for_new_lp = true;
@@ -1640,7 +1641,16 @@ void HEkk::initialiseForSolve() {
   assert(status_.has_basis);
 
   updateSimplexOptions();
-  initialiseSimplexLpRandomVectors();
+  // The random vectors only depend on the LP dimensions: for large LPs
+  // (re-solved in MIP) keep them over re-solves
+  if (lp_.num_row_ <= options_->simplex_dse_exact_init_max_rows ||
+      !random_vectors_drawn_for_solve_ ||
+      static_cast<HighsInt>(info_.numTotRandomValue_.size()) !=
+          lp_.num_col_ + lp_.num_row_ ||
+      static_cast<HighsInt>(info_.numColPermutation_.size()) != lp_.num_col_) {
+    initialiseSimplexLpRandomVectors();
+    random_vectors_drawn_for_solve_ = true;
+  }
   initialisePartitionedRowwiseMatrix();  // Timed
   allocateWorkAndBaseArrays();
   initialiseCost(SimplexAlgorithm::kPrimal, kSolvePhaseUnknown, false);

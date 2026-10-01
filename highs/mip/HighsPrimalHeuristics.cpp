@@ -819,9 +819,14 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // the number of LP solves.
   std::vector<std::pair<double, HighsInt>> flipCands, partners;
   std::vector<double> cur(numCol), rc;
+  // at most about one root LP's worth of iterations per flip search: on
+  // some models (e.g. with ramping) each flip needs a long re-solve
+  const int64_t flipMaxIters =
+      std::max<int64_t>(5000, mipdata.firstrootlpiters);
   auto flipSearch = [&](HighsInt maxSolves) -> HighsInt {
     const std::vector<double>& inc = mipdata.incumbent;
     if (inc.size() != size_t(numCol)) return 0;
+    const int64_t flipStartIters = lp.getNumLpIterations();
     for (HighsInt col : decisioncols)
       cur[col] = std::min(std::max(std::round(inc[col]), globaldom.col_lower_[col]),
                           globaldom.col_upper_[col]);
@@ -877,8 +882,9 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
           flipCands.emplace_back(gain(col), col);
       pdqsort(flipCands.begin(), flipCands.end(), byGain);
       for (const auto& cand : flipCands) {
-        if (solves >= maxSolves || worker.terminatorTerminated() ||
-            mipdata.checkLimits())
+        if (solves >= maxSolves ||
+            lp.getNumLpIterations() - flipStartIters > flipMaxIters ||
+            worker.terminatorTerminated() || mipdata.checkLimits())
           return solves;
         const HighsInt j = cand.second;
         if (tryMove(&j, 1)) {
@@ -1106,6 +1112,10 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       nodes = searchNeighbourhood(dom, neighbourhood, nodeLimit, exhausted);
     else if (!pruned && !tryIncumbent(st))
       dive(dom, neighbourhood, std::max<HighsInt>(2, neighbourhood.size() / 40));
+    // a new incumbent from a neighbourhood often has cheap flips nearby
+    if (deep && !pruned && mipdata.upper_bound < before - feastol &&
+        !withinGap())
+      flipSearch(30);
     const bool improved = mipdata.upper_bound < before - feastol;
     // progress: in the deep search any improvement, in the quick search one
     // that closes at least 5% of the gap
