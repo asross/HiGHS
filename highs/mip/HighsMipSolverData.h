@@ -9,6 +9,10 @@
 #ifndef HIGHS_MIP_SOLVER_DATA_H_
 #define HIGHS_MIP_SOLVER_DATA_H_
 
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include "mip/HighsCliqueTable.h"
@@ -30,6 +34,36 @@
 #include "presolve/HighsPostsolveStack.h"
 #include "presolve/HighsSymmetry.h"
 #include "util/HighsTimer.h"
+
+// Incumbents exchanged between the MIP solver and a concurrent LNS
+// helper: a second MIP solver instance on a copy of the presolved model,
+// run in its own thread, that only does the root LP, cuts and graph LNS
+struct HighsConcurrentLns {
+  std::mutex mutex;
+  std::vector<double> solution;  // best solution offered so far
+  double objective = kHighsInf;
+  std::atomic<int64_t> version{0};
+  std::atomic<bool> stop{false};
+  std::thread thread;
+
+  void offer(const std::vector<double>& sol, double obj) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (obj >= objective) return;
+    objective = obj;
+    solution = sol;
+    ++version;
+  }
+  // Copies the best solution into sol if it is newer than seen and better
+  // than obj
+  bool take(int64_t& seen, double obj, std::vector<double>& sol) {
+    if (version.load() == seen) return false;
+    std::lock_guard<std::mutex> lock(mutex);
+    seen = version.load();
+    if (objective >= obj) return false;
+    sol = solution;
+    return true;
+  }
+};
 
 struct HighsPrimaDualIntegral {
   double value;
@@ -161,6 +195,21 @@ struct HighsMipSolverData {
   HighsDebugSol debugSolution;
 
   HighsMipSolverData(HighsMipSolver& mipsolver);
+  ~HighsMipSolverData() { stopConcurrentLns(); }
+
+  // The main solver owns its concurrent LNS helper; the helper reaches the
+  // same pool through mipsolver.concurrent_lns_
+  // Graph LNS rounds during the tree search: the next one once the total
+  // LP iterations reach lns_tree_next (-1: none), after a wait of
+  // lns_tree_wait iterations of tree search
+  int64_t lns_tree_next = -1;
+  int64_t lns_tree_wait = 0;
+
+  std::unique_ptr<HighsConcurrentLns> concurrent_lns;
+  int64_t concurrent_lns_seen = 0;
+  void startConcurrentLns();
+  void syncConcurrentLns();
+  void stopConcurrentLns();
 
   bool solutionRowFeasible(const std::vector<double>& solution) const;
   HighsModelStatus feasibilityJump();

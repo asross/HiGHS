@@ -889,6 +889,23 @@ restart:
   bool root_node = true;  // Don't separate the root node again
   HighsInt nodeLim = max_num_workers > 1 ? 1 : kHighsIInf;  // for ramp up
   while (!mipdata_->nodequeue.empty()) {
+    mipdata_->syncConcurrentLns();
+    // a graph LNS round once the tree search has had its share
+    if (mipdata_->lns_tree_next >= 0 && !mipdata_->hasMultipleWorkers() &&
+        mipdata_->total_lp_iterations >= mipdata_->lns_tree_next &&
+        !mipdata_->rootlpsol.empty()) {
+      const int64_t iters = -mipdata_->total_lp_iterations;
+      const double upper_bound = mipdata_->upper_bound;
+      mipdata_->heuristics.graphLNS(master_worker, mipdata_->rootlpsol, true);
+      mipdata_->heuristics.flushStatistics(*this, master_worker);
+      // the same share again while it improves, else twice the wait
+      if (mipdata_->upper_bound >= upper_bound) mipdata_->lns_tree_wait *= 2;
+      mipdata_->lns_tree_next =
+          mipdata_->total_lp_iterations +
+          std::max(mipdata_->lns_tree_wait,
+                   iters + mipdata_->total_lp_iterations);
+      if (mipdata_->checkLimits()) break;
+    }
     // Possibly query existence of an external solution
     if (!submip)
       mipdata_->queryExternalSolution(
@@ -1023,6 +1040,8 @@ restart:
 }
 
 void HighsMipSolver::cleanupSolve() {
+  mipdata_->syncConcurrentLns();
+  mipdata_->stopConcurrentLns();
   for (HighsMipWorker& worker : mipdata_->workers) {
     assert(worker.solutions_.empty());
   }

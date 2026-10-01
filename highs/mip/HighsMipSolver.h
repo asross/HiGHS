@@ -14,6 +14,7 @@
 #include "parallel/HighsParallel.h"
 
 struct HighsMipSolverData;
+struct HighsConcurrentLns;
 class HighsCutPool;
 struct HighsPseudocostInitialization;
 class HighsCliqueTable;
@@ -61,6 +62,8 @@ class HighsMipSolver {
   HighsInt submip_level;
   HighsInt max_submip_level;
   const HighsBasis* rootbasis;
+  // set for a concurrent LNS helper: the pool shared with the main solver
+  HighsConcurrentLns* concurrent_lns_ = nullptr;
   const HighsPseudocostInitialization* pscostinit;
   const HighsCliqueTable* clqtableinit;
   const HighsImplications* implicinit;

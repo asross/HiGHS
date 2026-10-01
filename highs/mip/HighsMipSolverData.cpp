@@ -1318,6 +1318,9 @@ double HighsMipSolverData::percentageInactiveIntegers() const {
 }
 
 void HighsMipSolverData::performRestart() {
+  // the helper's solutions would be for the model before the restart
+  syncConcurrentLns();
+  stopConcurrentLns();
   HighsBasis root_basis;
   HighsPseudocostInitialization pscostinit(
       getPseudoCost(), mipsolver.options_mip_->mip_pscost_minreliable,
@@ -1560,6 +1563,8 @@ bool HighsMipSolverData::addIncumbent(const std::vector<double>& sol,
 
     // Assigning new incumbent
     incumbent = sol;
+    if (mipsolver.concurrent_lns_)
+      mipsolver.concurrent_lns_->offer(incumbent, upper_bound);
     double new_upper_limit = computeNewUpperLimit(solobj, 0.0, 0.0);
 
     if (!is_user_solution && !mipsolver.submip)
@@ -1987,9 +1992,75 @@ static void clockOff(HighsProfiling* profiling) {
   if (clock2_running) profiling->stop(kMipClockEvaluateRootNode2);
 }
 
+void HighsMipSolverData::startConcurrentLns() {
+  const HighsOptions& options = *mipsolver.options_mip_;
+  if (mipsolver.submip || concurrent_lns || !options.mip_concurrent_lns ||
+      options.threads == 1 || std::thread::hardware_concurrency() < 2 ||
+      !firstrootbasis.valid)
+    return;
+  const double time_left = options.time_limit - mipsolver.timer_.read();
+  if (time_left < 1) return;
+  concurrent_lns.reset(new HighsConcurrentLns());
+  HighsConcurrentLns* pool = concurrent_lns.get();
+  if (!incumbent.empty()) pool->offer(incumbent, upper_bound);
+  concurrent_lns_seen = pool->version;
+
+  // The helper solves a copy of the presolved model from the root basis:
+  // it does the root LP, cuts and graph LNS with its own random seed,
+  // without the heuristics that solve sub-MIPs
+  HighsOptions helper_options = options;
+  helper_options.presolve = kHighsOffString;
+  helper_options.output_flag = false;
+  helper_options.mip_improving_solution_save = false;
+  helper_options.mip_detect_symmetry = false;
+  helper_options.mip_heuristic_run_rens = false;
+  helper_options.mip_heuristic_run_rins = false;
+  helper_options.mip_heuristic_run_root_reduced_cost = false;
+  helper_options.mip_heuristic_run_feasibility_jump = false;
+  helper_options.mip_concurrent_lns = false;
+  helper_options.random_seed = options.random_seed + 1;
+  helper_options.time_limit = time_left;
+  HighsCallback* callback = mipsolver.callback_;
+  pool->thread = std::thread([pool, callback, helper_options,
+                              model = *mipsolver.model_,
+                              basis = firstrootbasis]() {
+    // its own (single thread) task scheduler and profiling
+    highs::parallel::initialize_scheduler(1);
+    HighsTimer timer;
+    HighsProfiling profiling;
+    profiling.multi_threaded = false;
+    profiling.initialize(timer, false, false);
+    HighsSolution solution;
+    solution.value_valid = false;
+    HighsMipSolver helper(*callback, helper_options, model, solution, true, 1);
+    helper.concurrent_lns_ = pool;
+    helper.rootbasis = &basis;
+    helper.setProfiling(&profiling);
+    helper.run();
+  });
+}
+
+void HighsMipSolverData::syncConcurrentLns() {
+  HighsConcurrentLns* pool = mipsolver.concurrent_lns_
+                                 ? mipsolver.concurrent_lns_
+                                 : concurrent_lns.get();
+  if (!pool) return;
+  std::vector<double> sol;
+  if (pool->take(concurrent_lns_seen, upper_bound, sol))
+    trySolution(sol, kSolutionSourceGraphLns);
+  if (!incumbent.empty()) pool->offer(incumbent, upper_bound);
+}
+
+void HighsMipSolverData::stopConcurrentLns() {
+  if (!concurrent_lns) return;
+  concurrent_lns->stop = true;
+  if (concurrent_lns->thread.joinable()) concurrent_lns->thread.join();
+  concurrent_lns.reset();
+}
+
 void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
-  const bool compute_analytic_centre = true;
-  if (!compute_analytic_centre) printf("NOT COMPUTING ANALYTIC CENTRE!\n");
+  // not in a concurrent LNS helper, which only searches for solutions
+  const bool compute_analytic_centre = !mipsolver.concurrent_lns_;
   HighsInt maxSepaRounds = mipsolver.submip ? 5 : kHighsIInf;
   if (numRestarts == 0)
     maxSepaRounds =
@@ -2118,11 +2189,17 @@ restart:
   profiling->stop(kMipClockRandomizedRounding);
   if (mipsolver.options_mip_->mip_heuristic_run_shifting)
     heuristics.shifting(worker, firstlpsol);
-  // A first, short neighbourhood search: on easy models it finds a
-  // solution within the gap, so the cut loop can stop early
-  if (mipsolver.options_mip_->mip_heuristic_run_graph_lns)
-    heuristics.graphLNS(worker, firstlpsol,
-                        getenv("LNS_EARLY") ? atoi(getenv("LNS_EARLY")) : 5);
+  // Graph LNS is for a loose target gap (as for dispatch or unit
+  // commitment models solved to 1%), when a good incumbent is what
+  // finishes the solve. A quick search after the first LP often finds one
+  // on easy models, so that the cut loop can stop early.
+  const bool runGraphLns =
+      mipsolver.options_mip_->mip_heuristic_run_graph_lns &&
+      mipsolver.options_mip_->mip_rel_gap >= 1e-3;
+  if (runGraphLns) {
+    startConcurrentLns();
+    heuristics.graphLNS(worker, firstlpsol, false);
+  }
 
   heuristics.flushStatistics(mipsolver, worker);
 
@@ -2198,6 +2275,7 @@ restart:
     }
 
     ++nseparounds;
+    syncConcurrentLns();
 
     HighsInt ncuts;
 
@@ -2366,13 +2444,29 @@ restart:
     mipsolver.callbackGetCutPool();
   if (checkLimits()) return clockOff(profiling);
 
-  // The main neighbourhood search runs on the LP with the root cuts, whose
-  // solution and bound guide it much better than the first LP's
-  if (mipsolver.options_mip_->mip_heuristic_run_graph_lns &&
-      !rootlpsol.empty()) {
-    heuristics.graphLNS(worker, rootlpsol,
-                        getenv("LNS_LATE") ? atoi(getenv("LNS_LATE")) : 10);
+  // If that was not enough, a deeper search runs on the LP with the root
+  // cuts, whose solution and bound guide it much better
+  if (runGraphLns && !rootlpsol.empty()) {
+    const int64_t lnsIters = -total_lp_iterations;
+    const double lnsUpperBound = upper_bound;
+    heuristics.graphLNS(worker, rootlpsol, true);
     heuristics.flushStatistics(mipsolver, worker);
+    // if it pays, continue it during the tree search, alternating with
+    // the tree search in equal shares of LP iterations
+    if (upper_bound < lnsUpperBound && !mipsolver.submip) {
+      lns_tree_wait = std::max(int64_t{1000}, lnsIters + total_lp_iterations);
+      lns_tree_next = total_lp_iterations + lns_tree_wait;
+    }
+    // A concurrent LNS helper keeps searching from the best solution
+    // either solver has found, until its main solver stops it
+    if (mipsolver.concurrent_lns_) {
+      for (HighsInt round = 0; round < 50 && !checkLimits(); ++round) {
+        syncConcurrentLns();
+        heuristics.graphLNS(worker, rootlpsol, true);
+        heuristics.flushStatistics(mipsolver, worker);
+      }
+      return clockOff(profiling);
+    }
     if (checkLimits()) return clockOff(profiling);
     if (getenv("LNS_EXIT")) {
       mipsolver.modelstatus_ = HighsModelStatus::kInterrupt;
@@ -2382,9 +2476,12 @@ restart:
 
   profiling->stop(kMipClockEvaluateRootNode0);
   profiling->start(kMipClockEvaluateRootNode1);
+  // the root heuristics below are pointless once the target gap is reached
+  auto rootGapClosed = [&]() { return lower_bound > optimality_limit; };
   do {
     if (rootlpsol.empty()) break;
     if (upper_limit != kHighsInf && !moreHeuristicsAllowed()) break;
+    if (rootGapClosed()) break;
 
     if (mipsolver.options_mip_->mip_heuristic_run_root_reduced_cost) {
       profiling->start(kMipClockRootHeuristicsReducedCost);
@@ -2415,6 +2512,7 @@ restart:
     }
 
     if (upper_limit != kHighsInf && !moreHeuristicsAllowed()) break;
+    if (rootGapClosed()) break;
 
     if (checkLimits()) return clockOff(profiling);
     if (mipsolver.options_mip_->mip_heuristic_run_rens) {
@@ -2557,6 +2655,11 @@ restart:
 
 bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
   const HighsOptions& options = *mipsolver.options_mip_;
+
+  // A concurrent LNS helper stops when its main solver does
+  if (mipsolver.concurrent_lns_ &&
+      mipsolver.concurrent_lns_->stop.load(std::memory_order_relaxed))
+    return true;
 
   // This MIP instance may have been terminated
   if (terminatorActive())
