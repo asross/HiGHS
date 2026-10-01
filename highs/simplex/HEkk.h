@@ -189,9 +189,15 @@ class HEkk {
   HighsRandom random_;
   std::vector<double> dual_edge_weight_;
   std::vector<double> scattered_dual_edge_weight_;
+  // DSE weights keyed by variable (-1 if unknown), carried over LP
+  // changes that keep the basis apart from added/deleted logicals
+  // (cuts) and over basis resets; restored by the next dual solve
+  std::vector<double> saved_dual_edge_weight_;
 
   bool simplex_in_scaled_space_;
   HighsSparseMatrix ar_matrix_;
+  bool ar_matrix_is_scaled_ = false;
+  bool random_vectors_drawn_for_solve_ = false;
   HighsSparseMatrix scaled_a_matrix_;
   HSimplexNla simplex_nla_;
 
@@ -280,6 +286,10 @@ class HEkk {
   HighsInt computeFactor();
   void computeDualSteepestEdgeWeights(const bool initial = false);
   double computeDualSteepestEdgeWeight(const HighsInt iRow, HVector& row_ep);
+  std::vector<double> scatterDualEdgeWeights(
+      const HighsInt num_weighted_row, const HighsInt new_num_row,
+      const std::vector<HighsInt>* new_row_index) const;
+  bool restoreDualEdgeWeights(const bool near_optimal);
   void updateDualSteepestEdgeWeights(const HighsInt row_out,
                                      const HighsInt variable_in,
                                      const HVector* column,

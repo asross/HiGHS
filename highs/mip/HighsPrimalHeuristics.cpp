@@ -460,7 +460,8 @@ void HighsPrimalHeuristics::setupDecisionCols() {
 }
 
 void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
-                                     const std::vector<double>& relaxationsol) {
+                                     const std::vector<double>& relaxationsol,
+                                     bool neighbourhoods) {
   if (mipsolver.submip) return;
   if (worker.getGlobalDomain().infeasible()) return;
   if (!decisionColsSetUp) setupDecisionCols();
@@ -602,21 +603,35 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     return;
   }
   lp.storeBasis();
-  if (!tryIncumbent(st))
+  if (!tryIncumbent(st) &&
+      (!neighbourhoods || mipdata.incumbent.size() != size_t(numCol)))
     dive(dom, decisioncols, std::max<HighsInt>(20, decisioncols.size() / 12));
-  if (mipdata.upper_limit == kHighsInf ||
+  if (!neighbourhoods || mipdata.upper_limit == kHighsInf ||
       mipdata.incumbent.size() != size_t(numCol)) {
     chargeIterations();
     return;
   }
 
-  // 2. neighbourhoods. Stop on stall, on the heuristic LP budget, on an
+  // 2. neighbourhoods, each searched by a depth-first branch and bound with a
+  // node limit. Stop on stall, on the heuristic LP budget, on an
   // LP-iteration cap relative to the root LP, or once the incumbent is within
   // the target gap of the current bound (the solve then stops at the root).
-  const HighsInt size0 = std::min<HighsInt>(400, decisioncols.size());
-  HighsInt size = size0;
+  const bool trace = getenv("LNS_TRACE") != nullptr;
+  const HighsInt maxStall =
+      getenv("LNS_STALL") ? atoi(getenv("LNS_STALL")) : 10;
+  const HighsInt maxIt = getenv("LNS_ITS") ? atoi(getenv("LNS_ITS")) : 1000;
+  const HighsInt nodeLimit =
+      getenv("LNS_NODES") ? atoi(getenv("LNS_NODES")) : 300;
+  const double size0 = std::min<double>(
+      getenv("LNS_SIZE") ? atoi(getenv("LNS_SIZE")) : 64, decisioncols.size());
+  const double itersFac =
+      getenv("LNS_ITERFAC") ? atof(getenv("LNS_ITERFAC")) : 10.0;
+  const double minSize = std::min(16.0, size0);
+  const double maxSize = std::max(size0, std::min<double>(
+                                             1000.0, decisioncols.size()));
   HighsInt since = 0;
-  const int64_t heurItersCap = 3 * mipdata.total_lp_iterations + 5000;
+  const int64_t heurItersCap =
+      int64_t(itersFac * mipdata.total_lp_iterations) + 5000;
   const double relGap = mipsolver.options_mip_->mip_rel_gap;
   auto withinGap = [&]() {
     return mipdata.upper_bound < kHighsInf &&
@@ -633,59 +648,199 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                          1) ||
            lp.getNumLpIterations() - lpItersStart > heurItersCap;
   };
+
+  // Depth-first branch and bound over the neighbourhood from the solved LP
+  // at its root, using at most nodeLimit LP solves. Branches on the
+  // fractional candidate closest to integrality, first toward its rounded
+  // value; backtracking flips the deepest open decision first. Returns the
+  // number of LP solves, and whether the neighbourhood was exhausted.
+  std::vector<uint8_t> inCands(numCol, 0);
+  auto searchNeighbourhood = [&](HighsDomain& dom,
+                                 const std::vector<HighsInt>& cands,
+                                 HighsInt nodeLimit, bool& exhausted) {
+    for (HighsInt col : cands) inCands[col] = 1;
+    struct Decision {
+      HighsDomainChange other;
+      bool flipped;
+    };
+    std::vector<Decision> path;
+    HighsInt nodes = 0;
+    exhausted = false;
+    HighsLpRelaxation::Status st = HighsLpRelaxation::Status::kOptimal;
+    bool solved = true;  // the LP is solved on entry
+    while (true) {
+      if (worker.terminatorTerminated() || mipdata.checkLimits()) break;
+      if (!solved) {
+        st = solve(dom);
+        ++nodes;
+      }
+      solved = false;
+      bool prune = !usable(st) || lp.getObjective() >= worker.upper_limit;
+      if (!prune) {
+        if (tryIncumbent(st)) {
+          prune = true;
+        } else {
+          const std::vector<double>& sol =
+              lp.getLpSolver().getSolution().col_value;
+          HighsInt bestCol = -1;
+          double bestFrac = kHighsInf;
+          for (const auto& f : lp.getFractionalIntegers()) {
+            HighsInt col = f.first;
+            if (dom.col_lower_[col] == dom.col_upper_[col]) continue;
+            double frac = std::fabs(sol[col] - std::round(sol[col]));
+            // prefer neighbourhood decision columns over the rest
+            if (!inCands[col]) frac += 1.0;
+            if (frac < bestFrac) {
+              bestFrac = frac;
+              bestCol = col;
+            }
+          }
+          if (bestCol == -1 || nodes >= nodeLimit) break;
+          const double x = sol[bestCol];
+          HighsDomainChange up{std::ceil(x), bestCol, HighsBoundType::kLower};
+          HighsDomainChange down{std::floor(x), bestCol,
+                                 HighsBoundType::kUpper};
+          const bool goUp = x - std::floor(x) >= 0.5;
+          dom.changeBound(goUp ? up : down, HighsDomain::Reason::branching());
+          path.push_back({goUp ? down : up, false});
+          dom.propagate();
+          if (!dom.infeasible()) continue;
+          prune = true;
+        }
+      }
+      // backtrack to the deepest decision whose other branch is open
+      bool open = false;
+      while (!path.empty()) {
+        dom.backtrack();
+        if (path.back().flipped) {
+          path.pop_back();
+          continue;
+        }
+        path.back().flipped = true;
+        dom.changeBound(path.back().other, HighsDomain::Reason::branching());
+        dom.propagate();
+        if (dom.infeasible()) continue;
+        open = true;
+        break;
+      }
+      if (!open) {
+        exhausted = true;
+        break;
+      }
+      if (nodes >= nodeLimit) break;
+    }
+    while (!path.empty()) {
+      dom.backtrack();
+      path.pop_back();
+    }
+    for (HighsInt col : cands) inCands[col] = 0;
+    return nodes;
+  };
+
+  // Rows with at most this many decision columns: a breadth-first search
+  // restricted to them follows chains (e.g. one unit over time) rather
+  // than spreading over the coupling rows
+  const HighsInt kShortRow = 4;
+  std::vector<HighsInt> rowDecisions(mipsolver.numRow(), 0);
+  for (HighsInt col : decisioncols)
+    for (HighsInt p = A.start_[col]; p != A.start_[col + 1]; ++p)
+      ++rowDecisions[A.index_[p]];
+
+  // Two neighbourhood types: 0 = BFS over all rows from one seed, 1 = BFS
+  // over short rows from as many seeds as needed. Each adapts its size to
+  // what the node limit can search, and the type to use next is the one
+  // closing the most gap per LP iteration recently, with some exploration.
+  struct NeighbourhoodType {
+    double size;
+    double rate;  // smoothed fraction of the gap closed per LP iteration
+    HighsInt tried, improved;
+  };
+  NeighbourhoodType types[2] = {{size0, 0.0, 0, 0}, {size0, 0.0, 0, 0}};
+
   std::vector<HighsInt> neighbourhood, frontier, next, touchedRows, disagree;
   std::vector<uint8_t> inN(numCol, 0), seenRow(mipsolver.numRow(), 0);
-  for (HighsInt it = 0; since < 5 && it < 100; ++it) {
+  for (HighsInt it = 0; since < maxStall && it < maxIt; ++it) {
     if (worker.terminatorTerminated() || mipdata.checkLimits() ||
         lpBudgetExceeded() || withinGap())
       break;
     const std::vector<double>& inc = mipdata.incumbent;
 
-    // seed: a decision column where the incumbent disagrees with the root LP
-    // solution (70%), otherwise any decision column
-    HighsInt seed = -1;
-    if (randgen.fraction() < 0.7) {
-      disagree.clear();
-      for (HighsInt col : decisioncols)
-        if (std::fabs(inc[col] - relaxationsol[col]) > 0.5)
-          disagree.push_back(col);
-      if (!disagree.empty()) seed = disagree[randgen.integer(disagree.size())];
-    }
-    if (seed == -1) seed = decisioncols[randgen.integer(decisioncols.size())];
+    HighsInt type;
+    if (it < 2)
+      type = it;
+    else if (randgen.fraction() < 0.2)
+      type = randgen.integer(2);
+    else
+      type = types[1].rate > types[0].rate ? 1 : 0;
+    NeighbourhoodType& nt = types[type];
+    const HighsInt size = HighsInt(nt.size + 0.5);
+
+    auto pickSeed = [&]() {
+      // a decision column where the incumbent disagrees with the root LP
+      // solution (70%), otherwise any decision column
+      HighsInt seed = -1;
+      if (randgen.fraction() < 0.7) {
+        disagree.clear();
+        for (HighsInt col : decisioncols)
+          if (!inN[col] && globaldom.col_lower_[col] != globaldom.col_upper_[col] &&
+              std::fabs(inc[col] - relaxationsol[col]) > 0.5)
+            disagree.push_back(col);
+        if (!disagree.empty())
+          seed = disagree[randgen.integer(disagree.size())];
+      }
+      auto unusable = [&](HighsInt col) {
+        return inN[col] ||
+               globaldom.col_lower_[col] == globaldom.col_upper_[col];
+      };
+      if (seed == -1) {
+        for (HighsInt tries = 0; tries < 50 && (seed == -1 || unusable(seed));
+             ++tries)
+          seed = decisioncols[randgen.integer(decisioncols.size())];
+        if (unusable(seed)) seed = -1;
+      }
+      return seed;
+    };
 
     // BFS over the variable/constraint graph, counting decision columns
     for (HighsInt col : neighbourhood) inN[col] = 0;
     for (HighsInt row : touchedRows) seenRow[row] = 0;
-    neighbourhood.assign(1, seed);
-    inN[seed] = 1;
+    neighbourhood.clear();
     touchedRows.clear();
-    frontier.assign(1, seed);
-    while (!frontier.empty() && HighsInt(neighbourhood.size()) < size) {
-      next.clear();
-      for (HighsInt j : frontier) {
-        for (HighsInt p = A.start_[j]; p != A.start_[j + 1]; ++p) {
-          HighsInt row = A.index_[p];
-          if (seenRow[row]) continue;
-          seenRow[row] = 1;
-          touchedRows.push_back(row);
-          for (HighsInt q = mipdata.ARstart_[row];
-               q != mipdata.ARstart_[row + 1]; ++q) {
-            HighsInt k = mipdata.ARindex_[q];
-            if (!isDecision[k] || inN[k]) continue;
-            inN[k] = 1;
-            neighbourhood.push_back(k);
-            next.push_back(k);
+    while (HighsInt(neighbourhood.size()) < size) {
+      HighsInt seed = pickSeed();
+      if (seed == -1) break;
+      neighbourhood.push_back(seed);
+      inN[seed] = 1;
+      frontier.assign(1, seed);
+      while (!frontier.empty() && HighsInt(neighbourhood.size()) < size) {
+        next.clear();
+        for (HighsInt j : frontier) {
+          for (HighsInt p = A.start_[j]; p != A.start_[j + 1]; ++p) {
+            HighsInt row = A.index_[p];
+            if (seenRow[row]) continue;
+            if (type == 1 && rowDecisions[row] > kShortRow) continue;
+            seenRow[row] = 1;
+            touchedRows.push_back(row);
+            for (HighsInt q = mipdata.ARstart_[row];
+                 q != mipdata.ARstart_[row + 1]; ++q) {
+              HighsInt k = mipdata.ARindex_[q];
+              if (!isDecision[k] || inN[k]) continue;
+              inN[k] = 1;
+              neighbourhood.push_back(k);
+              next.push_back(k);
+              if (HighsInt(neighbourhood.size()) >= size) break;
+            }
             if (HighsInt(neighbourhood.size()) >= size) break;
           }
           if (HighsInt(neighbourhood.size()) >= size) break;
         }
-        if (HighsInt(neighbourhood.size()) >= size) break;
+        frontier.swap(next);
       }
-      frontier.swap(next);
     }
 
     // fix everything outside the neighbourhood to the incumbent, warm from
     // the root basis
+    const int64_t startIters = lp.getNumLpIterations();
     dom = globaldom;
     bool feasible = true;
     for (HighsInt col : decisioncols) {
@@ -697,6 +852,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
         break;
       }
     }
+    ++nt.tried;
     if (!feasible) {
       ++since;
       continue;
@@ -706,29 +862,48 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                                       dom.col_upper_.data());
     dom.clearChangedCols();
     const double before = mipdata.upper_bound;
+    const double gapBefore = before - mipdata.lower_bound;
     st = solve(dom);
-    if (!usable(st) || lp.getObjective() >= worker.upper_limit) {
-      // the neighbourhood LP cannot beat the incumbent: look wider
-      ++since;
-      size = std::min(4 * size0, size + size / 4);
-      continue;
-    }
-    if (!tryIncumbent(st))
-      dive(dom, neighbourhood,
-           std::max<HighsInt>(2, neighbourhood.size() / 40));
+    HighsInt nodes = 0;
+    bool exhausted = true;
+    const bool pruned = !usable(st) || lp.getObjective() >= worker.upper_limit;
+    if (!pruned) nodes = searchNeighbourhood(dom, neighbourhood, nodeLimit, exhausted);
+    const bool improved = mipdata.upper_bound < before - feastol;
+    // aim for neighbourhoods that the node limit just about exhausts: grow
+    // one that was searched without finding anything, shrink one whose
+    // search did not finish
+    if (!pruned && exhausted && !improved)
+      nt.size = std::min(maxSize, nt.size * 1.1);
+    else if (!exhausted)
+      nt.size = std::max(minSize, nt.size * 0.85);
+    // effort in LP iterations rather than time, to stay deterministic
+    const double effort =
+        1.0 + static_cast<double>(lp.getNumLpIterations() - startIters);
+    const double closed =
+        gapBefore > 0 ? (before - mipdata.upper_bound) / gapBefore : 0.0;
+    nt.rate = 0.7 * nt.rate + 0.3 * closed / effort;
+    if (improved) ++nt.improved;
+    if (trace)
+      printf("LNS it %3d type %d size %4d nodes %3d %s%s obj %.4f  time %.2f "
+             "lpiters %lld\n",
+             int(it), int(type), int(neighbourhood.size()), int(nodes),
+             pruned ? "pruned" : "      ", exhausted ? " exh" : "    ",
+             mipdata.upper_bound, mipsolver.timer_.read(),
+             (long long)(lp.getNumLpIterations() - lpItersStart));
     // only an improvement that closes at least 5% of the remaining gap counts
     // as progress; smaller ones are kept but do not reset the stall counter
-    const double gapBefore = before - mipdata.lower_bound;
-    if (mipdata.upper_bound < before - std::max(feastol, 0.05 * gapBefore)) {
+    if (mipdata.upper_bound < before - std::max(feastol, 0.05 * gapBefore))
       since = 0;
-      size = size0;
-    } else {
+    else
       ++since;
-      size = std::max(size0 / 2, size - size / 5);
-    }
   }
+  if (trace)
+    printf("LNS done: improved %d/%d (bfs) %d/%d (short rows)\n",
+           int(types[0].improved), int(types[0].tried),
+           int(types[1].improved), int(types[1].tried));
   chargeIterations();
 }
+
 
 void HighsPrimalHeuristics::RENS(HighsMipWorker& worker,
                                  const std::vector<double>& tmp) {

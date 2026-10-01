@@ -153,6 +153,9 @@ HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
       if (ekk_instance_.logicalBasis()) {
         // Unit weights already set up for B=I
         status.has_dual_steepest_edge_weights = true;
+      } else if (ekk_instance_.restoreDualEdgeWeights(near_optimal)) {
+        // Weights carried over from before the LP or basis changed
+        status.has_dual_steepest_edge_weights = true;
       } else {
         // Non-logical basis
         if (near_optimal) {
@@ -163,6 +166,11 @@ HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
               "than compute steepest edge weights\n");
           edge_weight_mode = EdgeWeightMode::kDevex;
           assert(!status.has_dual_steepest_edge_weights);
+        } else if (solver_num_row > options.simplex_dse_exact_init_max_rows) {
+          // Computing the weights costs a BTRAN per row, so start from
+          // the unit weights already set up: CHUZR recomputes the weight
+          // of each chosen row, so they become accurate where it matters
+          status.has_dual_steepest_edge_weights = true;
         } else {
           // Compute steepest edge weights
           highsLogDev(

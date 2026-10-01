@@ -38,8 +38,10 @@ class HighsPrimalHeuristics {
 
   void setupDecisionCols();
 
+  // Root dive, then (if neighbourhoods) LNS from the incumbent
   void graphLNS(HighsMipWorker& worker,
-                const std::vector<double>& relaxationsol);
+                const std::vector<double>& relaxationsol,
+                bool neighbourhoods);
 
   bool solveSubMip(HighsMipWorker& worker, const HighsLp& lp,
                    const HighsBasis& basis, double fixingRate,

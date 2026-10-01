@@ -1994,6 +1994,8 @@ void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
   if (numRestarts == 0)
     maxSepaRounds =
         std::min(HighsInt(2 * std::sqrt(maxTreeSizeLog2)), maxSepaRounds);
+  if (getenv("SEPA_ROUNDS") && !mipsolver.submip)
+    maxSepaRounds = atoi(getenv("SEPA_ROUNDS"));
   std::unique_ptr<SymmetryDetectionData> symData;
   highs::parallel::TaskGroup tg;
   HighsProfiling* profiling = mipsolver.profiling_;
@@ -2117,7 +2119,7 @@ restart:
   if (mipsolver.options_mip_->mip_heuristic_run_shifting)
     heuristics.shifting(worker, firstlpsol);
   if (mipsolver.options_mip_->mip_heuristic_run_graph_lns)
-    heuristics.graphLNS(worker, firstlpsol);
+    heuristics.graphLNS(worker, firstlpsol, false);
 
   heuristics.flushStatistics(mipsolver, worker);
 
@@ -2360,6 +2362,19 @@ restart:
       mipsolver.callback_->callbackActive(kCallbackMipGetCutPool))
     mipsolver.callbackGetCutPool();
   if (checkLimits()) return clockOff(profiling);
+
+  // The neighbourhood search runs on the LP with the root cuts, whose
+  // solution guides it much better than the first LP solution
+  if (mipsolver.options_mip_->mip_heuristic_run_graph_lns &&
+      !rootlpsol.empty()) {
+    heuristics.graphLNS(worker, rootlpsol, true);
+    heuristics.flushStatistics(mipsolver, worker);
+    if (checkLimits()) return clockOff(profiling);
+    if (getenv("LNS_EXIT")) {
+      mipsolver.modelstatus_ = HighsModelStatus::kInterrupt;
+      return clockOff(profiling);
+    }
+  }
 
   profiling->stop(kMipClockEvaluateRootNode0);
   profiling->start(kMipClockEvaluateRootNode1);

@@ -108,6 +108,7 @@ void HEkk::clearEkkDualize() {
 void HEkk::clearEkkDualEdgeWeightData() {
   this->dual_edge_weight_.clear();
   this->scattered_dual_edge_weight_.clear();
+  this->saved_dual_edge_weight_.clear();
 }
 
 void HEkk::clearEkkData() {
@@ -327,9 +328,16 @@ void HEkk::updateStatus(LpAction action) {
       this->status_.has_dual_objective_value = false;
       this->status_.has_primal_objective_value = false;
       break;
-    case LpAction::kNewBasis:
+    case LpAction::kNewBasis: {
+      // Keep the weights of the outgoing basis: rows whose basic
+      // variable stays basic start from them
+      const HighsInt num_row = this->basis_.basicIndex_.size();
+      std::vector<double> saved =
+          scatterDualEdgeWeights(num_row, num_row, nullptr);
       this->invalidateBasis();
+      if (!saved.empty()) this->saved_dual_edge_weight_ = std::move(saved);
       break;
+    }
     case LpAction::kNewCols:
       this->clear();
       //    this->invalidateBasisArtifacts();
@@ -410,8 +418,14 @@ void HEkk::moveLp(HighsLpSolverObject& solver_object) {
   this->lp_ = std::move(incumbent_lp);
   incumbent_lp.is_moved_ = true;
   //
-  // Invalidate the row-wise matrix
-  this->status_.has_ar_matrix = false;
+  // Changes to the matrix or basis invalidate the row-wise matrix via
+  // updateStatus, and new scaling does in solveLpSimplex, so it only
+  // needs rebuilding here if it doesn't fit the LP
+  if (this->ar_matrix_.num_col_ != this->lp_.num_col_ ||
+      this->ar_matrix_.num_row_ != this->lp_.num_row_ ||
+      this->ar_matrix_.numNz() != this->lp_.a_matrix_.numNz() ||
+      this->ar_matrix_is_scaled_ != this->lp_.is_scaled_)
+    this->status_.has_ar_matrix = false;
   //
   // The simplex algorithm runs in the same space as the LP that has
   // just been moved in. This is a scaled space if the LP is scaled.
@@ -1284,17 +1298,45 @@ void HEkk::addRows(const HighsLp& lp,
     this->debugNlaCheckInvert("HEkk::addRows - on entry",
                               kHighsDebugLevelExpensive + 1);
   }
+  // New rows come in with basic logicals, which leaves the DSE weights
+  // of the existing rows unchanged
+  std::vector<double> saved = scatterDualEdgeWeights(
+      lp.num_row_ - scaled_ar_matrix.num_row_, lp.num_row_, nullptr);
   // Update the number of rows in the simplex LP so that it's
   // consistent with simplex basis information
   this->lp_.num_row_ = lp.num_row_;
   this->updateStatus(LpAction::kNewRows);
+  this->saved_dual_edge_weight_ = std::move(saved);
 }
 
 void HEkk::deleteCols(const HighsIndexCollection& index_collection) {
   this->updateStatus(LpAction::kDelCols);
 }
 void HEkk::deleteRows(const HighsIndexCollection& index_collection) {
+  // Deleting rows with basic logicals leaves the DSE weights of the
+  // remaining rows unchanged, so keep them under the new row indices
+  std::vector<double> saved;
+  const HighsInt num_row = this->basis_.basicIndex_.size();
+  if (this->status_.has_dual_steepest_edge_weights && num_row > 0) {
+    std::vector<HighsInt> new_row_index(num_row, 0);
+    if (index_collection.is_interval_) {
+      for (HighsInt iRow = index_collection.from_;
+           iRow <= index_collection.to_ && iRow < num_row; iRow++)
+        new_row_index[iRow] = -1;
+    } else if (index_collection.is_set_) {
+      for (HighsInt iRow : index_collection.set_)
+        if (iRow < num_row) new_row_index[iRow] = -1;
+    } else if (index_collection.is_mask_) {
+      for (HighsInt iRow = 0; iRow < num_row; iRow++)
+        if (index_collection.mask_[iRow]) new_row_index[iRow] = -1;
+    }
+    HighsInt new_num_row = 0;
+    for (HighsInt iRow = 0; iRow < num_row; iRow++)
+      if (new_row_index[iRow] >= 0) new_row_index[iRow] = new_num_row++;
+    saved = scatterDualEdgeWeights(num_row, new_num_row, &new_row_index);
+  }
   this->updateStatus(LpAction::kDelRows);
+  this->saved_dual_edge_weight_ = std::move(saved);
 }
 
 void HEkk::unscaleSimplex(const HighsLp& incumbent_lp) {
@@ -1575,6 +1617,7 @@ void HEkk::initialiseEkk() {
   setSimplexOptions();
   initialiseControl();
   initialiseSimplexLpRandomVectors();
+  random_vectors_drawn_for_solve_ = false;
   simplex_nla_.clear();
   clearBadBasisChange();
   status_.initialised_for_new_lp = true;
@@ -1598,7 +1641,15 @@ void HEkk::initialiseForSolve() {
   assert(status_.has_basis);
 
   updateSimplexOptions();
-  initialiseSimplexLpRandomVectors();
+  // The random vectors only depend on the LP dimensions, so keep them
+  // over re-solves (eg in MIP), drawing them afresh for the first solve
+  if (!random_vectors_drawn_for_solve_ ||
+      static_cast<HighsInt>(info_.numTotRandomValue_.size()) !=
+          lp_.num_col_ + lp_.num_row_ ||
+      static_cast<HighsInt>(info_.numColPermutation_.size()) != lp_.num_col_) {
+    initialiseSimplexLpRandomVectors();
+    random_vectors_drawn_for_solve_ = true;
+  }
   initialisePartitionedRowwiseMatrix();  // Timed
   allocateWorkAndBaseArrays();
   initialiseCost(SimplexAlgorithm::kPrimal, kSolvePhaseUnknown, false);
@@ -2090,6 +2141,64 @@ double HEkk::computeDualSteepestEdgeWeight(const HighsInt iRow,
   return row_ep.norm2();
 }
 
+// The DSE weight of a row is a property of its basic variable, so
+// scatter the weights of the first num_weighted_row rows over the
+// variables of an LP with new_num_row rows. new_row_index maps old
+// rows to new ones (-1 if deleted), and is null if rows are only
+// appended. Returns an empty vector if there are no weights.
+std::vector<double> HEkk::scatterDualEdgeWeights(
+    const HighsInt num_weighted_row, const HighsInt new_num_row,
+    const std::vector<HighsInt>* new_row_index) const {
+  std::vector<double> saved;
+  if (!status_.has_dual_steepest_edge_weights || !status_.has_basis)
+    return saved;
+  // The basis may already have been extended by basic logicals of new
+  // rows, which come after the num_weighted_row rows with weights
+  const HighsInt num_row = basis_.basicIndex_.size();
+  const HighsInt num_col =
+      static_cast<HighsInt>(basis_.nonbasicFlag_.size()) - num_row;
+  if (num_weighted_row <= 0 || num_weighted_row > num_row || num_col < 0 ||
+      static_cast<HighsInt>(dual_edge_weight_.size()) < num_weighted_row)
+    return saved;
+  saved.assign(num_col + new_num_row, -1.0);
+  for (HighsInt iRow = 0; iRow < num_weighted_row; iRow++) {
+    HighsInt iVar = basis_.basicIndex_[iRow];
+    if (iVar >= num_col) {
+      HighsInt row = iVar - num_col;
+      if (new_row_index) row = (*new_row_index)[row];
+      if (row < 0 || row >= new_num_row) continue;
+      iVar = num_col + row;
+    }
+    saved[iVar] = dual_edge_weight_[iRow];
+  }
+  return saved;
+}
+
+// Set the DSE weights from saved_dual_edge_weight_, computing those of
+// basic variables without a saved weight. Exact if the basis is the
+// saved one up to added/deleted logicals, otherwise a warm start.
+bool HEkk::restoreDualEdgeWeights(const bool near_optimal) {
+  std::vector<double> saved = std::move(saved_dual_edge_weight_);
+  saved_dual_edge_weight_.clear();
+  const HighsInt num_row = lp_.num_row_;
+  if (static_cast<HighsInt>(saved.size()) != lp_.num_col_ + num_row)
+    return false;
+  HighsInt num_missing = 0;
+  for (HighsInt iRow = 0; iRow < num_row; iRow++)
+    num_missing += saved[basis_.basicIndex_[iRow]] < 0;
+  // Near-optimal solves otherwise use Devex rather than computing all
+  // weights, so only pay for a few
+  if (near_optimal && num_missing > 0.1 * num_row) return false;
+  HVector row_ep;
+  row_ep.setup(num_row);
+  for (HighsInt iRow = 0; iRow < num_row; iRow++) {
+    const double weight = saved[basis_.basicIndex_[iRow]];
+    dual_edge_weight_[iRow] =
+        weight >= 0 ? weight : computeDualSteepestEdgeWeight(iRow, row_ep);
+  }
+  return true;
+}
+
 // Update the DSE weights
 void HEkk::updateDualSteepestEdgeWeights(
     const HighsInt row_out, const HighsInt variable_in, const HVector* column,
@@ -2278,6 +2387,7 @@ void HEkk::initialisePartitionedRowwiseMatrix() {
   analysis_.simplexTimerStart(matrixSetupClock);
   ar_matrix_.createRowwisePartitioned(lp_.a_matrix_,
                                       basis_.nonbasicFlag_.data());
+  ar_matrix_is_scaled_ = lp_.is_scaled_;
   assert(ar_matrix_.debugPartitionOk(basis_.nonbasicFlag_.data()));
   analysis_.simplexTimerStop(matrixSetupClock);
   status_.has_ar_matrix = true;
@@ -3472,6 +3582,8 @@ bool HEkk::bailout() {
 }
 
 HighsStatus HEkk::returnFromEkkSolve(const HighsStatus return_status) {
+  // Saved weights not used by this solve are stale for the next one
+  saved_dual_edge_weight_.clear();
   if (analysis_.analyse_simplex_time)
     analysis_.simplexTimerStop(SimplexTotalClock);
   // Restore any modified development or timing settings and analyse
@@ -3827,6 +3939,8 @@ HighsStatus HEkk::getIterate() {
   if (!iterate.valid_) return HighsStatus::kError;
   this->simplex_nla_.getInvert();
   this->basis_ = iterate.basis_;
+  // The row-wise matrix is partitioned by the outgoing basis
+  this->status_.has_ar_matrix = false;
   if (iterate.dual_edge_weight_.size()) {
     this->dual_edge_weight_ = iterate.dual_edge_weight_;
   } else {
