@@ -756,6 +756,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     const double limitBefore = mipdata.optimality_limit;
     const double gapBefore = before - mipdata.lower_bound;
     st = solve(dom);
+    const int64_t nbLpIters = lp.getNumLpIterations() - startIters;
     HighsInt nodes = 0;
     bool exhausted = true;
     if (usable(st)) {
@@ -813,11 +814,12 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     if (improved) ++nt.improved;
     highsLogDev(logOptions, HighsLogType::kVerbose,
                 "%s %3d type %d: %4d columns, %3d nodes%s%s, objective %.4f, "
-                "%lld LP iterations\n",
+                "%lld (first LP %lld) LP iterations\n",
                 who, int(it), int(type), int(neighbourhood.size()), int(nodes),
                 pruned ? ", pruned" : "", exhausted ? ", exhausted" : "",
                 mipdata.upper_bound,
-                (long long)(lp.getNumLpIterations() - lpItersStart));
+                (long long)(lp.getNumLpIterations() - lpItersStart),
+                (long long)nbLpIters);
     if (progress)
       since = 0;
     else

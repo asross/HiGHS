@@ -197,6 +197,7 @@ HighsLpRelaxation::HighsLpRelaxation(const HighsMipSolver& mipsolver)
   // Re-solves are short, so for large LPs computing exact DSE weights
   // for a new basis (a BTRAN per row) is rarely worth it
   lpsolver.setOptionValue("simplex_dse_exact_init_max_rows", 20000);
+  lpsolver.setOptionValue("simplex_keep_random_vectors", true);
   status = Status::kNotSet;
   numlpiters = 0;
   avgSolveIters = 0;

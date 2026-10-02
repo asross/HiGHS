@@ -444,6 +444,7 @@ struct HighsOptionsStruct {
   HighsInt max_dual_simplex_phase1_cleanup_level;
   HighsInt simplex_price_strategy;
   HighsInt simplex_dse_exact_init_max_rows;
+  bool simplex_keep_random_vectors;
   HighsInt simplex_unscaled_solution_strategy;
   HighsInt presolve_reduction_limit;
   HighsInt restart_presolve_reduction_limit;
@@ -617,6 +618,7 @@ struct HighsOptionsStruct {
         max_dual_simplex_phase1_cleanup_level(0),
         simplex_price_strategy(0),
         simplex_dse_exact_init_max_rows(0),
+        simplex_keep_random_vectors(false),
         simplex_unscaled_solution_strategy(0),
         presolve_reduction_limit(0),
         restart_presolve_reduction_limit(0),
@@ -1581,6 +1583,15 @@ class HighsOptions : public HighsOptionsStruct {
         "over LP changes that preserve them, or start from unit weights",
         advanced, &simplex_dse_exact_init_max_rows, 0, kHighsIInf, kHighsIInf);
     records.push_back(record_int);
+
+    record_bool = new OptionRecordBool(
+        "simplex_keep_random_vectors",
+        "Whether to keep the random vectors of the simplex solver over "
+        "re-solves of an LP of the same size, rather than drawing new ones "
+        "for every solve (always the case above "
+        "simplex_dse_exact_init_max_rows rows)",
+        advanced, &simplex_keep_random_vectors, false);
+    records.push_back(record_bool);
 
     record_int =
         new OptionRecordInt("simplex_unscaled_solution_strategy",

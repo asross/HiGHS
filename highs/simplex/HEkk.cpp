@@ -1642,9 +1642,11 @@ void HEkk::initialiseForSolve() {
   assert(status_.has_basis);
 
   updateSimplexOptions();
-  // The random vectors only depend on the LP dimensions: for large LPs
-  // (re-solved in MIP) keep them over re-solves
-  if (lp_.num_row_ <= options_->simplex_dse_exact_init_max_rows ||
+  // The random vectors only depend on the LP dimensions: if asked to (as
+  // for the LP relaxation of a MIP), or for large LPs, keep them over
+  // re-solves
+  if ((!options_->simplex_keep_random_vectors &&
+       lp_.num_row_ <= options_->simplex_dse_exact_init_max_rows) ||
       !random_vectors_drawn_for_solve_ ||
       static_cast<HighsInt>(info_.numTotRandomValue_.size()) !=
           lp_.num_col_ + lp_.num_row_ ||
@@ -1657,8 +1659,8 @@ void HEkk::initialiseForSolve() {
   initialiseCost(SimplexAlgorithm::kPrimal, kSolvePhaseUnknown, false);
   initialiseBound(SimplexAlgorithm::kPrimal, kSolvePhaseUnknown, false);
   initialiseNonbasicValueAndMove();
-  computePrimal();                // Timed
-  computeDual();                  // Timed
+  computePrimal();  // Timed
+  computeDual();    // Timed
   fresh_primal_ = true;
   fresh_unperturbed_dual_ = true;
   computeSimplexInfeasible();     // Timed
