@@ -25,7 +25,10 @@ for `mip_rel_gap >= 1e-3`):
   dived neighbourhoods of about 400 decision columns grown by breadth-first
   search over the constraint graph from a seed column, and a flip search to
   polish. Neighbourhood LPs start from the last LP solved (not the root
-  basis), which made the hard tick 21% faster.
+  basis), which made the hard tick 21% faster. On large models it spends at
+  most about one root LP's worth of LP iterations, so that where
+  neighbourhood LPs are expensive (ramping) the root cuts come early: their
+  bound often closes the gap with the incumbent so far.
 - Deep search after the root cuts, only if the quick search brought the
   incumbent within three times the target gap (otherwise the model does not
   suit it and the usual root heuristics run as without graph LNS): small
@@ -33,7 +36,13 @@ for `mip_rel_gap >= 1e-3`):
   limit, a flip search (single flips and pairs of opposite flips in a row,
   ordered by reduced-cost gain, resumed where the last one stopped), and
   dived neighbourhoods, chosen by a bandit on gap closed per LP iteration.
-- If the deep search pays, rounds of it alternate with the tree search.
+- The flip search first propagates a move's fixings over the model rows
+  (no LP): on the hard tick 92% of flip LPs were infeasible, at about 2.5
+  simplex iterations each, so the fixed cost of a solve was all they cost.
+- If the deep search pays, rounds of it alternate with the tree search,
+  where strong branching then starts with a smaller budget (10000 LP
+  iterations rather than 100000): the bound rarely matters there, and on
+  the hard tick it cost about 70000 iterations in the first dozen nodes.
 - Stall rules measure progress against the gap (quick) or against what
   separates the incumbent from the target gap (deep); both stop as soon as
   the target gap is reached.
@@ -47,15 +56,25 @@ Using a second core (option `mip_concurrent_helper`, on unless
 - A helper thread runs graph LNS on a copy of the presolved model with its
   own seed, exchanging incumbents with the main solver.
 
-LP re-solves (all MIP solves benefit; same simplex iterations):
+LP re-solves (all MIP solves benefit; same simplex iterations). Graph LNS
+and branch and bound solve many LPs with a few iterations each, so the fixed
+cost of a solve dominates:
 - Dual steepest-edge weights are kept over basis changes and cut additions
   for LPs above 20000 rows (`simplex_dse_exact_init_max_rows`), instead of
   being recomputed by one BTRAN per row.
 - Values that are still fresh are not recomputed; the row-wise matrix is
-  kept when the LP did not change.
-- Highs::run no longer assesses coefficient ranges without output, the NLA
-  debug check (which copied the LP) only runs at a debug level, and the KKT
-  check visits all variables once instead of twice.
+  kept when the LP did not change; the simplex random vectors are kept
+  (`simplex_keep_random_vectors`); work vectors are reused.
+- Highs::run no longer assesses coefficient ranges without output, and the
+  NLA and solution debug checks (which copied the LP and HighsInfo) only
+  run at a debug level.
+- After a solve, the MIP's LP relaxation only has the absolute primal and
+  dual infeasibilities assessed, in one pass (`full_lp_kkt_check`), rather
+  than all KKT measures in three.
+- A proof of infeasibility is checked unscaled without rebuilding the
+  row-wise matrix twice (once unscaled, once scaled again for the next
+  solve), with a product over the proof's rows only. Most LNS flip LPs on
+  the hard tick are infeasible.
 
 Cut separation (`mip/HighsPathSeparator.cpp`): an aggregation, or a path for
 a path mixing cut, whose transformation has no integer column at a
@@ -65,7 +84,8 @@ calls on the hard tick). The cuts are the same except for the cover
 separators' random tie-breaking.
 
 The analytic centre (an IPX solve) is skipped where graph LNS suits the
-model.
+model, and with a concurrent LNS helper; its time limit is what is left of
+the MIP's.
 
 ## Results
 
@@ -76,34 +96,38 @@ retired (load-independent) are given where available.
 | Dispatch suite (23 instances) | vanilla 1.15.1 | this branch |
 |---|---|---|
 | reach 1% within the 300 s (wall) limit | 14 | 23 |
-| total CPU time | 3095 s | 508 s |
-| hard tick | time limit, gap 2.03% | 40 s |
-| `_wind185` | time limit (its 0.02% solution came at the limit) | 9.6 s |
-| `dm_full_pert_s1_ramp` | time limit, 9.3% | 100 s |
-| `lambda_..._080458` | 107 s | 18 s |
-| `dm_small_pert_s1_ramp` | 106 s | 5 s |
+| total CPU time | over 2264 s | 372 s |
+| hard tick | time limit, gap 2.03% | 38 s |
+| `_wind185` | time limit (its 0.02% solution came at the limit) | 9.7 s |
+| `dm_full_pert_s1_ramp` | time limit, 9.3% | 75 s |
+| `dm_full_randsoc_ramp` | time limit, no solution | 65 s |
+| `lambda_..._080458` | 107 s | 17 s |
+| `dm_small_pert_s1_ramp` | 106 s | 4.5 s |
 
-Every instance is at least 3 times faster. The hard tick over 8 random seeds:
-all certified, mean 219G instructions (between 123G and 323G); vanilla
-does not reach 1% in 300 s with any seed.
+Every instance that vanilla solves is at least 4.5 times faster (6 to 24
+times for most); the 9 it does not solve within 300 s take 8 s to 75 s of
+CPU time. The hard tick over 16 random seeds: all certified, mean 182G
+instructions, median 170G (between 115G and 293G); vanilla does not reach
+1% in 300 s with any seed.
 
 With two threads (`threads = 2`, close to production's two vCPUs): all 23
 instances reach 1%, all but three in under 50 s of wall time on a busy
 machine; the slowest are the hard tick (71 s), `dm_full_randsoc_ramp`
-(112 s) and `dm_full_pert_s1_ramp` (142 s). IPX wins the root LP race on the
-large dispatch LPs (`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race
-alone) and a helper thread searches neighbourhoods alongside.
+(112 s) and `dm_full_pert_s1_ramp` (142 s) (measured before the LP re-solve
+and flip search work above). IPX wins the root LP race on the large
+dispatch LPs (`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone)
+and a helper thread searches neighbourhoods alongside.
 
 The 21 row/column-permuted copies in `~/code/oopt/bench/perm` all reach 1%
 too (single thread).
 
 MIPLIB regression set (31 instances, 300 s), instructions retired against
-vanilla, shifted geometric mean over random seeds:
-- at `mip_rel_gap = 0.01` (graph LNS active), 3 seeds: 0.963 (total 7%
-  fewer);
-- at the default gap (graph LNS off), 2 seeds: 0.967 (as of the commit
-  before keeping the simplex random vectors, which speeds up short
-  re-solves of small LPs further).
+vanilla, shifted geometric mean over the runs that both solve, 2 random
+seeds:
+- at the default gap (graph LNS off): 0.924 over 47 runs; this branch also
+  solves 2 runs that vanilla does not, and vice versa none;
+- at `mip_rel_gap = 0.01` (graph LNS active): 0.936 over 60 runs; mas76
+  is solved only by this branch (both seeds).
 
 ## Options
 
@@ -111,6 +135,9 @@ vanilla, shifted geometric mean over random seeds:
 - `mip_concurrent_helper` (default true)
 - `simplex_dse_exact_init_max_rows` (default no limit; the MIP's LP
   relaxation uses 20000)
+- `simplex_keep_random_vectors` (default false; true in the MIP's LP
+  relaxation)
+- `full_lp_kkt_check` (default true; false in the MIP's LP relaxation)
 
 ## Tried and reverted
 
