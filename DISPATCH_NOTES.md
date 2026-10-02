@@ -139,8 +139,9 @@ too (single thread).
 MIPLIB regression set (31 instances, 300 s), instructions retired against
 vanilla, shifted geometric mean over the runs that both solve, 2 random
 seeds:
-- at the default gap (graph LNS off): 0.924 over 47 runs; this branch also
-  solves 2 runs that vanilla does not, and vice versa none;
+- at the default gap (graph LNS off): 0.919 over 47 runs; this branch also
+  solves 2 runs that vanilla does not (mas76, gmu-35-40), and vice versa
+  none;
 - at `mip_rel_gap = 0.01` (graph LNS active): 0.916 over 60 runs; mas76
   is solved only by this branch (both seeds).
 
