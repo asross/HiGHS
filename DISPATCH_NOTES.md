@@ -92,6 +92,13 @@ The analytic centre (an IPX solve) is skipped where graph LNS suits the
 model, and with a concurrent LNS helper; its time limit is what is left of
 the MIP's.
 
+Time limit: production stops at 180 s, so overruns matter. Central
+rounding's line search and randomized rounding fix every integer column
+with a propagation after each fixing and never checked the limits: on
+MIPLIB's germanrr (vanilla too) the former ran about 1300 s past a 300 s
+limit, and on blp-ar98 the latter overran by a cut round. Both now check
+the MIP's limits as they go.
+
 ## Results
 
 Single thread, `mip_rel_gap = 0.01`. CPU times were measured on a busy
