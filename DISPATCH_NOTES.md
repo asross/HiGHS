@@ -21,7 +21,10 @@ for `mip_rel_gap >= 1e-3`):
 - Decision columns: integer columns that every LP vertex makes integral
   (e.g. start-up indicators bounded by +-1 rows of other integers) are not
   fixed or branched on.
-- Quick search after the first root LP: a dive from the LP point, then
+- Quick search after the first root LP: a dive from the LP point (each
+  chunk of fixings goes up to the first rounding that propagation rules
+  out, rather than being undone and quartered: on the ramp models most
+  chunks met such a conflict, and dives took hundreds of LP solves), then
   dived neighbourhoods of about 400 decision columns grown by breadth-first
   search over the constraint graph from a seed column, and a flip search to
   polish. Neighbourhood LPs start from the last LP solved (not the root
@@ -96,16 +99,16 @@ retired (load-independent) are given where available.
 | Dispatch suite (23 instances) | vanilla 1.15.1 | this branch |
 |---|---|---|
 | reach 1% within the 300 s (wall) limit | 14 | 23 |
-| total CPU time | over 2264 s | 372 s |
+| total CPU time | over 2264 s | 331 s |
 | hard tick | time limit, gap 2.03% | 38 s |
-| `_wind185` | time limit (its 0.02% solution came at the limit) | 9.7 s |
-| `dm_full_pert_s1_ramp` | time limit, 9.3% | 75 s |
-| `dm_full_randsoc_ramp` | time limit, no solution | 65 s |
+| `_wind185` | time limit (its 0.02% solution came at the limit) | 9.9 s |
+| `dm_full_pert_s1_ramp` | time limit, 9.3% | 45 s |
+| `dm_full_randsoc_ramp` | time limit, no solution | 58 s |
 | `lambda_..._080458` | 107 s | 17 s |
-| `dm_small_pert_s1_ramp` | 106 s | 4.5 s |
+| `dm_small_pert_s1_ramp` | 106 s | 4.3 s |
 
-Every instance that vanilla solves is at least 4.5 times faster (6 to 24
-times for most); the 9 it does not solve within 300 s take 8 s to 75 s of
+Every instance that vanilla solves is at least 3.9 times faster (8.8 times
+at the median); the 9 it does not solve within 300 s take 6 s to 58 s of
 CPU time. The hard tick over 16 random seeds: all certified, mean 182G
 instructions, median 170G (between 115G and 293G); vanilla does not reach
 1% in 300 s with any seed.
