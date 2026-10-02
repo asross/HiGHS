@@ -87,7 +87,10 @@ class HighsLpRelaxation {
   Status status;
   bool adjustSymBranchingCol;
   bool solved_first_lp;
+  bool raceIpx = false;
   HighsMipWorker* worker_;
+
+  HighsStatus optimizeRacingIpx();
 
   void storeDualInfProof();
 
@@ -373,6 +376,9 @@ class HighsLpRelaxation {
   void setSolvedFirstLp(const bool solved_first_lp_) {
     this->solved_first_lp = solved_first_lp_;
   }
+
+  // Race IPX against the dual simplex in solves without a basis
+  void setRaceIpx(const bool race) { raceIpx = race; }
 };
 
 #endif

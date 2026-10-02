@@ -1992,12 +1992,16 @@ static void clockOff(HighsProfiling* profiling) {
   if (clock2_running) profiling->stop(kMipClockEvaluateRootNode2);
 }
 
+bool HighsMipSolverData::useConcurrentHelper() const {
+  const HighsOptions& options = *mipsolver.options_mip_;
+  return !mipsolver.submip && options.mip_concurrent_helper &&
+         options.threads != 1 && std::thread::hardware_concurrency() >= 2 &&
+         options.mip_heuristic_run_graph_lns && options.mip_rel_gap >= 1e-3;
+}
+
 void HighsMipSolverData::startConcurrentLns() {
   const HighsOptions& options = *mipsolver.options_mip_;
-  if (mipsolver.submip || concurrent_lns || !options.mip_concurrent_lns ||
-      options.threads == 1 || std::thread::hardware_concurrency() < 2 ||
-      !firstrootbasis.valid)
-    return;
+  if (concurrent_lns || !useConcurrentHelper() || !firstrootbasis.valid) return;
   const double time_left = options.time_limit - mipsolver.timer_.read();
   if (time_left < 1) return;
   concurrent_lns.reset(new HighsConcurrentLns());
@@ -2023,7 +2027,7 @@ void HighsMipSolverData::startConcurrentLns() {
   data->options.mip_heuristic_run_rins = false;
   data->options.mip_heuristic_run_root_reduced_cost = false;
   data->options.mip_heuristic_run_feasibility_jump = false;
-  data->options.mip_concurrent_lns = false;
+  data->options.mip_concurrent_helper = false;
   data->options.random_seed = options.random_seed + 1;
   data->options.time_limit = time_left;
   data->model = *mipsolver.model_;
@@ -2126,9 +2130,13 @@ restart:
   //  lp.getLpSolver().setOptionValue("log_file",
   //  mipsolver.options_mip_->log_file);
 
+  // with a core to spare, IPX races the dual simplex on a large first LP
+  getLp().setRaceIpx(!firstrootbasis.valid && useConcurrentHelper() &&
+                     mipsolver.numNonzero() >= 10000);
   profiling->start(kMipClockEvaluateRootLp);
   HighsLpRelaxation::Status status = evaluateRootLp(worker);
   profiling->stop(kMipClockEvaluateRootLp);
+  getLp().setRaceIpx(false);
   if (numRestarts == 0) firstrootlpiters = total_lp_iterations;
 
   getLp().getLpSolver().setOptionValue("output_flag", false);
@@ -2204,7 +2212,11 @@ restart:
   if (runGraphLns) {
     startConcurrentLns();
     // once: restarts come back here
-    if (numRestarts == 0) heuristics.graphLNS(worker, firstlpsol, false);
+    if (numRestarts == 0) {
+      const double before = upper_bound;
+      heuristics.graphLNS(worker, firstlpsol, false);
+      lns_quick_improved = upper_bound < before;
+    }
   }
 
   heuristics.flushStatistics(mipsolver, worker);
@@ -2453,8 +2465,8 @@ restart:
   // If that was not enough, a deeper search runs on the LP with the root
   // cuts, whose solution and bound guide it much better. It is best at
   // closing the last part of the gap: with no incumbent, or one with more
-  // than three times the target gap, the sub-MIP heuristics below run
-  // first.
+  // than three times the target gap, or if the quick search found nothing,
+  // the sub-MIP heuristics below run first.
   auto runDeepLns = [&]() {
     const int64_t lnsIters = -total_lp_iterations;
     const double lnsUpperBound = upper_bound;
@@ -2470,7 +2482,7 @@ restart:
   const bool deepLnsFirst =
       runGraphLns && !rootlpsol.empty() &&
       (mipsolver.concurrent_lns_ ||
-       (upper_bound < kHighsInf &&
+       (lns_quick_improved && upper_bound < kHighsInf &&
         upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit)));
   if (deepLnsFirst) {
     runDeepLns();

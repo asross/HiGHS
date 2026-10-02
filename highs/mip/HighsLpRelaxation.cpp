@@ -8,6 +8,8 @@
 #include "mip/HighsLpRelaxation.h"
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 
 #include "lp_data/HighsSolve.h"  // For useIpm()
 #include "mip/HighsCutPool.h"
@@ -17,6 +19,7 @@
 #include "mip/HighsMipWorker.h"
 #include "mip/HighsPseudocost.h"
 #include "mip/MipTimer.h"
+#include "parallel/HighsParallel.h"
 #include "util/HighsCDouble.h"
 #include "util/HighsHash.h"
 
@@ -1125,6 +1128,66 @@ void HighsLpRelaxation::setObjectiveLimit(double objlim) {
   lpsolver.setOptionValue("objective_bound", objlim + offset);
 }
 
+// Solve the LP, which has no basis, by the dual simplex here and by IPX
+// with crossover in a helper thread (as for a MIP's first root LP when
+// there is a core to spare): the first to finish stops the other. IPX is
+// two to three times faster on large LPs such as those of dispatch
+// models, the dual simplex on others. If IPX wins, the dual simplex goes
+// on from its basis.
+HighsStatus HighsLpRelaxation::optimizeRacingIpx() {
+  std::atomic<int> winner{0};  // 1: dual simplex, 2: IPX
+  HighsBasis ipxBasis;
+  HighsLp lp = lpsolver.getLp();
+  double timeLimit;
+  lpsolver.getOptionValue("time_limit", timeLimit);
+  const HighsInt seed = mipsolver.options_mip_->random_seed;
+  std::thread helper([&]() {
+    highs::parallel::initialize_scheduler(1);
+    Highs ipx;
+    ipx.setOptionValue("output_flag", false);
+    ipx.setOptionValue("solver", kIpxString);
+    ipx.setOptionValue("run_crossover", kHighsOnString);
+    ipx.setOptionValue("threads", 1);
+    ipx.setOptionValue("time_limit", timeLimit);
+    ipx.setOptionValue("random_seed", seed);
+    ipx.passModel(std::move(lp));
+    ipx.setCallback([&](int, const std::string&, const HighsCallbackOutput*,
+                        HighsCallbackInput* data_in, void*) {
+      if (winner.load(std::memory_order_relaxed))
+        data_in->user_interrupt = true;
+    });
+    ipx.startCallback(kCallbackIpmInterrupt);
+    if (ipx.run() == HighsStatus::kOk &&
+        ipx.getModelStatus() == HighsModelStatus::kOptimal &&
+        ipx.getBasis().valid) {
+      int none = 0;
+      if (winner.compare_exchange_strong(none, 2)) ipxBasis = ipx.getBasis();
+    }
+  });
+  lpsolver.setCallback([&](int, const std::string&, const HighsCallbackOutput*,
+                           HighsCallbackInput* data_in, void*) {
+    if (winner.load(std::memory_order_relaxed) == 2)
+      data_in->user_interrupt = true;
+  });
+  lpsolver.startCallback(kCallbackSimplexInterrupt);
+  HighsStatus callstatus = lpsolver.optimizeLp();
+  lpsolver.stopCallback(kCallbackSimplexInterrupt);
+  lpsolver.setCallback(HighsCallbackFunctionType());
+  // the dual simplex is only interrupted once IPX has won
+  const bool ipxWon = lpsolver.getModelStatus() == HighsModelStatus::kInterrupt;
+  if (!ipxWon) {
+    int none = 0;
+    winner.compare_exchange_strong(none, 1);
+  }
+  helper.join();
+  if (!ipxWon) return callstatus;
+  // count the dual simplex iterations so far, and go on from the IPX basis
+  numlpiters +=
+      std::max(HighsInt{0}, lpsolver.getInfo().simplex_iteration_count);
+  lpsolver.setBasis(ipxBasis, "HighsLpRelaxation::optimizeRacingIpx");
+  return lpsolver.optimizeLp();
+}
+
 HighsLpRelaxation::Status HighsLpRelaxation::run(bool resolve_on_error) {
   const HighsInfo& info = lpsolver.getInfo();
   const double this_time_limit =
@@ -1215,7 +1278,8 @@ HighsLpRelaxation::Status HighsLpRelaxation::run(bool resolve_on_error) {
           mipsolver.submip ? "sub-" : "");
     mipsolver.profiling_->setSubMip(profiling_submip);
     mipsolver.profiling_->solveCall("LP2", mipsolver.submip);
-    callstatus = lpsolver.optimizeLp();
+    callstatus =
+        raceIpx && !valid_basis ? optimizeRacingIpx() : lpsolver.optimizeLp();
   }
   // Revert the value of lpsolver.options_.solver
   lpsolver.setOptionValue("solver", solver);

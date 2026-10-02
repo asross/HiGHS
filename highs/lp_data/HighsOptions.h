@@ -503,7 +503,7 @@ struct HighsOptionsStruct {
   bool mip_heuristic_run_rins;
   bool mip_heuristic_run_rens;
   bool mip_heuristic_run_graph_lns;
-  bool mip_concurrent_lns;
+  bool mip_concurrent_helper;
   bool mip_heuristic_run_root_reduced_cost;
   bool mip_heuristic_run_zi_round;
   bool mip_heuristic_run_shifting;
@@ -672,7 +672,7 @@ struct HighsOptionsStruct {
         mip_heuristic_run_rins(false),
         mip_heuristic_run_rens(false),
         mip_heuristic_run_graph_lns(false),
-        mip_concurrent_lns(false),
+        mip_concurrent_helper(false),
         mip_heuristic_run_root_reduced_cost(false),
         mip_heuristic_run_zi_round(false),
         mip_heuristic_run_shifting(false),
@@ -1255,11 +1255,12 @@ class HighsOptions : public HighsOptionsStruct {
     records.push_back(record_bool);
 
     record_bool = new OptionRecordBool(
-        "mip_concurrent_lns",
-        "Whether to run graph LNS in a second thread alongside the MIP solver "
-        "(unless threads is 1): its incumbents make the solve "
-        "non-deterministic",
-        advanced, &mip_concurrent_lns, true);
+        "mip_concurrent_helper",
+        "Whether, when graph LNS runs, to use a second thread (unless "
+        "threads is 1) to race IPX against the dual simplex on the first "
+        "root LP and to run graph LNS alongside the MIP solver: this makes "
+        "the solve non-deterministic",
+        advanced, &mip_concurrent_helper, true);
     records.push_back(record_bool);
 
     record_bool =

@@ -204,9 +204,14 @@ struct HighsMipSolverData {
   // lns_tree_wait iterations of tree search
   int64_t lns_tree_next = -1;
   int64_t lns_tree_wait = 0;
+  // whether the quick graph-LNS search improved the incumbent (kept over
+  // restarts): if it did not, the neighbourhood search does not suit the
+  // model and the sub-MIP heuristics go first
+  bool lns_quick_improved = false;
 
   std::unique_ptr<HighsConcurrentLns> concurrent_lns;
   int64_t concurrent_lns_seen = 0;
+  bool useConcurrentHelper() const;
   void startConcurrentLns();
   void syncConcurrentLns();
   void stopConcurrentLns();
