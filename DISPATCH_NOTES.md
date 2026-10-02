@@ -110,13 +110,13 @@ CPU time. The hard tick over 16 random seeds: all certified, mean 182G
 instructions, median 170G (between 115G and 293G); vanilla does not reach
 1% in 300 s with any seed.
 
-With two threads (`threads = 2`, close to production's two vCPUs): all 23
-instances reach 1%, all but three in under 50 s of wall time on a busy
-machine; the slowest are the hard tick (71 s), `dm_full_randsoc_ramp`
-(112 s) and `dm_full_pert_s1_ramp` (142 s) (measured before the LP re-solve
-and flip search work above). IPX wins the root LP race on the large
-dispatch LPs (`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone)
-and a helper thread searches neighbourhoods alongside.
+With two threads (`threads = 2`, close to production's two vCPUs), on a
+lightly loaded machine: all 23 instances reach 1%, in 252 s of wall time
+for the suite; the slowest are `dm_full_randsoc_ramp` (52 s),
+`dm_full_pert_s1_ramp` (44 s) and the hard tick (24 s); everything else
+takes under 20 s. IPX wins the root LP race on the large dispatch LPs
+(`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone, earlier), and a
+helper thread searches neighbourhoods alongside.
 
 The 21 row/column-permuted copies in `~/code/oopt/bench/perm` all reach 1%
 too (single thread).
