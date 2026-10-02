@@ -36,8 +36,9 @@
 // fractional value ever survives.
 //
 // Quick search (after the first root LP): a dive from the LP point (fix the
-// most integral decision columns toward it, a chunk per LP solve, undoing a
-// failed chunk and retrying a quarter of it), then neighbourhoods: a
+// most integral decision columns toward it, a chunk per LP solve, up to the
+// first rounding that propagation rules out; an infeasible chunk is undone
+// and retried at a quarter of its size), then neighbourhoods: a
 // breadth-first search over the variable/constraint graph from a seed
 // column collects ~400 decision columns (on time-indexed models a time
 // window), the rest are fixed to the incumbent, and if the neighbourhood LP
@@ -56,15 +57,17 @@
 //   over time), searched by branch and bound,
 // - flip search: with all decision columns fixed at the incumbent, flip
 //   binaries in order of the gain promised by their reduced cost, and pair a
-//   promising flip with an opposite flip in one of its rows (swaps),
+//   promising flip with an opposite flip in one of its rows (swaps); a move
+//   is first checked by propagating its fixings, which rules out most,
 // - BFS over all rows, dived.
 // Seeds are columns with a promising reduced cost at the incumbent, columns
 // where the incumbent disagrees with the LP solution, or random.
 //
 // The quick search stops after 5 neighbourhoods that do not close 5% of the
 // gap, the deep search after 10 that do not close 5% of what separates the
-// incumbent from the target gap; both also stop on an LP iteration budget,
-// or when the incumbent reaches the target gap. If the deep search pays,
+// incumbent from the target gap; both also stop on an LP iteration budget
+// (for the quick search on a large model, about one root LP's worth), or
+// when the incumbent reaches the target gap. If the deep search pays,
 // further rounds alternate with the tree search (HighsMipSolver::run). A
 // flip search goes on from where the last one from the same incumbent
 // stopped.
@@ -175,9 +178,33 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     return !dom.infeasible();
   };
 
+  // fix a column as a branching decision and propagate; if that is
+  // infeasible, undo it (backtracking to the decision) and return false
+  auto fixTry = [&](HighsDomain& dom, HighsInt col, double val) {
+    bool branched = false;
+    if (dom.col_lower_[col] < val) {
+      dom.changeBound(HighsBoundType::kLower, col, val,
+                      HighsDomain::Reason::branching());
+      branched = true;
+    }
+    if (dom.col_upper_[col] > val) {
+      dom.changeBound(HighsBoundType::kUpper, col, val,
+                      branched ? HighsDomain::Reason::unspecified()
+                               : HighsDomain::Reason::branching());
+      branched = true;
+    }
+    if (!branched) return !dom.infeasible();
+    dom.propagate();
+    if (!dom.infeasible()) return true;
+    dom.backtrack();
+    return false;
+  };
+
   // Dive: fix the most integral unfixed candidates toward the current LP
-  // point, `chunk` per LP re-solve. A failed chunk is undone and retried at a
-  // quarter of the size; a single failed fixing is flipped the other way.
+  // point, `chunk` per LP re-solve, up to the first one whose rounding
+  // propagation rules out (the chunk then shrinks to what was fixed). A
+  // chunk whose LP is infeasible is undone and retried at a quarter of the
+  // size; a single failed fixing is flipped the other way.
   auto dive = [&](HighsDomain& dom, std::vector<HighsInt> candidates,
                   HighsInt chunk0) {
     HighsInt chunk = std::max(HighsInt{1}, chunk0);
@@ -203,16 +230,25 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
         continue;
       }
       pdqsort(order.begin(), order.end());
-      const HighsInt nfix = std::min<HighsInt>(chunk, order.size());
+      HighsInt nfix = std::min<HighsInt>(chunk, order.size());
       HighsDomain snap = dom;
       const size_t pos = dom.getDomainChangeStack().size();
-      bool feasible = true;
-      for (HighsInt i = 0; i < nfix && feasible; ++i) {
+      // fix the chunk up to the first rounding that conflicts with the
+      // fixings before it (which is undone)
+      HighsInt nfixed = 0;
+      for (HighsInt i = 0; i < nfix; ++i) {
         HighsInt col = order[i].second;
         double val =
             std::min(std::max(std::round(sol[col]), dom.col_lower_[col]),
                      dom.col_upper_[col]);
-        feasible = fixTo(dom, col, val);
+        if (!fixTry(dom, col, val)) break;
+        ++nfixed;
+      }
+      bool feasible = nfixed > 0;
+      if (nfixed < nfix) {
+        // (the first one conflicting: try its other value, as below)
+        nfix = std::max(HighsInt{1}, nfixed);
+        chunk = nfix;
       }
       HighsLpRelaxation::Status st = HighsLpRelaxation::Status::kInfeasible;
       if (feasible) {
