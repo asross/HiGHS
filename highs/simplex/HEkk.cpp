@@ -20,6 +20,7 @@
 #include "simplex/HSimplexDebug.h"
 #include "simplex/HSimplexReport.h"
 #include "simplex/SimplexTimer.h"
+#include "util/HighsSparseVectorSum.h"
 
 using std::fabs;
 using std::max;
@@ -4311,6 +4312,31 @@ bool HEkk::proofOfPrimalInfeasibility(HVector& row_ep, const HighsInt move_out,
   if (use_row_wise_matrix) {
     this->ar_matrix_.productTransposeQuad(proof_value, proof_index, row_ep,
                                           debug_product_report);
+  } else if (status_.has_ar_matrix && lp.scale_.has_scaling) {
+    // The row-wise matrix is in the other scaling (see moveLp), so convert
+    // its values: a scaled value is the unscaled one times its column and
+    // row scale factors. Only the rows of row_ep's nonzeros are visited
+    const bool to_scaled = lp.is_scaled_;
+    const std::vector<double>& col_scale = lp.scale_.col;
+    const std::vector<double>& row_scale = lp.scale_.row;
+    HighsSparseVectorSum sum(lp.num_col_);
+    for (HighsInt iX = 0; iX < row_ep.count; iX++) {
+      const HighsInt iRow = row_ep.index[iX];
+      double multiplier = row_ep.array[iRow];
+      if (multiplier == 0) continue;
+      multiplier = to_scaled ? multiplier * row_scale[iRow]
+                             : multiplier / row_scale[iRow];
+      for (HighsInt iEl = ar_matrix_.start_[iRow];
+           iEl < ar_matrix_.start_[iRow + 1]; iEl++)
+        sum.add(ar_matrix_.index_[iEl], multiplier * ar_matrix_.value_[iEl]);
+    }
+    for (HighsInt iCol : sum.getNonzeros()) {
+      const double value = sum.getValue(iCol) * (to_scaled ? col_scale[iCol]
+                                                           : 1 / col_scale[iCol]);
+      if (std::abs(value) <= kHighsTiny) continue;
+      proof_value.push_back(value);
+      proof_index.push_back(iCol);
+    }
   } else {
     lp.a_matrix_.productTransposeQuad(proof_value, proof_index, row_ep,
                                       debug_product_report);
