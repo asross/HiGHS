@@ -443,6 +443,10 @@ void HighsMipSolverData::startAnalyticCenterComputation(
     const std::string ipm_solver = use_hipo ? kHipoString : kIpxString;
     ipm.setOptionValue("solver", ipm_solver);
     ipm.setOptionValue("ipm_iteration_limit", 200);
+    // not beyond the MIP's time limit
+    ipm.setOptionValue("time_limit",
+                       std::max(0.0, mipsolver.options_mip_->time_limit -
+                                         mipsolver.timer_.read()));
     ipm.setOptionValue("run_crossover", kHighsOffString);
     ipm.setOptionValue("run_centring", true);
     HighsLp lpmodel(*mipsolver.model_);
@@ -2080,8 +2084,12 @@ void HighsMipSolverData::stopConcurrentLns() {
 }
 
 void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
-  // not in a concurrent LNS helper, which only searches for solutions
-  const bool compute_analytic_centre = !mipsolver.concurrent_lns_;
+  // not in a concurrent LNS helper, which only searches for solutions, nor
+  // in a main solver that has one: the analytic centre (an IPX solve that
+  // can take long, without checking whether the helper has closed the gap)
+  // is mostly for heuristics that the helper's search makes redundant
+  const bool compute_analytic_centre =
+      !mipsolver.concurrent_lns_ && !useConcurrentHelper();
   HighsInt maxSepaRounds = mipsolver.submip ? 5 : kHighsIInf;
   if (numRestarts == 0)
     maxSepaRounds =

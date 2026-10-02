@@ -298,6 +298,14 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   HighsInt since = 0;
   int64_t heurItersCap =
       int64_t(itersFac * mipdata.total_lp_iterations) + (deep ? 5000 : 1000);
+  // on large models, the quick search spends about one root LP's worth of
+  // LP iterations: where neighbourhood LPs are expensive (e.g. with
+  // ramping), the root cuts then come early, and their bound often closes
+  // the gap with the incumbent
+  if (!deep)
+    heurItersCap =
+        std::min(heurItersCap,
+                 std::max(mipdata.total_lp_iterations + 1000, int64_t{20000}));
   if (maxLpIters >= 0) heurItersCap = std::min(heurItersCap, maxLpIters);
   // the solver's own test of the target gap (as in evaluateRootLp)
   auto withinGap = [&]() {
