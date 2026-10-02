@@ -160,6 +160,12 @@ seeds:
 - at `mip_rel_gap = 0.01` (graph LNS active): 0.916 over 60 runs; mas76
   is solved only by this branch (both seeds).
 
+The other 59 MIPLIB instances here (mostly not solved within 300 s), run
+side by side at the default gap: this branch solves 15 and vanilla 13 (the
+12 both solve: 0.962); of the rest, the final gap is better with this
+branch on 11, with vanilla on 9, and about the same on 39. Vanilla runs
+past the time limit on germanrr (see above).
+
 ## Options
 
 - `mip_heuristic_run_graph_lns` (default true)
