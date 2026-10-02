@@ -549,6 +549,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     screen.clearPoolPropagation();
     std::vector<HighsInt> openCols;
     bool haveBase = false;
+    HighsInt screened = 0;
     auto fix = [&](HighsInt col, double val, bool& branched) {
       if (screen.col_lower_[col] < val) {
         screen.changeBound(HighsBoundType::kLower, col, val,
@@ -606,9 +607,10 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     };
     // try a move: on improvement keep it, otherwise undo it
     auto tryMove = [&](const HighsInt* cols, HighsInt n) {
-      // (a move ruled out by propagation still counts as an LP solve)
+      // (moves ruled out by propagation, which cost far less than an LP
+      // solve, count as one in four)
       if (propagationInfeasible(cols, n)) {
-        ++solves;
+        if (++screened % 4 == 0) ++solves;
         return false;
       }
       for (HighsInt i = 0; i < n; ++i) setCol(cols[i], flipped(cols[i]));
