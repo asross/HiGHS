@@ -461,6 +461,8 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // the number of LP solves.
   std::vector<std::pair<double, HighsInt>> flipCands, partners;
   std::vector<double> cur(numCol), rc;
+  HighsDomain screen(globaldom);
+  std::vector<uint8_t> isOpen(numCol, 0);
   // at most about one root LP's worth of iterations per flip search: on
   // some models (e.g. with ramping) each flip needs a long re-solve
   const int64_t flipMaxIters =
@@ -499,14 +501,87 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     lp.setObjectiveLimit(kHighsInf);
     HighsInt solves = 1;
     if (!usable(lp.resolveLp(nullptr))) return solves;
+    // Most moves make the LP infeasible (e.g. against minimum up or down
+    // times), which domain propagation of the fixings (all decision columns
+    // at the incumbent, the move's flipped) over the model rows usually
+    // shows much more cheaply than an LP solve. To share the work of fixing
+    // every decision column, the screening domain has a base fixing them
+    // all at the incumbent except an open set (the next candidates and
+    // their partners), and a move then only fixes the open set. Fixings
+    // are undone by backtracking to the first of them.
+    screen = globaldom;
+    screen.clearPoolPropagation();
+    std::vector<HighsInt> openCols;
+    bool haveBase = false;
+    auto fix = [&](HighsInt col, double val, bool& branched) {
+      if (screen.col_lower_[col] < val) {
+        screen.changeBound(HighsBoundType::kLower, col, val,
+                           branched ? HighsDomain::Reason::unspecified()
+                                    : HighsDomain::Reason::branching());
+        branched = true;
+      }
+      if (screen.col_upper_[col] > val) {
+        screen.changeBound(HighsBoundType::kUpper, col, val,
+                           branched ? HighsDomain::Reason::unspecified()
+                                    : HighsDomain::Reason::branching());
+        branched = true;
+      }
+    };
+    auto dropBase = [&]() {
+      if (haveBase) screen.backtrack();
+      haveBase = false;
+      for (HighsInt col : openCols) isOpen[col] = 0;
+      openCols.clear();
+    };
+    auto buildBase = [&](const std::vector<HighsInt>& open) {
+      dropBase();
+      for (HighsInt col : open)
+        if (!isOpen[col]) {
+          isOpen[col] = 1;
+          openCols.push_back(col);
+        }
+      bool branched = false;
+      for (HighsInt col : decisioncols) {
+        if (screen.infeasible()) break;
+        if (!isOpen[col]) fix(col, cur[col], branched);
+      }
+      if (!screen.infeasible()) screen.propagate();
+      haveBase = branched;
+      // (the incumbent satisfies the base, so this is not expected)
+      if (screen.infeasible()) dropBase();
+    };
+    auto propagationInfeasible = [&](const HighsInt* cols, HighsInt n) {
+      const bool inBase =
+          haveBase && isOpen[cols[0]] && (n == 1 || isOpen[cols[1]]);
+      if (!inBase) dropBase();
+      auto inMove = [&](HighsInt col) {
+        return col == cols[0] || (n > 1 && col == cols[1]);
+      };
+      bool branched = false;
+      for (HighsInt i = 0; i < n; ++i) fix(cols[i], flipped(cols[i]), branched);
+      for (HighsInt col : inBase ? openCols : decisioncols) {
+        if (screen.infeasible()) break;
+        if (!inMove(col)) fix(col, cur[col], branched);
+      }
+      if (!screen.infeasible()) screen.propagate();
+      const bool infeasible = screen.infeasible();
+      if (branched) screen.backtrack();
+      return infeasible;
+    };
     // try a move: on improvement keep it, otherwise undo it
     auto tryMove = [&](const HighsInt* cols, HighsInt n) {
+      // (a move ruled out by propagation still counts as an LP solve)
+      if (propagationInfeasible(cols, n)) {
+        ++solves;
+        return false;
+      }
       for (HighsInt i = 0; i < n; ++i) setCol(cols[i], flipped(cols[i]));
       lp.setObjectiveLimit(worker.upper_limit);
       HighsLpRelaxation::Status mst = lp.resolveLp(nullptr);
       ++solves;
       if (usable(mst) && lp.getObjective() < worker.upper_limit &&
           tryIncumbent(mst)) {
+        dropBase();
         for (HighsInt i = 0; i < n; ++i) cur[cols[i]] = flipped(cols[i]);
         return true;
       }
@@ -531,22 +606,9 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
         if (binary(col) && gain(col) > feastol)
           flipCands.emplace_back(gain(col), col);
       pdqsort(flipCands.begin(), flipCands.end(), byGain);
-      for (size_t c = start; c < flipCands.size(); ++c) {
-        if (solves >= maxSolves ||
-            lp.getNumLpIterations() - flipStartIters > flipMaxIters ||
-            withinGap() || worker.terminatorTerminated() ||
-            mipdata.checkLimits()) {
-          lnsFlipObj = mipdata.upper_bound;
-          lnsFlipNext = c;
-          return solves;
-        }
-        const HighsInt j = flipCands[c].second;
-        if (tryMove(&j, 1)) {
-          improved = true;
-          break;
-        }
-        // partners: columns in j's rows whose flip moves the row activity
-        // the other way, best promised gain first
+      // partners of j: columns in j's rows whose flip moves the row
+      // activity the other way, best promised gain first
+      auto findPartners = [&](HighsInt j) {
         const double dj = flipped(j) - cur[j];
         partners.clear();
         for (HighsInt p = A.start_[j]; p != A.start_[j + 1]; ++p) {
@@ -568,12 +630,47 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                                      return a.second == b.second;
                                    }),
                        partners.end());
+      };
+      const size_t kScreenBatch = 32;
+      size_t batchEnd = start;
+      std::vector<HighsInt> open;
+      for (size_t c = start; c < flipCands.size(); ++c) {
+        if (solves >= maxSolves ||
+            lp.getNumLpIterations() - flipStartIters > flipMaxIters ||
+            withinGap() || worker.terminatorTerminated() ||
+            mipdata.checkLimits()) {
+          lnsFlipObj = mipdata.upper_bound;
+          lnsFlipNext = c;
+          dropBase();
+          return solves;
+        }
+        if (c >= batchEnd) {
+          // the next candidates and their partners are open in the base
+          batchEnd = std::min(flipCands.size(), c + kScreenBatch);
+          open.clear();
+          for (size_t b = c; b < batchEnd; ++b) {
+            const HighsInt jb = flipCands[b].second;
+            open.push_back(jb);
+            findPartners(jb);
+            for (HighsInt i = 0;
+                 i < std::min<HighsInt>(kPartners, partners.size()); ++i)
+              open.push_back(partners[i].second);
+          }
+          buildBase(open);
+        }
+        const HighsInt j = flipCands[c].second;
+        if (tryMove(&j, 1)) {
+          improved = true;
+          break;
+        }
+        findPartners(j);
         for (HighsInt i = 0;
              i < std::min<HighsInt>(kPartners, partners.size()) && !improved;
              ++i) {
           if (solves >= maxSolves) {
             lnsFlipObj = mipdata.upper_bound;
             lnsFlipNext = c;
+            dropBase();
             return solves;
           }
           const HighsInt pair[2] = {j, partners[i].second};
@@ -584,6 +681,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       start = 0;
     }
     // no improving flip from this incumbent
+    dropBase();
     lnsFlipObj = mipdata.upper_bound;
     lnsFlipNext = -1;
     return solves;

@@ -517,6 +517,13 @@ class HighsDomain {
 
   void backtrackToGlobal();
 
+  // stop propagating the cut and conflict pools (for a domain that only
+  // checks fixings against the model rows)
+  void clearPoolPropagation() {
+    cutpoolpropagation.clear();
+    conflictPoolPropagation.clear();
+  }
+
   HighsDomainChange backtrack();
 
   const std::vector<HighsInt>& getBranchingPositions() const {

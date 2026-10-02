@@ -1112,8 +1112,13 @@ HighsSearch::NodeResult HighsSearch::branch() {
     int64_t sbmaxiters = 0;
     if (minrel > 0) {
       int64_t sbiters = getStrongBranchingLpIterations();
+      // where graph LNS rounds alternate with the tree search (a loose
+      // target gap that incumbents close), strong branching starts with a
+      // smaller budget: it is expensive there, and the bound rarely matters
+      const int64_t sbBase =
+          mipsolver.mipdata_->lns_tree_next >= 0 ? 10000 : 100000;
       sbmaxiters =
-          100000 + ((getTotalLpIterations() - getHeuristicLpIterations() -
+          sbBase + ((getTotalLpIterations() - getHeuristicLpIterations() -
                      getStrongBranchingLpIterations()) >>
                     1);
       if (sbiters > sbmaxiters) {
