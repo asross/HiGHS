@@ -896,14 +896,17 @@ restart:
         !mipdata_->rootlpsol.empty()) {
       const int64_t iters = -mipdata_->total_lp_iterations;
       const double upper_bound = mipdata_->upper_bound;
-      mipdata_->heuristics.graphLNS(master_worker, mipdata_->rootlpsol, true);
+      // a round takes at most about the tree search's share since the
+      // last one
+      mipdata_->heuristics.graphLNS(
+          master_worker, mipdata_->rootlpsol, true,
+          std::max(int64_t{5000}, mipdata_->lns_tree_wait));
       mipdata_->heuristics.flushStatistics(*this, master_worker);
       // the same share again while it improves, else twice the wait
       if (mipdata_->upper_bound >= upper_bound) mipdata_->lns_tree_wait *= 2;
-      mipdata_->lns_tree_next =
-          mipdata_->total_lp_iterations +
-          std::max(mipdata_->lns_tree_wait,
-                   iters + mipdata_->total_lp_iterations);
+      mipdata_->lns_tree_next = mipdata_->total_lp_iterations +
+                                std::max(mipdata_->lns_tree_wait,
+                                         iters + mipdata_->total_lp_iterations);
       if (mipdata_->checkLimits()) break;
     }
     // Possibly query existence of an external solution

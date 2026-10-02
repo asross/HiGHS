@@ -112,7 +112,7 @@ void HighsPrimalHeuristics::setupDecisionCols() {
 
 void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                                      const std::vector<double>& relaxationsol,
-                                     bool deep) {
+                                     bool deep, int64_t maxLpIters) {
   if (mipsolver.submip && !mipsolver.concurrent_lns_) return;
   if (worker.getGlobalDomain().infeasible()) return;
   if (!decisionColsSetUp) setupDecisionCols();
@@ -176,19 +176,14 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // Dive: fix the most integral unfixed candidates toward the current LP
   // point, `chunk` per LP re-solve. A failed chunk is undone and retried at a
   // quarter of the size; a single failed fixing is flipped the other way.
-  // A dive takes at most a quarter of the root LP's iterations: one that
-  // takes longer rarely finds a solution.
   auto dive = [&](HighsDomain& dom, std::vector<HighsInt> candidates,
                   HighsInt chunk0) {
     HighsInt chunk = std::max(HighsInt{1}, chunk0);
     const HighsInt maxSolves = 5 * HighsInt(candidates.size()) + 100;
-    const int64_t maxIters =
-        lp.getNumLpIterations() +
-        std::max<int64_t>(1000, mipdata.firstrootlpiters / 4);
     HighsInt solves = 0;
     bool fallback = false;
     std::vector<std::pair<double, HighsInt>> order;
-    while (solves < maxSolves && lp.getNumLpIterations() < maxIters) {
+    while (solves < maxSolves) {
       if (worker.terminatorTerminated() || mipdata.checkLimits()) return false;
       const std::vector<double> sol = lp.getLpSolver().getSolution().col_value;
       order.clear();
@@ -262,10 +257,17 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // find one
   if (!tryIncumbent(st) &&
       (!deep ||
-       (mipdata.incumbent.size() != size_t(numCol) && !lnsDiveFailed)) &&
-      !dive(dom, decisioncols,
-            std::max<HighsInt>(20, decisioncols.size() / 12)))
-    lnsDiveFailed = true;
+       (mipdata.incumbent.size() != size_t(numCol) && !lnsDiveFailed))) {
+    const int64_t diveIters = lp.getNumLpIterations();
+    const bool found = dive(dom, decisioncols,
+                            std::max<HighsInt>(20, decisioncols.size() / 12));
+    if (!found) lnsDiveFailed = true;
+    highsLogDev(mipsolver.options_mip_->log_options, HighsLogType::kVerbose,
+                "%s dive %s after %lld LP iterations\n",
+                mipsolver.concurrent_lns_ ? "LNS(helper)" : "LNS",
+                found ? "found a solution" : "failed",
+                (long long)(lp.getNumLpIterations() - diveIters));
+  }
   if (mipdata.upper_limit == kHighsInf ||
       mipdata.incumbent.size() != size_t(numCol)) {
     chargeIterations();
@@ -292,8 +294,9 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       std::max(dfsSize0, std::min<double>(1000.0, decisioncols.size()));
   const double itersFac = deep ? 10.0 : 3.0;
   HighsInt since = 0;
-  const int64_t heurItersCap =
+  int64_t heurItersCap =
       int64_t(itersFac * mipdata.total_lp_iterations) + (deep ? 5000 : 1000);
+  if (maxLpIters >= 0) heurItersCap = std::min(heurItersCap, maxLpIters);
   // the solver's own test of the target gap (as in evaluateRootLp)
   auto withinGap = [&]() {
     return mipdata.upper_bound < kHighsInf &&

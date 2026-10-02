@@ -57,9 +57,11 @@ class HighsPrimalHeuristics {
 
   // Root dive and LNS from the incumbent: quick dived neighbourhoods
   // (after the first root LP), or neighbourhoods searched by a depth-first
-  // branch and bound (deep, after the root cuts)
+  // branch and bound (deep, after the root cuts), using at most maxLpIters
+  // LP iterations if that is not negative
   void graphLNS(HighsMipWorker& worker,
-                const std::vector<double>& relaxationsol, bool deep);
+                const std::vector<double>& relaxationsol, bool deep,
+                int64_t maxLpIters = -1);
 
   bool solveSubMip(HighsMipWorker& worker, const HighsLp& lp,
                    const HighsBasis& basis, double fixingRate,

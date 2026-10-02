@@ -414,6 +414,7 @@ void HighsMipSolverData::startAnalyticCenterComputation(
   taskGroup.spawn([&]() {
     // first check if the analytic centre computation should be cancelled, e.g.
     // due to early return in the root node evaluation
+    if (skipAnalyticCenter) return;
     //
     // Highs instantiation
     Highs ipm;
@@ -2225,6 +2226,7 @@ restart:
       lns_quick_improved =
           upper_bound < before &&
           upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit);
+      skipAnalyticCenter = lns_quick_improved;
     }
   }
 

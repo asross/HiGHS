@@ -125,6 +125,9 @@ struct HighsMipSolverData {
   bool rowMatrixSet;
   bool analyticCenterComputed;
   HighsModelStatus analyticCenterStatus;
+  // set when graph LNS suits the model, which then has no use for the
+  // analytic centre: a computation not started yet is skipped
+  std::atomic<bool> skipAnalyticCenter{false};
   bool detectSymmetries;
   HighsInt numRestarts;
   HighsInt numRestartsRoot;
