@@ -57,9 +57,11 @@ HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
     return ekk_instance_.returnFromSolve(HighsStatus::kError);
   }
 
-  // Determine the duals without cost perturbation
+  // Determine the duals without cost perturbation: unless just computed
+  // by initialiseForSolve with these costs
   ekk_instance_.initialiseCost(SimplexAlgorithm::kDual, kSolvePhaseUnknown);
-  ekk_instance_.computeDual();
+  if (!ekk_instance_.fresh_unperturbed_dual_) ekk_instance_.computeDual();
+  ekk_instance_.fresh_unperturbed_dual_ = false;
   ekk_instance_.computeSimplexDualInfeasible();
   // Record whether the solution with unperturbed costs is dual feasible
   const bool dual_feasible_with_unperturbed_costs =
@@ -201,6 +203,9 @@ HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
     computeDualInfeasibilitiesWithFixedVariableFlips();
     dualInfeasCount = info.num_dual_infeasibilities;
   }
+  // The dual values are now those for the current costs, so the first
+  // rebuild of phase 2 need not recompute them
+  ekk_instance_.fresh_dual_ = true;
 
   // Determine the solve phase
   if (force_phase2) {
@@ -227,6 +232,7 @@ HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
     // the updated value
     status.has_dual_objective_value = false;
     if (solve_phase == kSolvePhaseUnknown) {
+      ekk_instance_.clearFreshValues();
       // Reset the phase 2 bounds so that true number of dual
       // infeasibilities can be determined
       ekk_instance_.initialiseBound(SimplexAlgorithm::kDual,
@@ -248,6 +254,7 @@ HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
     assert(solve_phase == kSolvePhase1 || solve_phase == kSolvePhase2);
     if (solve_phase == kSolvePhase1) {
       // Phase 1
+      ekk_instance_.clearFreshValues();
       analysis->simplexTimerStart(SimplexDualPhase1Clock);
       solvePhase1();
       analysis->simplexTimerStop(SimplexDualPhase1Clock);
@@ -1078,8 +1085,13 @@ void HEkkDual::rebuild() {
     // Reset the knowledge of previous objective values
     //    debugUpdatedObjectiveValue(ekk_instance_, algorithm, -1, "");
   }
-  // Recompute dual solution
-  ekk_instance_.computeDual();
+  // On the first rebuild of phase 2 after the set-up, without
+  // refactorization, the dual values are fresh and, unless correcting
+  // dual infeasibilities flips bounds, so are the primal values
+  const bool use_fresh = solve_phase == kSolvePhase2 && !refactor_basis_matrix;
+  const bool fresh_primal = use_fresh && ekk_instance_.fresh_primal_;
+  if (!(use_fresh && ekk_instance_.fresh_dual_)) ekk_instance_.computeDual();
+  ekk_instance_.clearFreshValues();
 
   if (info.backtracking_) {
     // If backtracking, may change phase, so drop out
@@ -1087,11 +1099,13 @@ void HEkkDual::rebuild() {
     return;
   }
   analysis->simplexTimerStart(CorrectDualClock);
+  const HighsInt num_flip = analysis->num_correct_dual_primal_flip;
   correctDualInfeasibilities(dualInfeasCount);
   analysis->simplexTimerStop(CorrectDualClock);
 
   // Recompute primal solution
-  ekk_instance_.computePrimal();
+  if (!fresh_primal || analysis->num_correct_dual_primal_flip != num_flip)
+    ekk_instance_.computePrimal();
 
   // Collect primal infeasible as a list
   analysis->simplexTimerStart(CollectPrIfsClock);

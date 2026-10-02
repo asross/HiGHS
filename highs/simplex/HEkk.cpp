@@ -1026,6 +1026,7 @@ HighsStatus HEkk::solve(const bool force_phase2) {
 
   previous_iteration_cycling_detected = -kHighsIInf;
 
+  clearFreshValues();
   initialiseForSolve();
 
   const HighsDebugStatus simplex_nla_status =
@@ -1658,6 +1659,8 @@ void HEkk::initialiseForSolve() {
   initialiseNonbasicValueAndMove();
   computePrimal();                // Timed
   computeDual();                  // Timed
+  fresh_primal_ = true;
+  fresh_unperturbed_dual_ = true;
   computeSimplexInfeasible();     // Timed
   computeDualObjectiveValue();    // Timed
   computePrimalObjectiveValue();  // Timed
@@ -3595,6 +3598,7 @@ bool HEkk::bailout() {
 HighsStatus HEkk::returnFromEkkSolve(const HighsStatus return_status) {
   // Saved weights not used by this solve are stale for the next one
   saved_dual_edge_weight_.clear();
+  clearFreshValues();
   if (analysis_.analyse_simplex_time)
     analysis_.simplexTimerStop(SimplexTotalClock);
   // Restore any modified development or timing settings and analyse

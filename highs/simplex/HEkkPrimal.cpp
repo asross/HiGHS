@@ -18,6 +18,7 @@
 using std::min;
 
 HighsStatus HEkkPrimal::solve(const bool pass_force_phase2) {
+  ekk_instance_.clearFreshValues();
   // Initialise control data for a particular solve
   initialiseSolve();
   // Assumes that the LP has a positive number of rows

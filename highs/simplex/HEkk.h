@@ -198,6 +198,16 @@ class HEkk {
   HighsSparseMatrix ar_matrix_;
   bool ar_matrix_is_scaled_ = false;
   bool random_vectors_drawn_for_solve_ = false;
+  // Values computed by initialiseForSolve or the dual simplex set-up that
+  // nothing has changed since, so the dual simplex need not recompute them
+  bool fresh_unperturbed_dual_ = false;
+  bool fresh_dual_ = false;
+  bool fresh_primal_ = false;
+  void clearFreshValues() {
+    fresh_unperturbed_dual_ = false;
+    fresh_dual_ = false;
+    fresh_primal_ = false;
+  }
   HighsSparseMatrix scaled_a_matrix_;
   HSimplexNla simplex_nla_;
 
