@@ -1642,7 +1642,12 @@ HighsLpRelaxation::Status HighsLpRelaxation::resolveLp(HighsDomain* domain) {
               it.key(), it.value().first / (double)it.value().second);
         }
 
-        if (roundable && !fractionalints.empty()) {
+        // rounding along the locks keeps rows satisfied only if the LP
+        // solution satisfies them: after an unknown status (e.g. a taboo
+        // basis in the dual simplex) it can violate bounds by a lot, and the
+        // rounded point is taken as a solution without a check
+        if (roundable && !fractionalints.empty() &&
+            unscaledPrimalFeasible(status)) {
           std::vector<double> roundsol = sol.col_value;
 
           for (const std::pair<HighsInt, double>& fracint : fractionalints) {
