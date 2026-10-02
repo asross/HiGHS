@@ -1176,6 +1176,9 @@ HPresolve::Result HPresolve::dominatedColumns(
     // skip deleted columns
     if (colDeleted[j]) continue;
 
+    // the checks below are long for columns in long rows
+    if ((j & 127) == 0) HPRESOLVE_CHECKED_CALL(checkTimeLimit());
+
     // increment counter for number of columns
     numCols++;
 
