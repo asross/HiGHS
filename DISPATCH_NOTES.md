@@ -97,7 +97,10 @@ rounding's line search and randomized rounding fix every integer column
 with a propagation after each fixing and never checked the limits: on
 MIPLIB's germanrr (vanilla too) the former ran about 1300 s past a 300 s
 limit, and on blp-ar98 the latter overran by a cut round. Both now check
-the MIP's limits as they go.
+the MIP's limits as they go, as does presolve's dominated columns check
+(which took about 150 s on the dense eilA101-2, past any time limit below
+that). With a 30 s limit, no MIPLIB instance here now runs more than 8 s
+over.
 
 ## Results
 
