@@ -378,6 +378,7 @@ set(highs_sources
     mip/HighsDynamicRowMatrix.cpp
     mip/HighsFeasibilityJump.cpp
     mip/HighsGFkSolve.cpp
+    mip/HighsGraphLns.cpp
     mip/HighsImplications.cpp
     mip/HighsLpAggregator.cpp
     mip/HighsLpRelaxation.cpp

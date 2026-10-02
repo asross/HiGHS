@@ -2008,22 +2008,28 @@ void HighsMipSolverData::startConcurrentLns() {
   // The helper solves a copy of the presolved model from the root basis:
   // it does the root LP, cuts and graph LNS with its own random seed,
   // without the heuristics that solve sub-MIPs
-  HighsOptions helper_options = options;
-  helper_options.presolve = kHighsOffString;
-  helper_options.output_flag = false;
-  helper_options.mip_improving_solution_save = false;
-  helper_options.mip_detect_symmetry = false;
-  helper_options.mip_heuristic_run_rens = false;
-  helper_options.mip_heuristic_run_rins = false;
-  helper_options.mip_heuristic_run_root_reduced_cost = false;
-  helper_options.mip_heuristic_run_feasibility_jump = false;
-  helper_options.mip_concurrent_lns = false;
-  helper_options.random_seed = options.random_seed + 1;
-  helper_options.time_limit = time_left;
+  struct HelperData {
+    HighsOptions options;
+    HighsLp model;
+    HighsBasis basis;
+  };
+  std::shared_ptr<HelperData> data = std::make_shared<HelperData>();
+  data->options = options;
+  data->options.presolve = kHighsOffString;
+  data->options.output_flag = false;
+  data->options.mip_improving_solution_save = false;
+  data->options.mip_detect_symmetry = false;
+  data->options.mip_heuristic_run_rens = false;
+  data->options.mip_heuristic_run_rins = false;
+  data->options.mip_heuristic_run_root_reduced_cost = false;
+  data->options.mip_heuristic_run_feasibility_jump = false;
+  data->options.mip_concurrent_lns = false;
+  data->options.random_seed = options.random_seed + 1;
+  data->options.time_limit = time_left;
+  data->model = *mipsolver.model_;
+  data->basis = firstrootbasis;
   HighsCallback* callback = mipsolver.callback_;
-  pool->thread = std::thread([pool, callback, helper_options,
-                              model = *mipsolver.model_,
-                              basis = firstrootbasis]() {
+  pool->thread = std::thread([pool, callback, data]() {
     // its own (single thread) task scheduler and profiling
     highs::parallel::initialize_scheduler(1);
     HighsTimer timer;
@@ -2032,9 +2038,10 @@ void HighsMipSolverData::startConcurrentLns() {
     profiling.initialize(timer, false, false);
     HighsSolution solution;
     solution.value_valid = false;
-    HighsMipSolver helper(*callback, helper_options, model, solution, true, 1);
+    HighsMipSolver helper(*callback, data->options, data->model, solution,
+                          true, 1);
     helper.concurrent_lns_ = pool;
-    helper.rootbasis = &basis;
+    helper.rootbasis = &data->basis;
     helper.setProfiling(&profiling);
     helper.run();
   });
@@ -2065,8 +2072,6 @@ void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
   if (numRestarts == 0)
     maxSepaRounds =
         std::min(HighsInt(2 * std::sqrt(maxTreeSizeLog2)), maxSepaRounds);
-  if (getenv("SEPA_ROUNDS") && !mipsolver.submip)
-    maxSepaRounds = atoi(getenv("SEPA_ROUNDS"));
   std::unique_ptr<SymmetryDetectionData> symData;
   highs::parallel::TaskGroup tg;
   HighsProfiling* profiling = mipsolver.profiling_;
@@ -2468,10 +2473,6 @@ restart:
       return clockOff(profiling);
     }
     if (checkLimits()) return clockOff(profiling);
-    if (getenv("LNS_EXIT")) {
-      mipsolver.modelstatus_ = HighsModelStatus::kInterrupt;
-      return clockOff(profiling);
-    }
   }
 
   profiling->stop(kMipClockEvaluateRootNode0);

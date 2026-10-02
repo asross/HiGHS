@@ -276,6 +276,7 @@ _srcs = [
     'mip/HighsNodeQueue.cpp',
     'mip/HighsObjectiveFunction.cpp',
     'mip/HighsPathSeparator.cpp',
+    'mip/HighsGraphLns.cpp',
     'mip/HighsPrimalHeuristics.cpp',
     'mip/HighsPseudocost.cpp',
     'mip/HighsRedcostFixing.cpp',

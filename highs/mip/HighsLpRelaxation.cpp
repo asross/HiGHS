@@ -193,10 +193,7 @@ HighsLpRelaxation::HighsLpRelaxation(const HighsMipSolver& mipsolver)
                           mip_dual_feasibility_tolerance);
   // Re-solves are short, so for large LPs computing exact DSE weights
   // for a new basis (a BTRAN per row) is rarely worth it
-  HighsInt dse_exact_init_max_rows = 20000;
-  if (getenv("DSE_LIMIT")) dse_exact_init_max_rows = atoi(getenv("DSE_LIMIT"));
-  lpsolver.setOptionValue("simplex_dse_exact_init_max_rows",
-                          dse_exact_init_max_rows);
+  lpsolver.setOptionValue("simplex_dse_exact_init_max_rows", 20000);
   status = Status::kNotSet;
   numlpiters = 0;
   avgSolveIters = 0;
