@@ -2071,6 +2071,10 @@ void HighsMipSolverData::syncConcurrentLns() {
   if (!pool) return;
   if (mipsolver.concurrent_lns_) {
     pool->helperLowerBound = lower_bound;
+    // the helper's bound with its incumbent may close the gap on its own
+    if (upper_bound < kHighsInf &&
+        std::max(lower_bound, pool->mainLowerBound.load()) > optimality_limit)
+      pool->targetReached = true;
   } else {
     // the helper's bound is valid for the same model; the tree search has
     // its own

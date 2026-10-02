@@ -1044,6 +1044,10 @@ restart:
 
 void HighsMipSolver::cleanupSolve() {
   mipdata_->syncConcurrentLns();
+  // the helper's root bound is valid for the whole solve
+  if (mipdata_->concurrent_lns &&
+      mipdata_->concurrent_lns->helperLowerBound.load() > mipdata_->lower_bound)
+    mipdata_->updateLowerBound(mipdata_->concurrent_lns->helperLowerBound.load());
   mipdata_->stopConcurrentLns();
   // a solution of the helper may have closed the gap after a limit stopped
   // the search
