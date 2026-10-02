@@ -24,7 +24,10 @@ for `mip_rel_gap >= 1e-3`):
 - Quick search after the first root LP: a dive from the LP point (each
   chunk of fixings goes up to the first rounding that propagation rules
   out, rather than being undone and quartered: on the ramp models most
-  chunks met such a conflict, and dives took hundreds of LP solves), then
+  chunks met such a conflict, and dives took hundreds of LP solves; a
+  chunk whose LP is infeasible is undone together with the simplex
+  iterate, so the dive goes on from the LP before it rather than from the
+  infeasible one, which cost up to thousands of iterations each), then
   dived neighbourhoods of about 400 decision columns grown by breadth-first
   search over the constraint graph from a seed column, and a flip search to
   polish. Neighbourhood LPs start from the last LP solved (not the root
@@ -162,6 +165,14 @@ reach 1%; `dm_small_windlull_noramp` 53 s, `dm_full_randsoc_ramp` 51 s,
 
 The 21 row/column-permuted copies in `~/code/oopt/bench/perm` all reach 1%
 too (single thread).
+
+Held-out instances: two copies of each of the 23 with every distinct
+objective coefficient scaled by its own lognormal(0, 0.15) factor (equal
+coefficients stay equal, as prices per period do). Single thread, 300 s:
+this branch reaches 1% on all 46, vanilla on 41 (not on either copy of the
+hard tick, 1.54% and 1.95%, nor three full ramp models), with 0.108 of
+vanilla's instructions (geometric mean; 1031G against at least 10194G in
+total).
 
 MIPLIB regression set (31 instances, 300 s), instructions retired against
 vanilla, shifted geometric mean over the runs that both solve, 2 random
