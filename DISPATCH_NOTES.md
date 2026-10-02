@@ -137,6 +137,12 @@ helper thread does its own root cuts and searches neighbourhoods alongside;
 the main solver takes the helper's bound while at the root, and its cuts
 once the helper's cut loop is done.
 
+Through the production script (`dispatch_milp_2026_09_30/solve_mps.py`,
+highspy built from this branch with `pip wheel .`, default threads, 180 s)
+on this 8-core machine, with other work running: all 23 instances reach 1%;
+`dm_full_randsoc_ramp` 76 s, the hard tick 67 s, `dm_small_windlull_noramp`
+43 s, `dm_full_pert_s1_ramp` 35 s, everything else 20 s or less.
+
 The 21 row/column-permuted copies in `~/code/oopt/bench/perm` all reach 1%
 too (single thread).
 
