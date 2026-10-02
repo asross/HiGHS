@@ -115,14 +115,16 @@ CPU time. The hard tick over 16 random seeds: all certified, mean 167G
 instructions, median 160G (between 81G and 231G); vanilla does not reach
 1% in 300 s with any seed.
 
-With two threads (`threads = 2`, close to production's two vCPUs), on a
-lightly loaded machine: all 23 instances reach 1%, in about 300 s of wall
-time for the suite; the slowest are the full ramp models (28 s to 66 s over
-three seeds: `dm_full_randsoc_ramp` 43 s to 66 s, `dm_full_pert_s1_ramp`
-31 s to 53 s), then the hard tick (26 s); everything else takes under 25 s.
+With two threads (`threads = 2`, close to production's two vCPUs): all 23
+instances reach 1%, the whole suite in about 300 s of wall time on a lightly
+loaded machine, and everything but the full ramp models and the hard tick
+in under 25 s. Over three seeds, with the machine also running other
+benchmarks: `dm_full_randsoc_ramp` 60 s to 69 s, `dm_full_pert_s1_ramp` 35 s
+to 53 s, `dm_full_pert_s2_ramp` 25 s to 46 s, the hard tick 25 s to 56 s.
 IPX wins the root LP race on the large dispatch LPs
-(`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone, earlier), and a
-helper thread searches neighbourhoods alongside.
+(`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone, earlier); a
+helper thread does its own root cuts and searches neighbourhoods alongside,
+and the main solver takes the helper's bound while at the root.
 
 The 21 row/column-permuted copies in `~/code/oopt/bench/perm` all reach 1%
 too (single thread).
