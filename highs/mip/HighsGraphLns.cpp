@@ -268,7 +268,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // root).
   const HighsLogOptions& logOptions = mipsolver.options_mip_->log_options;
   const char* who = mipsolver.concurrent_lns_ ? "LNS(helper)" : "LNS";
-  const HighsInt maxStall = 10;
+  const HighsInt maxStall = deep ? 10 : 5;
   const HighsInt maxIt = deep ? 1000 : 100;
   const HighsInt nodeLimit = 300;
   // neighbourhood sizes in decision columns: dived ones start at 400,
@@ -405,19 +405,14 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // over short rows from as many seeds as needed. Each adapts its size to
   // what the node limit can search, and the type to use next is the one
   // closing the most gap per LP iteration recently, with some exploration.
-  struct NeighbourhoodType {
-    double size;
-    double rate;  // smoothed fraction of the gap closed per LP iteration
-    HighsInt tried, improved;
-  };
   // move types: 0 = BFS neighbourhood over all rows searched by branch and
   // bound, 1 = the same over short rows, 2 = flip search, 3 = BFS
   // neighbourhood over all rows dived once
   const HighsInt kNumTypes = 4;
-  NeighbourhoodType types[kNumTypes] = {{dfsSize0, 0.0, 0, 0},
-                                        {dfsSize0, 0.0, 0, 0},
-                                        {dfsSize0, 0.0, 0, 0},
-                                        {diveSize0, 0.0, 0, 0}};
+  std::array<LnsMove, 4>& types = lnsMoves;
+  for (HighsInt t = 0; t < kNumTypes; ++t)
+    if (types[t].size == 0) types[t].size = t == 3 ? diveSize0 : dfsSize0;
+  HighsInt deepTries[4] = {0, 0, 0, 0};
 
   // Flip search: first-improvement local search from the incumbent with all
   // decision columns fixed at it. Binaries are flipped one at a time in
@@ -549,21 +544,34 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
 
     // the quick search only dives; the deep search tries each type once,
     // then mostly the one closing the most gap per LP iteration recently
-    HighsInt type;
-    if (!deep) {
-      type = 3;
-    } else if (it < kNumTypes) {
-      const HighsInt firstTypes[kNumTypes] = {0, 1, 2, 3};
-      type = firstTypes[it];
-    } else if (randgen.fraction() < 0.2) {
-      type = randgen.integer(kNumTypes);
-    } else {
-      type = 0;
-      for (HighsInt t = 1; t < kNumTypes; ++t)
-        if (types[t].rate > types[type].rate) type = t;
+    HighsInt type = 3;
+    if (deep) {
+      // each move once (dives may already be known from the quick search),
+      // then the best rate of gap closed per LP iteration plus an
+      // exploration bonus (UCB) for moves tried less often
+      double maxRate = 0;
+      HighsInt numTried = 0;
+      for (HighsInt t = 0; t < kNumTypes; ++t) {
+        maxRate = std::max(maxRate, types[t].rate);
+        numTried += types[t].tried;
+      }
+      double bestScore = -1;
+      for (HighsInt t = 0; t < kNumTypes; ++t) {
+        double score;
+        if (types[t].tried == 0 || (deepTries[t] == 0 && t != 3))
+          score = kHighsInf;
+        else
+          score = (maxRate > 0 ? types[t].rate / maxRate : 0) +
+                  0.5 * std::sqrt(std::log(double(numTried)) / types[t].tried);
+        if (score > bestScore) {
+          bestScore = score;
+          type = t;
+        }
+      }
+      ++deepTries[type];
     }
     const bool dived = type == 3;
-    NeighbourhoodType& nt = types[type];
+    LnsMove& nt = types[type];
     if (type == 2) {
       const double before = mipdata.upper_bound;
       const double gapBefore = before - mipdata.lower_bound;
@@ -726,7 +734,13 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     const bool improved = mipdata.upper_bound < before - feastol;
     // progress: in the deep search any improvement, in the quick search one
     // that closes at least 5% of the gap
-    const bool progress = improved;
+    // progress: in the deep search any improvement, in the quick search one
+    // that closes at least 5% of the gap (so that the cut loop runs once it
+    // gets slow)
+    const bool progress =
+        deep ? improved
+             : mipdata.upper_bound <
+                   before - std::max(feastol, 0.05 * gapBefore);
     if (!dived) {
       // aim for neighbourhoods that the node limit just about exhausts:
       // grow one that was searched without finding anything, shrink one

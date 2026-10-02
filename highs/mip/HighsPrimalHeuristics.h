@@ -8,6 +8,7 @@
 #ifndef HIGHS_PRIMAL_HEURISTICS_H_
 #define HIGHS_PRIMAL_HEURISTICS_H_
 
+#include <array>
 #include <vector>
 
 #include "lp_data/HStruct.h"
@@ -24,6 +25,15 @@ class HighsPrimalHeuristics {
   std::vector<HighsInt> intcols;
   std::vector<HighsInt> decisioncols;
   bool decisionColsSetUp = false;
+  // graph LNS move statistics, kept between its calls so that the deep
+  // search starts from what the quick search learnt
+  struct LnsMove {
+    double size = 0;  // neighbourhood size in decision columns (0: unset)
+    double rate = 0;  // smoothed fraction of the gap closed per LP iteration
+    HighsInt tried = 0;
+    HighsInt improved = 0;
+  };
+  std::array<LnsMove, 4> lnsMoves;
   double successObservations;
   HighsInt numSuccessObservations;
   double infeasObservations;

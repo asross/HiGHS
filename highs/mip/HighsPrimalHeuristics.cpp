@@ -45,6 +45,7 @@ void HighsPrimalHeuristics::setupIntCols() {
   // the model changes on restarts: recompute the graph-LNS decision columns
   decisionColsSetUp = false;
   decisioncols.clear();
+  lnsMoves = std::array<LnsMove, 4>();
 
   pdqsort(intcols.begin(), intcols.end(), [&](HighsInt c1, HighsInt c2) {
     const FP_32BIT_VOLATILE double lockScore1 =
