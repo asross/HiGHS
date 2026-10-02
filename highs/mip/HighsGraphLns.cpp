@@ -176,14 +176,19 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // Dive: fix the most integral unfixed candidates toward the current LP
   // point, `chunk` per LP re-solve. A failed chunk is undone and retried at a
   // quarter of the size; a single failed fixing is flipped the other way.
+  // A dive takes at most a quarter of the root LP's iterations: one that
+  // takes longer rarely finds a solution.
   auto dive = [&](HighsDomain& dom, std::vector<HighsInt> candidates,
                   HighsInt chunk0) {
     HighsInt chunk = std::max(HighsInt{1}, chunk0);
     const HighsInt maxSolves = 5 * HighsInt(candidates.size()) + 100;
+    const int64_t maxIters =
+        lp.getNumLpIterations() +
+        std::max<int64_t>(1000, mipdata.firstrootlpiters / 4);
     HighsInt solves = 0;
     bool fallback = false;
     std::vector<std::pair<double, HighsInt>> order;
-    while (solves < maxSolves) {
+    while (solves < maxSolves && lp.getNumLpIterations() < maxIters) {
       if (worker.terminatorTerminated() || mipdata.checkLimits()) return false;
       const std::vector<double> sol = lp.getLpSolver().getSolution().col_value;
       order.clear();
@@ -253,7 +258,6 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     chargeIterations();
     return;
   }
-  lp.storeBasis();
   // the deep search only needs a dive without an incumbent, if diving can
   // find one
   if (!tryIncumbent(st) &&
@@ -289,7 +293,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   const double itersFac = deep ? 10.0 : 3.0;
   HighsInt since = 0;
   const int64_t heurItersCap =
-      int64_t(itersFac * mipdata.total_lp_iterations) + 5000;
+      int64_t(itersFac * mipdata.total_lp_iterations) + (deep ? 5000 : 1000);
   // the solver's own test of the target gap (as in evaluateRootLp)
   auto withinGap = [&]() {
     return mipdata.upper_bound < kHighsInf &&
@@ -723,7 +727,8 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     }
 
     // fix everything outside the neighbourhood to the incumbent, warm from
-    // the root basis
+    // the last LP solved, near the incumbent: this leads the search much
+    // better than starting each neighbourhood from the root basis
     const int64_t startIters = lp.getNumLpIterations();
     dom = globaldom;
     bool feasible = true;
@@ -741,7 +746,6 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       ++since;
       continue;
     }
-    lp.recoverBasis();
     lp.getLpSolver().changeColsBounds(0, numCol - 1, dom.col_lower_.data(),
                                       dom.col_upper_.data());
     dom.clearChangedCols();

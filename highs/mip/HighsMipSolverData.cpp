@@ -670,6 +670,10 @@ double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
 }
 
 bool HighsMipSolverData::moreHeuristicsAllowed() const {
+  // the quick graph-LNS search, early in the root node, has a budget of
+  // its own
+  const int64_t heur_lp_iterations =
+      heuristic_lp_iterations - lns_quick_lp_iterations;
   // in the beginning of the search and in sub-MIP heuristics we only allow
   // what is proportionally for the currently spent effort plus an initial
   // offset. This is because in a sub-MIP we usually do a truncated search and
@@ -679,24 +683,23 @@ bool HighsMipSolverData::moreHeuristicsAllowed() const {
   // estimated effort the is not expected to be a good prediction in the
   // beginning.
   if (mipsolver.submip) {
-    return heuristic_lp_iterations < total_lp_iterations * heuristic_effort;
+    return heur_lp_iterations < total_lp_iterations * heuristic_effort;
   } else if (pruned_treeweight < 1e-3 &&
              num_leaves - num_leaves_before_run < 10 &&
              num_nodes - num_nodes_before_run < 1000) {
     // in the main MIP solver allow an initial offset of 10000 heuristic LP
     // iterations
-    if (heuristic_lp_iterations <
-        total_lp_iterations * heuristic_effort + 10000)
+    if (heur_lp_iterations < total_lp_iterations * heuristic_effort + 10000)
       return true;
-  } else if (heuristic_lp_iterations <
-             100000 + ((total_lp_iterations - heuristic_lp_iterations -
+  } else if (heur_lp_iterations <
+             100000 + ((total_lp_iterations - heur_lp_iterations -
                         sb_lp_iterations) >>
                        1)) {
     // compute the node LP iterations in the current run as only those should be
     // used when estimating the total required LP iterations to complete the
     // search
     int64_t heur_iters_curr_run =
-        heuristic_lp_iterations - heuristic_lp_iterations_before_run;
+        heur_lp_iterations - heuristic_lp_iterations_before_run;
     int64_t sb_iters_curr_run = sb_lp_iterations - sb_lp_iterations_before_run;
     int64_t node_iters_curr_run = total_lp_iterations -
                                   total_lp_iterations_before_run -
@@ -706,7 +709,7 @@ bool HighsMipSolverData::moreHeuristicsAllowed() const {
     // grow proportional to the pruned weight of the current tree and the
     // iterations spent for anything else are just added as an offset
     double total_heuristic_effort_estim =
-        heuristic_lp_iterations /
+        heur_lp_iterations /
         ((total_lp_iterations - node_iters_curr_run) +
          node_iters_curr_run / std::max(0.01, double(pruned_treeweight)));
     // since heuristics help most in the beginning of the search, we want to
@@ -724,7 +727,7 @@ bool HighsMipSolverData::moreHeuristicsAllowed() const {
       // printf(
       //     "heuristic lp iterations: %ld, total_lp_iterations: %ld, "
       //     "total_heur_effort_estim = %.3f%%\n",
-      //     heuristic_lp_iterations, total_lp_iterations,
+      //     heur_lp_iterations, total_lp_iterations,
       //     total_heuristic_effort_estim);
       return true;
     }
@@ -2214,8 +2217,14 @@ restart:
     // once: restarts come back here
     if (numRestarts == 0) {
       const double before = upper_bound;
+      const int64_t quickIters = -worker.getHeurLpIterations();
       heuristics.graphLNS(worker, firstlpsol, false);
-      lns_quick_improved = upper_bound < before;
+      lns_quick_lp_iterations += quickIters + worker.getHeurLpIterations();
+      // the neighbourhood search suits the model if it brings the
+      // incumbent within three times the target gap
+      lns_quick_improved =
+          upper_bound < before &&
+          upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit);
     }
   }
 
@@ -2463,11 +2472,12 @@ restart:
   if (checkLimits()) return clockOff(profiling);
 
   // If that was not enough, a deeper search runs on the LP with the root
-  // cuts, whose solution and bound guide it much better. It is best at
-  // closing the last part of the gap: with no incumbent, or one with more
-  // than three times the target gap, or if the quick search found nothing,
-  // the sub-MIP heuristics below run first.
-  auto runDeepLns = [&]() {
+  // cuts, whose solution and bound guide it much better, before the
+  // sub-MIP heuristics below. It is best at closing the last part of the
+  // gap, so only runs if the quick search brought the incumbent within
+  // three times the target gap.
+  if (runGraphLns && !rootlpsol.empty() &&
+      (mipsolver.concurrent_lns_ || lns_quick_improved)) {
     const int64_t lnsIters = -total_lp_iterations;
     const double lnsUpperBound = upper_bound;
     heuristics.graphLNS(worker, rootlpsol, true);
@@ -2478,14 +2488,6 @@ restart:
       lns_tree_wait = std::max(int64_t{1000}, lnsIters + total_lp_iterations);
       lns_tree_next = total_lp_iterations + lns_tree_wait;
     }
-  };
-  const bool deepLnsFirst =
-      runGraphLns && !rootlpsol.empty() &&
-      (mipsolver.concurrent_lns_ ||
-       (lns_quick_improved && upper_bound < kHighsInf &&
-        upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit)));
-  if (deepLnsFirst) {
-    runDeepLns();
     // A concurrent LNS helper keeps searching from the best solution
     // either solver has found, until its main solver stops it
     if (mipsolver.concurrent_lns_) {
@@ -2588,12 +2590,6 @@ restart:
     if (status == HighsLpRelaxation::Status::kInfeasible)
       return clockOff(profiling);
   } while (false);
-
-  if (runGraphLns && !deepLnsFirst && !rootlpsol.empty() && !rootGapClosed()) {
-    if (checkLimits()) return clockOff(profiling);
-    runDeepLns();
-    if (checkLimits()) return clockOff(profiling);
-  }
 
   profiling->stop(kMipClockEvaluateRootNode1);
   profiling->start(kMipClockEvaluateRootNode2);
