@@ -2778,6 +2778,9 @@ bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
   if (concurrent_lns &&
       concurrent_lns->targetReached.load(std::memory_order_relaxed))
     return true;
+  if (mipsolver.lns_target_reached_ &&
+      mipsolver.lns_target_reached_->load(std::memory_order_relaxed))
+    return true;
 
   // This MIP instance may have been terminated
   if (terminatorActive())

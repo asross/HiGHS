@@ -148,6 +148,10 @@ bool HighsPrimalHeuristics::solveSubMip(
   // Initialise termination_status_ and propagate any terminator to
   // the sub-MIP
   submipsolver.initialiseTerminator(mipsolver);
+  submipsolver.lns_target_reached_ =
+      mipsolver.mipdata_->concurrent_lns
+          ? &mipsolver.mipdata_->concurrent_lns->targetReached
+          : mipsolver.lns_target_reached_;
   submipsolver.rootbasis = &basis;
   HighsPseudocostInitialization pscostinit(worker.getPseudocost(), 1);
   submipsolver.pscostinit = &pscostinit;

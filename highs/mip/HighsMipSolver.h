@@ -8,6 +8,8 @@
 #ifndef MIP_HIGHS_MIP_SOLVER_H_
 #define MIP_HIGHS_MIP_SOLVER_H_
 
+#include <atomic>
+
 #include "Highs.h"
 #include "lp_data/HighsCallback.h"
 #include "lp_data/HighsOptions.h"
@@ -64,6 +66,9 @@ class HighsMipSolver {
   const HighsBasis* rootbasis;
   // set for a concurrent LNS helper: the pool shared with the main solver
   HighsConcurrentLns* concurrent_lns_ = nullptr;
+  // for a sub-MIP of a main solver with a concurrent LNS helper: set once
+  // the helper has closed the main solver's gap, which ends the sub-MIP too
+  const std::atomic<bool>* lns_target_reached_ = nullptr;
   const HighsPseudocostInitialization* pscostinit;
   const HighsCliqueTable* clqtableinit;
   const HighsImplications* implicinit;
