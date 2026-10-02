@@ -133,8 +133,9 @@ benchmarks: `dm_full_randsoc_ramp` 60 s to 69 s, `dm_full_pert_s1_ramp` 35 s
 to 53 s, `dm_full_pert_s2_ramp` 25 s to 46 s, the hard tick 25 s to 56 s.
 IPX wins the root LP race on the large dispatch LPs
 (`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone, earlier); a
-helper thread does its own root cuts and searches neighbourhoods alongside,
-and the main solver takes the helper's bound while at the root.
+helper thread does its own root cuts and searches neighbourhoods alongside;
+the main solver takes the helper's bound while at the root, and its cuts
+once the helper's cut loop is done.
 
 The 21 row/column-permuted copies in `~/code/oopt/bench/perm` all reach 1%
 too (single thread).
