@@ -42,6 +42,8 @@ for `mip_rel_gap >= 1e-3`):
 - The flip search first propagates a move's fixings over the model rows
   (no LP): on the hard tick 92% of flip LPs were infeasible, at about 2.5
   simplex iterations each, so the fixed cost of a solve was all they cost.
+  A move ruled out this way counts as a quarter of an LP solve in the flip
+  search's budget.
 - If the deep search pays, rounds of it alternate with the tree search,
   where strong branching then starts with a smaller budget (10000 LP
   iterations rather than 100000): the bound rarely matters there, and on
@@ -99,18 +101,18 @@ retired (load-independent) are given where available.
 | Dispatch suite (23 instances) | vanilla 1.15.1 | this branch |
 |---|---|---|
 | reach 1% within the 300 s (wall) limit | 14 | 23 |
-| total CPU time | over 2264 s | 331 s |
-| hard tick | time limit, gap 2.03% | 38 s |
-| `_wind185` | time limit (its 0.02% solution came at the limit) | 9.9 s |
+| total CPU time | over 2264 s | 313 s |
+| hard tick | time limit, gap 2.03% | 26 s |
+| `_wind185` | time limit (its 0.02% solution came at the limit) | 9.7 s |
 | `dm_full_pert_s1_ramp` | time limit, 9.3% | 45 s |
-| `dm_full_randsoc_ramp` | time limit, no solution | 58 s |
+| `dm_full_randsoc_ramp` | time limit, no solution | 57 s |
 | `lambda_..._080458` | 107 s | 17 s |
-| `dm_small_pert_s1_ramp` | 106 s | 4.3 s |
+| `dm_small_pert_s1_ramp` | 106 s | 4.4 s |
 
-Every instance that vanilla solves is at least 3.9 times faster (8.8 times
-at the median); the 9 it does not solve within 300 s take 6 s to 58 s of
-CPU time. The hard tick over 16 random seeds: all certified, mean 182G
-instructions, median 170G (between 115G and 293G); vanilla does not reach
+Every instance that vanilla solves is at least 4.5 times faster (9.2 times
+at the median); the 9 it does not solve within 300 s take 6 s to 57 s of
+CPU time. The hard tick over 16 random seeds: all certified, mean 167G
+instructions, median 160G (between 81G and 231G); vanilla does not reach
 1% in 300 s with any seed.
 
 With two threads (`threads = 2`, close to production's two vCPUs), on a
