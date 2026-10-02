@@ -1045,6 +1045,12 @@ restart:
 void HighsMipSolver::cleanupSolve() {
   mipdata_->syncConcurrentLns();
   mipdata_->stopConcurrentLns();
+  // a solution of the helper may have closed the gap after a limit stopped
+  // the search
+  if (modelstatus_ == HighsModelStatus::kTimeLimit &&
+      mipdata_->upper_bound < kHighsInf &&
+      mipdata_->lower_bound > mipdata_->optimality_limit)
+    modelstatus_ = HighsModelStatus::kNotset;
   for (HighsMipWorker& worker : mipdata_->workers) {
     assert(worker.solutions_.empty());
   }

@@ -1580,6 +1580,11 @@ bool HighsMipSolverData::addIncumbent(const std::vector<double>& sol,
           computeNewUpperLimit(solobj, mipsolver.options_mip_->mip_abs_gap,
                                mipsolver.options_mip_->mip_rel_gap);
       nodequeue.setOptimalityLimit(optimality_limit);
+      // a helper's solution within the target gap of its main solver's
+      // bound finishes the main solve
+      if (mipsolver.concurrent_lns_ &&
+          mipsolver.concurrent_lns_->mainLowerBound.load() > optimality_limit)
+        mipsolver.concurrent_lns_->targetReached = true;
       for (HighsMipWorker& worker : workers) {
         worker.upper_limit = upper_limit;
         worker.optimality_limit = optimality_limit;
@@ -2060,6 +2065,7 @@ void HighsMipSolverData::syncConcurrentLns() {
                                  ? mipsolver.concurrent_lns_
                                  : concurrent_lns.get();
   if (!pool) return;
+  if (!mipsolver.concurrent_lns_) pool->mainLowerBound = lower_bound;
   std::vector<double> sol;
   if (pool->take(concurrent_lns_seen, upper_bound, sol))
     trySolution(sol, kSolutionSourceGraphLns);
@@ -2215,8 +2221,10 @@ restart:
       mipsolver.options_mip_->mip_rel_gap >= 1e-3;
   if (runGraphLns) {
     startConcurrentLns();
-    // once: restarts come back here
-    if (numRestarts == 0) {
+    // once (restarts come back here), and not in a concurrent LNS helper,
+    // whose main solver does it at the same time: the helper goes on to
+    // the deep search, with the main solver's incumbents
+    if (numRestarts == 0 && !mipsolver.concurrent_lns_) {
       const double before = upper_bound;
       const int64_t quickIters = -worker.getHeurLpIterations();
       heuristics.graphLNS(worker, firstlpsol, false);
@@ -2685,9 +2693,14 @@ restart:
 bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
   const HighsOptions& options = *mipsolver.options_mip_;
 
-  // A concurrent LNS helper stops when its main solver does
+  // A concurrent LNS helper stops when its main solver does, and the main
+  // solver when the helper has found a solution within the target gap
+  // (taken when the solve is cleaned up)
   if (mipsolver.concurrent_lns_ &&
       mipsolver.concurrent_lns_->stop.load(std::memory_order_relaxed))
+    return true;
+  if (concurrent_lns &&
+      concurrent_lns->targetReached.load(std::memory_order_relaxed))
     return true;
 
   // This MIP instance may have been terminated

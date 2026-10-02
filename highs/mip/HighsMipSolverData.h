@@ -44,6 +44,10 @@ struct HighsConcurrentLns {
   double objective = kHighsInf;
   std::atomic<int64_t> version{0};
   std::atomic<bool> stop{false};
+  // the main solver's lower bound, and whether the helper has found a
+  // solution within the target gap of it (the main solver then stops)
+  std::atomic<double> mainLowerBound{-kHighsInf};
+  std::atomic<bool> targetReached{false};
   std::thread thread;
 
   void offer(const std::vector<double>& sol, double obj) {
