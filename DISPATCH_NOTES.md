@@ -217,6 +217,23 @@ past the time limit on germanrr (see above).
   without cuts while the main solver goes straight to the root cuts (with
   or without passing the main solver's cuts to the helper): faster on the
   ramp models, slower on the hard tick, about even overall.
+- Without the IPX race when a helper runs: 1.14 times the main thread's
+  instructions over the suite; only `dm_small_windlull_noramp`, where IPX's
+  crossover vertex leads the cut loop and LNS astray, gains. Without the
+  import of the helper's cuts, or with a full cut loop in the helper: no
+  gain there either.
+- Devex pricing for the LNS LPs (again): 2-3 times cheaper per iteration
+  on the ramp models' dense LPs, but the hard tick took twice the
+  instructions (the dual steepest-edge weights kept between re-solves pay).
+  For the root LP alone, Devex is 2-3 times faster on the ramp models and
+  16% on the hard tick but 37% slower on `lambda_..._080458`; the race with
+  IPX covers the ramp models when there is a second core.
+- In the neighbourhood branch and bound, starting a node's other child from
+  the node's simplex iterate (only the deepest node's is kept, so few
+  qualify) or from its basis (a refactorization): no gain, and twice the
+  iterations with the basis.
+- RINS at the root after a stalled deep search on the hard tick: 128 s
+  without an improvement.
 
 ## Benchmarking
 
