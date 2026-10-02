@@ -51,6 +51,12 @@ struct HighsConcurrentLns {
   // the helper's lower bound (its root LP with its own cuts), which the
   // main solver takes during its root node
   std::atomic<double> helperLowerBound{-kHighsInf};
+  // the helper's root cuts (rows a.x <= rhs), written once before
+  // rootCutsReady is set
+  std::atomic<bool> rootCutsReady{false};
+  std::vector<HighsInt> cutStart{0}, cutIndex;
+  std::vector<double> cutValue, cutRhs;
+  std::vector<uint8_t> cutIntegral;
   std::thread thread;
 
   void offer(const std::vector<double>& sol, double obj) {
@@ -227,6 +233,9 @@ struct HighsMipSolverData {
   void startConcurrentLns();
   void syncConcurrentLns();
   void stopConcurrentLns();
+  void publishRootCuts();
+  bool importRootCuts(HighsMipWorker& worker);
+  bool rootCutsImported = false;
 
   bool solutionRowFeasible(const std::vector<double>& solution) const;
   HighsModelStatus feasibilityJump();

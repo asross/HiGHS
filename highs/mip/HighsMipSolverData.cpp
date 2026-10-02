@@ -2085,6 +2085,58 @@ void HighsMipSolverData::syncConcurrentLns() {
   if (!incumbent.empty()) pool->offer(incumbent, upper_bound);
 }
 
+// The helper hands its root cuts to the main solver, which adds them to its
+// own when it gets to its root cuts
+void HighsMipSolverData::publishRootCuts() {
+  HighsConcurrentLns* pool = mipsolver.concurrent_lns_;
+  if (!pool || pool->rootCutsReady.load()) return;
+  HighsLpRelaxation& lp = getLp();
+  const HighsInt numLpRows = lp.numRows();
+  for (HighsInt row = mipsolver.numRow(); row < numLpRows; ++row) {
+    HighsInt len;
+    const HighsInt* inds;
+    const double* vals;
+    lp.getRow(row, len, inds, vals);
+    pool->cutIndex.insert(pool->cutIndex.end(), inds, inds + len);
+    pool->cutValue.insert(pool->cutValue.end(), vals, vals + len);
+    pool->cutStart.push_back(pool->cutIndex.size());
+    pool->cutRhs.push_back(lp.getLp().row_upper_[row]);
+    pool->cutIntegral.push_back(lp.isRowIntegral(row));
+  }
+  pool->rootCutsReady.store(true, std::memory_order_release);
+}
+
+// returns whether the LP is infeasible
+bool HighsMipSolverData::importRootCuts(HighsMipWorker& worker) {
+  HighsConcurrentLns* pool = concurrent_lns.get();
+  if (!pool || rootCutsImported ||
+      !pool->rootCutsReady.load(std::memory_order_acquire))
+    return false;
+  rootCutsImported = true;
+  std::vector<HighsInt> inds;
+  std::vector<double> vals;
+  for (size_t i = 0; i < pool->cutRhs.size(); ++i) {
+    inds.assign(pool->cutIndex.begin() + pool->cutStart[i],
+                pool->cutIndex.begin() + pool->cutStart[i + 1]);
+    vals.assign(pool->cutValue.begin() + pool->cutStart[i],
+                pool->cutValue.begin() + pool->cutStart[i + 1]);
+    getCutPool().addCut(mipsolver, inds.data(), vals.data(), inds.size(),
+                        pool->cutRhs[i], pool->cutIntegral[i] != 0, true,
+                        false);
+  }
+  // bring the violated ones into the LP until none is
+  for (HighsInt round = 0; round < 20; ++round) {
+    HighsCutSet cutset;
+    getCutPool().separate(getLp().getSolution().col_value, getDomain(),
+                          cutset, feastol, cutpools);
+    if (cutset.empty()) break;
+    getLp().addCuts(cutset);
+    if (evaluateRootLp(worker) == HighsLpRelaxation::Status::kInfeasible)
+      return true;
+  }
+  return false;
+}
+
 void HighsMipSolverData::stopConcurrentLns() {
   if (!concurrent_lns) return;
   concurrent_lns->stop = true;
@@ -2330,6 +2382,11 @@ restart:
 
     ++nseparounds;
     syncConcurrentLns();
+    if (importRootCuts(worker)) {
+      profiling->stop(kMipClockRootSeparation);
+      return clockOff(profiling);
+    }
+    status = getLp().getStatus();
 
     HighsInt ncuts;
 
@@ -2503,6 +2560,8 @@ restart:
   // sub-MIP heuristics below. It is best at closing the last part of the
   // gap, so only runs if the quick search brought the incumbent within
   // three times the target gap.
+  // (a helper's root cuts are done: its main solver adds them to its own)
+  if (mipsolver.concurrent_lns_) publishRootCuts();
   if (runGraphLns && !rootlpsol.empty() &&
       (mipsolver.concurrent_lns_ || lns_quick_improved)) {
     const int64_t lnsIters = -total_lp_iterations;
