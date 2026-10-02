@@ -428,8 +428,10 @@ HighsDebugStatus HSimplexNla::debugCheckData(const std::string message) const {
   } else {
     scale_status = "non-NULL";
   }
-  //  if (options_->highs_debug_level < kHighsDebugLevelCheap) return
-  //  HighsDebugStatus::kOk;
+  // Copying and comparing the matrix costs as much as a few simplex
+  // iterations, so only check when debugging
+  if (options_->highs_debug_level < kHighsDebugLevelCheap)
+    return HighsDebugStatus::kOk;
   HighsLp check_lp = *lp_;
   bool error0_found = false;
   bool error1_found = false;

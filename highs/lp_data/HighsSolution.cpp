@@ -245,10 +245,36 @@ void getKktFailures(const HighsOptions& options, const bool is_qp,
 
   // Pass twice through this loop, once to determine the bound and
   // cost norms, and once to use them to assess relative
-  // infeasibilities and residual errors
+  // infeasibilities and residual errors. Without residuals, the second
+  // pass only has to visit the variables with infeasibilities, found in
+  // the first
+  const HighsInt num_var = lp.num_col_ + lp.num_row_;
+  const bool visit_all_vars = get_residuals;
+  std::vector<HighsInt> infeasible_var;
   for (HighsInt pass = 0; pass < 2; pass++) {
-    for (HighsInt iVar = 0; iVar < lp.num_col_ + lp.num_row_; iVar++) {
+    const HighsInt num_pass_var =
+        pass == 0 || visit_all_vars ? num_var : infeasible_var.size();
+    bool have_col_maxima = false;
+    // Save and reset the maxima for the columns once they have all
+    // been visited
+    auto saveColMaxima = [&]() {
+      have_col_maxima = true;
+      max_col_primal_infeasibility = max_primal_infeasibility;
+      max_col_dual_infeasibility = max_dual_infeasibility;
+
+      max_relative_col_primal_infeasibility = max_relative_primal_infeasibility;
+      max_relative_col_dual_infeasibility = max_relative_dual_infeasibility;
+
+      max_primal_infeasibility = 0;
+      max_dual_infeasibility = 0;
+
+      max_relative_primal_infeasibility = 0;
+      max_relative_dual_infeasibility = 0;
+    };
+    for (HighsInt k = 0; k < num_pass_var; k++) {
+      const HighsInt iVar = pass == 0 || visit_all_vars ? k : infeasible_var[k];
       const bool is_col = iVar < lp.num_col_;
+      if (pass == 1 && !is_col && !have_col_maxima) saveColMaxima();
       if (is_col) {
         HighsInt iCol = iVar;
         cost = gradient[iCol];
@@ -306,6 +332,10 @@ void getKktFailures(const HighsOptions& options, const bool is_qp,
         } else if (at_status == kHighsSolutionUp) {
           highs_norm_bounds = std::max(std::fabs(upper), highs_norm_bounds);
         }
+        if (!visit_all_vars &&
+            (primal_infeasibility > 0 || semi_infeasibility > 0 ||
+             (have_dual_solution && dual_infeasibility > 0)))
+          infeasible_var.push_back(iVar);
       } else {
         if (primal_infeasibility > 0) {
           // Accumulate primal infeasibilities
@@ -422,21 +452,8 @@ void getKktFailures(const HighsOptions& options, const bool is_qp,
             max_relative_dual_residual_error = relative_dual_residual_error;
         }
       }
-      if (pass == 1 && iVar == lp.num_col_ - 1) {
-        max_col_primal_infeasibility = max_primal_infeasibility;
-        max_col_dual_infeasibility = max_dual_infeasibility;
-
-        max_relative_col_primal_infeasibility =
-            max_relative_primal_infeasibility;
-        max_relative_col_dual_infeasibility = max_relative_dual_infeasibility;
-
-        max_primal_infeasibility = 0;
-        max_dual_infeasibility = 0;
-
-        max_relative_primal_infeasibility = 0;
-        max_relative_dual_infeasibility = 0;
-      }
     }
+    if (pass == 1 && !have_col_maxima) saveColMaxima();
   }
 
   double max_row_primal_infeasibility = max_primal_infeasibility;

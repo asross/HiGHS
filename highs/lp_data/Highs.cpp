@@ -1108,9 +1108,12 @@ HighsStatus Highs::run() {
 
   // Determine coefficient ranges and possibly warn the user about
   // excessive values, obtaining suggested values for user_objective_scale
-  // and user_bound_scale
-  assessExcessiveObjectiveBoundScaling(this->options_.log_options, this->model_,
-                                       user_scale_data);
+  // and user_bound_scale. These are only reported, so skip this (a pass
+  // through the model) without output, as for the repeated solves of a
+  // MIP solver's LP relaxation
+  if (this->options_.output_flag)
+    assessExcessiveObjectiveBoundScaling(this->options_.log_options,
+                                         this->model_, user_scale_data);
 
   // Optimize the model in the Highs instance
   status = optimizeHighs();
