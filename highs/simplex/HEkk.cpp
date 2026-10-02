@@ -420,11 +420,15 @@ void HEkk::moveLp(HighsLpSolverObject& solver_object) {
   //
   // Changes to the matrix or basis invalidate the row-wise matrix via
   // updateStatus, and new scaling does in solveLpSimplex, so it only
-  // needs rebuilding here if it doesn't fit the LP
+  // needs rebuilding here if it doesn't fit the LP. If only its scaling
+  // differs (the LP is moved in unscaled to check a proof of
+  // infeasibility), it is kept: a solve rebuilds it, and the proof
+  // converts its values
   if (this->ar_matrix_.num_col_ != this->lp_.num_col_ ||
       this->ar_matrix_.num_row_ != this->lp_.num_row_ ||
       this->ar_matrix_.numNz() != this->lp_.a_matrix_.numNz() ||
-      this->ar_matrix_is_scaled_ != this->lp_.is_scaled_)
+      (this->ar_matrix_is_scaled_ != this->lp_.is_scaled_ &&
+       !this->lp_.scale_.has_scaling))
     this->status_.has_ar_matrix = false;
   //
   // The simplex algorithm runs in the same space as the LP that has
@@ -2399,7 +2403,7 @@ void HEkk::resetSyntheticClock() {
 }
 
 void HEkk::initialisePartitionedRowwiseMatrix() {
-  if (status_.has_ar_matrix) return;
+  if (status_.has_ar_matrix && ar_matrix_is_scaled_ == lp_.is_scaled_) return;
   analysis_.simplexTimerStart(matrixSetupClock);
   ar_matrix_.createRowwisePartitioned(lp_.a_matrix_,
                                       basis_.nonbasicFlag_.data());
@@ -4204,7 +4208,9 @@ bool HEkk::proofOfPrimalInfeasibility(HVector& row_ep, const HighsInt move_out,
     debug_proof_report = debug_proof_report_on;
   }
 
-  const bool use_row_wise_matrix = status_.has_ar_matrix;
+  // the row-wise matrix may be in the other scaling (see moveLp)
+  const bool use_row_wise_matrix =
+      status_.has_ar_matrix && ar_matrix_is_scaled_ == lp.is_scaled_;
   const bool use_iterative_refinement = false;  // debug_iteration_report_;//
   if (use_iterative_refinement) {
     simplex_nla_.reportArray("Row e_p.0", lp.num_col_, &row_ep, true);
@@ -4396,9 +4402,22 @@ double HEkk::getMaxAbsRowValue(HighsInt row) {
   if (!status_.has_ar_matrix) initialisePartitionedRowwiseMatrix();
 
   double val = -1.0;
-  for (HighsInt i = ar_matrix_.start_[row]; i < ar_matrix_.start_[row + 1]; ++i)
-    val = std::max(val, std::abs(ar_matrix_.value_[i]));
-
+  if (ar_matrix_is_scaled_ == lp_.is_scaled_) {
+    for (HighsInt i = ar_matrix_.start_[row]; i < ar_matrix_.start_[row + 1];
+         ++i)
+      val = std::max(val, std::abs(ar_matrix_.value_[i]));
+    return val;
+  }
+  // the row-wise matrix is in the other scaling (see moveLp): a scaled
+  // value is the unscaled one times its column and row scale factors
+  const std::vector<double>& col_scale = lp_.scale_.col;
+  const double row_scale = lp_.scale_.row[row];
+  for (HighsInt i = ar_matrix_.start_[row]; i < ar_matrix_.start_[row + 1];
+       ++i) {
+    const double factor = col_scale[ar_matrix_.index_[i]] * row_scale;
+    val = std::max(val, std::abs(ar_matrix_.value_[i]) *
+                            (lp_.is_scaled_ ? factor : 1 / factor));
+  }
   return val;
 }
 

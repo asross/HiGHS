@@ -1292,6 +1292,8 @@ void HighsSparseMatrix::productTransposeQuad(
     HighsSparseVectorSum sum(num_col_);
     for (HighsInt iRow = 0; iRow < this->num_row_; iRow++) {
       double multiplier = column.array[iRow];
+      // rows with a zero multiplier add nothing (that cleanup keeps)
+      if (multiplier == 0) continue;
       for (HighsInt iEl = this->start_[iRow]; iEl < this->start_[iRow + 1];
            iEl++)
         sum.add(this->index_[iEl], multiplier * this->value_[iEl]);
