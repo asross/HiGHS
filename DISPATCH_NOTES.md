@@ -102,6 +102,14 @@ the MIP's limits as they go, as does presolve's dominated columns check
 that). With a 30 s limit, no MIPLIB instance here now runs more than 8 s
 over.
 
+An LP solution whose fractional integers can all be rounded along their
+locks is rounded and taken as a solution without a check, which is only
+valid if the LP solution is primal feasible. After an unknown simplex
+status (a taboo basis), it was taken anyway: a column fixed to 1 at 0.57
+came out fractional, and the main solver rejected the point in the
+original space after a repair LP (vanilla does this too, e.g. on
+blp-ic98). The rounding now needs a primal feasible LP solution.
+
 ## Results
 
 Single thread, `mip_rel_gap = 0.01`. CPU times were measured on a busy
@@ -130,23 +138,27 @@ CPU time. The hard tick over 16 random seeds: all certified, mean 167G
 instructions, median 160G (between 81G and 231G); vanilla does not reach
 1% in 300 s with any seed.
 
-With two threads (`threads = 2`, close to production's two vCPUs): all 23
-instances reach 1%, the whole suite in about 300 s of wall time on a lightly
-loaded machine, and everything but the full ramp models and the hard tick
-in under 25 s. Over three seeds, with the machine also running other
-benchmarks: `dm_full_randsoc_ramp` 60 s to 69 s, `dm_full_pert_s1_ramp` 35 s
-to 53 s, `dm_full_pert_s2_ramp` 25 s to 46 s, the hard tick 25 s to 56 s.
-IPX wins the root LP race on the large dispatch LPs
-(`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone, earlier); a
-helper thread does its own root cuts and searches neighbourhoods alongside;
-the main solver takes the helper's bound while at the root, and its cuts
-once the helper's cut loop is done.
+With two threads (default threads, as in production), IPX races the dual
+simplex on the root LP and a helper thread does its own root cuts and
+searches neighbourhoods alongside; the main solver takes the helper's bound
+while at the root, and its cuts once the helper's cut loop is done. Wall
+times of two-thread runs on this machine say little (see Benchmarking), so
+the main thread's own instructions retired are compared instead: what the
+solve would take on two uncontended cores. Over the suite with 2 seeds, the
+main thread retires 0.70 (geometric mean) of the single-thread solve's
+instructions, 1670G against 2557G in total; 2 of the 46 runs need more. The
+race accounts for much of that: without it the main thread needs 1.14 times
+as much (IPX wins on the ramp models, the lambda ticks and the small
+models: `lambda_..._080458` 18G against 51G-56G). On two hyperthreads of
+one core, each thread runs slower while both are busy, which would eat
+most of the gain.
 
 Through the production script (`dispatch_milp_2026_09_30/solve_mps.py`,
-highspy built from this branch with `pip wheel .`, default threads, 180 s)
-on this 8-core machine, with other work running: all 23 instances reach 1%;
-`dm_full_randsoc_ramp` 76 s, the hard tick 67 s, `dm_small_windlull_noramp`
-43 s, `dm_full_pert_s1_ramp` 35 s, everything else 20 s or less.
+highspy built from this branch with `pip wheel .` for arm64, default
+threads, 180 s) on this machine, with other work running: all 23 instances
+reach 1%; `dm_small_windlull_noramp` 53 s, `dm_full_randsoc_ramp` 51 s,
+`dm_full_pert_s1_ramp` 39 s, the hard tick 27 s, `dm_full_pert_s2_ramp`
+19 s, everything else 12 s or less.
 
 The 21 row/column-permuted copies in `~/code/oopt/bench/perm` all reach 1%
 too (single thread).
@@ -201,3 +213,12 @@ Use instructions retired (`/usr/bin/time -l`) or CPU time and deterministic
 counts (nodes, LP iterations) rather than wall time on a shared machine, and
 several random seeds: single runs of MIPLIB instances vary by factors of two
 or more with any change to the search.
+
+On this M1 (4 performance and 4 efficiency cores), wall times of
+multi-threaded runs depend on which cores the threads get: a deterministic
+single-thread solve took 3.9 s alone and 14.6 s next to three busy loops.
+For two-thread runs, compare the main thread's instructions retired
+(`thread_selfcounts(1, ...)` from libsystem_kernel at the end of the solve).
+Also, `/opt/miniconda3/bin/python3` here is an x86_64 build running under
+Rosetta: highspy wheels built with it run about 2.5 times slower than
+native (use `/opt/homebrew/bin/python3.13`).
