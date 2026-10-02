@@ -119,6 +119,11 @@ retired (load-independent) are given where available.
 | `lambda_..._080458` | 107 s | 17 s |
 | `dm_small_pert_s1_ramp` | 106 s | 4.4 s |
 
+Against this branch as it was before this round of work (graph LNS
+already in, closer to what production runs): 823 s of CPU time and 22 of
+23 (the hard tick took 173 s of CPU without reaching 1% in 300 s of wall
+time).
+
 Every instance that vanilla solves is at least 4.5 times faster (9.2 times
 at the median); the 9 it does not solve within 300 s take 6 s to 57 s of
 CPU time. The hard tick over 16 random seeds: all certified, mean 167G
