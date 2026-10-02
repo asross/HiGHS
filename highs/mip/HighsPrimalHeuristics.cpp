@@ -981,6 +981,8 @@ bool HighsPrimalHeuristics::tryRoundedPoint(HighsMipWorker& worker,
 
   HighsInt numintcols = intcols.size();
   for (HighsInt i = 0; i != numintcols; ++i) {
+    // propagating after each fixing can take long on large models
+    if ((i & 1023) == 1023 && mipsolver.mipdata_->checkLimits()) return false;
     HighsInt col = intcols[i];
     double intval = point[col];
     double rounded;
@@ -1077,6 +1079,7 @@ bool HighsPrimalHeuristics::linesearchRounding(
   assert(int(point2.size()) == mipsolver.numCol());
 
   while (alpha < 1.0) {
+    if (mipsolver.mipdata_->checkLimits()) return false;
     double nextalpha = 1.0;
     bool reachedpoint2 = true;
     // printf("trying alpha = %g\n", alpha);
