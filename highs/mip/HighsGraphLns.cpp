@@ -41,11 +41,14 @@
 // breadth-first search over the variable/constraint graph from a seed
 // column collects ~400 decision columns (on time-indexed models a time
 // window), the rest are fixed to the incumbent, and if the neighbourhood LP
-// can beat the incumbent it is dived. It ends by polishing the incumbent with
-// a flip search.
+// (warm from the last LP solved) can beat the incumbent it is dived. It ends
+// by polishing the incumbent with a flip search. A concurrent LNS helper
+// leaves it to its main solver.
 //
-// Deep search (after the root cuts, if the target gap is still open): the
-// same, but neighbourhoods are smaller and searched by a depth-first branch
+// Deep search (after the root cuts, before the sub-MIP heuristics, if the
+// quick search brought the incumbent within three times the target gap:
+// otherwise the model does not suit graph LNS): the same, but
+// neighbourhoods are smaller and searched by a depth-first branch
 // and bound with a node limit, their size adapting to what that exhausts;
 // among four moves it picks the one closing the most gap per LP iteration:
 // - BFS over all rows, searched by branch and bound,
@@ -61,11 +64,10 @@
 // The quick search stops after 5 neighbourhoods that do not close 5% of the
 // gap, the deep search after 10 that do not close 5% of what separates the
 // incumbent from the target gap; both also stop on an LP iteration budget,
-// or when the incumbent reaches the target gap. The deep search runs before
-// the sub-MIP heuristics (RENS, ...) if the incumbent is within three times
-// the target gap, and after them otherwise. If it pays, further rounds
-// alternate with the tree search (HighsMipSolver::run). A flip search goes on
-// from where the last one from the same incumbent stopped.
+// or when the incumbent reaches the target gap. If the deep search pays,
+// further rounds alternate with the tree search (HighsMipSolver::run). A
+// flip search goes on from where the last one from the same incumbent
+// stopped.
 void HighsPrimalHeuristics::setupDecisionCols() {
   decisionColsSetUp = true;
   decisioncols.clear();
