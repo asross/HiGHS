@@ -171,6 +171,14 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
   HighsInt currentPath[maxPathLen];
   std::vector<std::pair<std::vector<HighsInt>, std::vector<double>>>
       aggregatedPath;
+  // work space for path mixing cuts
+  HighsHashTable<HighsInt, HighsInt> indexPos;
+  std::vector<HighsInt> inds;
+  std::vector<double> solval;
+  std::vector<double> upper;
+  std::vector<uint8_t> isIntegral;
+  std::vector<double> tmpUpper;
+  std::vector<double> tmpSolval;
   std::array<double, 2> scales;
   for (HighsInt i = 0; i != lp.num_row_; ++i) {
     switch (rowtype[i]) {
@@ -294,6 +302,9 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
           };
 
       aggregatedPath.clear();
+      // whether a row of the path has a fractional column: a path mixing
+      // cut cannot be violated otherwise either
+      bool pathFractional = false;
 
       while (currPathLen != maxPathLen) {
         lpAggregator.getCurrentAggregation(baseRowInds, baseRowVals, false);
@@ -350,6 +361,7 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
         }
 
         if (addedSubstitutionRows) continue;
+        pathFractional = pathFractional || fractional;
 
         // generate cut
         double rhs = 0;
@@ -398,22 +410,15 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
 
       // if the path has length at least 2 try to separate a path mixing cut
       HighsInt pathLen = aggregatedPath.size();
-      if (pathLen > 1) {
+      if (pathLen > 1 && pathFractional) {
         // generate path mixing cut
-        HighsHashTable<HighsInt, HighsInt> indexPos;
-
-        std::vector<HighsInt> inds;
-        std::vector<double> solval;
-        std::vector<double> upper;
-        std::vector<uint8_t> isIntegral;
-        inds.reserve(lp.num_col_ + lp.num_row_);
-        solval.reserve(lp.num_col_ + lp.num_row_);
-        upper.reserve(lp.num_col_ + lp.num_row_);
-        isIntegral.reserve(lp.num_col_ + lp.num_row_);
+        indexPos.clear();
+        inds.clear();
+        solval.clear();
+        upper.clear();
+        isIntegral.clear();
 
         std::vector<double> rhs(pathLen);
-        std::vector<double> tmpUpper;
-        std::vector<double> tmpSolval;
 
         double delta = 1.0;
 
