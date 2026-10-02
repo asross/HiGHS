@@ -2038,8 +2038,8 @@ void HighsMipSolverData::startConcurrentLns() {
     profiling.initialize(timer, false, false);
     HighsSolution solution;
     solution.value_valid = false;
-    HighsMipSolver helper(*callback, data->options, data->model, solution,
-                          true, 1);
+    HighsMipSolver helper(*callback, data->options, data->model, solution, true,
+                          1);
     helper.concurrent_lns_ = pool;
     helper.rootbasis = &data->basis;
     helper.setProfiling(&profiling);
@@ -2203,7 +2203,8 @@ restart:
       mipsolver.options_mip_->mip_rel_gap >= 1e-3;
   if (runGraphLns) {
     startConcurrentLns();
-    heuristics.graphLNS(worker, firstlpsol, false);
+    // once: restarts come back here
+    if (numRestarts == 0) heuristics.graphLNS(worker, firstlpsol, false);
   }
 
   heuristics.flushStatistics(mipsolver, worker);
@@ -2450,8 +2451,11 @@ restart:
   if (checkLimits()) return clockOff(profiling);
 
   // If that was not enough, a deeper search runs on the LP with the root
-  // cuts, whose solution and bound guide it much better
-  if (runGraphLns && !rootlpsol.empty()) {
+  // cuts, whose solution and bound guide it much better. It is best at
+  // closing the last part of the gap: with no incumbent, or one with more
+  // than three times the target gap, the sub-MIP heuristics below run
+  // first.
+  auto runDeepLns = [&]() {
     const int64_t lnsIters = -total_lp_iterations;
     const double lnsUpperBound = upper_bound;
     heuristics.graphLNS(worker, rootlpsol, true);
@@ -2462,6 +2466,14 @@ restart:
       lns_tree_wait = std::max(int64_t{1000}, lnsIters + total_lp_iterations);
       lns_tree_next = total_lp_iterations + lns_tree_wait;
     }
+  };
+  const bool deepLnsFirst =
+      runGraphLns && !rootlpsol.empty() &&
+      (mipsolver.concurrent_lns_ ||
+       (upper_bound < kHighsInf &&
+        upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit)));
+  if (deepLnsFirst) {
+    runDeepLns();
     // A concurrent LNS helper keeps searching from the best solution
     // either solver has found, until its main solver stops it
     if (mipsolver.concurrent_lns_) {
@@ -2564,6 +2576,12 @@ restart:
     if (status == HighsLpRelaxation::Status::kInfeasible)
       return clockOff(profiling);
   } while (false);
+
+  if (runGraphLns && !deepLnsFirst && !rootlpsol.empty() && !rootGapClosed()) {
+    if (checkLimits()) return clockOff(profiling);
+    runDeepLns();
+    if (checkLimits()) return clockOff(profiling);
+  }
 
   profiling->stop(kMipClockEvaluateRootNode1);
   profiling->start(kMipClockEvaluateRootNode2);

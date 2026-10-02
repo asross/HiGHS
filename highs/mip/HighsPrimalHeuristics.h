@@ -25,6 +25,8 @@ class HighsPrimalHeuristics {
   std::vector<HighsInt> intcols;
   std::vector<HighsInt> decisioncols;
   bool decisionColsSetUp = false;
+  // a graph-LNS dive from the LP point found nothing: don't dive again
+  bool lnsDiveFailed = false;
   // graph LNS move statistics, kept between its calls so that the deep
   // search starts from what the quick search learnt
   struct LnsMove {
@@ -34,6 +36,11 @@ class HighsPrimalHeuristics {
     HighsInt improved = 0;
   };
   std::array<LnsMove, 4> lnsMoves;
+  // where the graph-LNS flip search from the incumbent of objective
+  // lnsFlipObj stopped, so that the next one goes on from there (-1: it
+  // found no improving flip)
+  double lnsFlipObj = kHighsInf;
+  HighsInt lnsFlipNext = 0;
   double successObservations;
   HighsInt numSuccessObservations;
   double infeasObservations;

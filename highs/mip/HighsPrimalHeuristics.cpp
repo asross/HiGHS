@@ -46,6 +46,7 @@ void HighsPrimalHeuristics::setupIntCols() {
   decisionColsSetUp = false;
   decisioncols.clear();
   lnsMoves = std::array<LnsMove, 4>();
+  lnsFlipObj = kHighsInf;
 
   pdqsort(intcols.begin(), intcols.end(), [&](HighsInt c1, HighsInt c2) {
     const FP_32BIT_VOLATILE double lockScore1 =

@@ -58,9 +58,14 @@
 // Seeds are columns with a promising reduced cost at the incumbent, columns
 // where the incumbent disagrees with the LP solution, or random.
 //
-// Both stop after 10 neighbourhoods without improvement, on an LP iteration
-// budget, or when the incumbent reaches the target gap. If the deep search
-// pays, further rounds alternate with the tree search (HighsMipSolver::run).
+// The quick search stops after 5 neighbourhoods that do not close 5% of the
+// gap, the deep search after 10 that do not close 5% of what separates the
+// incumbent from the target gap; both also stop on an LP iteration budget,
+// or when the incumbent reaches the target gap. The deep search runs before
+// the sub-MIP heuristics (RENS, ...) if the incumbent is within three times
+// the target gap, and after them otherwise. If it pays, further rounds
+// alternate with the tree search (HighsMipSolver::run). A flip search goes on
+// from where the last one from the same incumbent stopped.
 void HighsPrimalHeuristics::setupDecisionCols() {
   decisionColsSetUp = true;
   decisioncols.clear();
@@ -249,10 +254,14 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     return;
   }
   lp.storeBasis();
-  // the deep search only needs a dive without an incumbent
+  // the deep search only needs a dive without an incumbent, if diving can
+  // find one
   if (!tryIncumbent(st) &&
-      (!deep || mipdata.incumbent.size() != size_t(numCol)))
-    dive(dom, decisioncols, std::max<HighsInt>(20, decisioncols.size() / 12));
+      (!deep ||
+       (mipdata.incumbent.size() != size_t(numCol) && !lnsDiveFailed)) &&
+      !dive(dom, decisioncols,
+            std::max<HighsInt>(20, decisioncols.size() / 12)))
+    lnsDiveFailed = true;
   if (mipdata.upper_limit == kHighsInf ||
       mipdata.incumbent.size() != size_t(numCol)) {
     chargeIterations();
@@ -262,10 +271,9 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // 2. neighbourhoods. The quick search dives each neighbourhood once,
   // within the heuristic LP budget. The deep search exhausts smaller
   // neighbourhoods by a depth-first branch and bound with a node limit,
-  // within an LP-iteration cap relative to the root LP. Both stop after 10
-  // neighbourhoods without improvement, or once the incumbent is within
-  // the target gap of the current bound (the solve then stops at the
-  // root).
+  // within an LP-iteration cap relative to the root LP. Both stop when they
+  // stall (see progressSince), or once the incumbent is within the target
+  // gap of the current bound (the solve then stops at the root).
   const HighsLogOptions& logOptions = mipsolver.options_mip_->log_options;
   const char* who = mipsolver.concurrent_lns_ ? "LNS(helper)" : "LNS";
   const HighsInt maxStall = deep ? 10 : 5;
@@ -286,6 +294,18 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   auto withinGap = [&]() {
     return mipdata.upper_bound < kHighsInf &&
            mipdata.lower_bound > mipdata.optimality_limit;
+  };
+  // Progress (which resets the stall count): in the quick search, an
+  // improvement closing at least 5% of the gap; in the deep search, one
+  // closing at least 5% of what separates the incumbent from the target gap
+  // (small steps far from it do not keep the deep search going)
+  auto progressSince = [&](double before, double limitBefore) {
+    if (!deep)
+      return mipdata.upper_bound <
+             before - std::max(feastol, 0.05 * (before - mipdata.lower_bound));
+    return mipdata.optimality_limit <
+           limitBefore -
+               std::max(feastol, 0.05 * (limitBefore - mipdata.lower_bound));
   };
   // The neighbourhood search is for a loose target gap (as for dispatch
   // or unit commitment models solved to 1%), when a good incumbent may be
@@ -333,6 +353,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       bool prune = !usable(st) || lp.getObjective() >= worker.upper_limit;
       if (!prune) {
         if (tryIncumbent(st)) {
+          if (withinGap()) break;
           prune = true;
         } else {
           const std::vector<double>& sol =
@@ -427,13 +448,21 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // some models (e.g. with ramping) each flip needs a long re-solve
   const int64_t flipMaxIters =
       std::max<int64_t>(5000, mipdata.firstrootlpiters);
+  auto flipsExhausted = [&]() {
+    return mipdata.upper_bound == lnsFlipObj && lnsFlipNext == -1;
+  };
   auto flipSearch = [&](HighsInt maxSolves) -> HighsInt {
     const std::vector<double>& inc = mipdata.incumbent;
-    if (inc.size() != size_t(numCol)) return 0;
+    if (inc.size() != size_t(numCol) || flipsExhausted()) return 0;
+    // go on from where the last search from this incumbent stopped
+    size_t start = mipdata.upper_bound == lnsFlipObj
+                       ? std::max<HighsInt>(0, lnsFlipNext)
+                       : 0;
     const int64_t flipStartIters = lp.getNumLpIterations();
     for (HighsInt col : decisioncols)
-      cur[col] = std::min(std::max(std::round(inc[col]), globaldom.col_lower_[col]),
-                          globaldom.col_upper_[col]);
+      cur[col] =
+          std::min(std::max(std::round(inc[col]), globaldom.col_lower_[col]),
+                   globaldom.col_upper_[col]);
     auto setCol = [&](HighsInt col, double val) {
       lp.getLpSolver().changeColBounds(col, val, val);
     };
@@ -485,12 +514,16 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
         if (binary(col) && gain(col) > feastol)
           flipCands.emplace_back(gain(col), col);
       pdqsort(flipCands.begin(), flipCands.end(), byGain);
-      for (const auto& cand : flipCands) {
+      for (size_t c = start; c < flipCands.size(); ++c) {
         if (solves >= maxSolves ||
             lp.getNumLpIterations() - flipStartIters > flipMaxIters ||
-            worker.terminatorTerminated() || mipdata.checkLimits())
+            withinGap() || worker.terminatorTerminated() ||
+            mipdata.checkLimits()) {
+          lnsFlipObj = mipdata.upper_bound;
+          lnsFlipNext = c;
           return solves;
-        const HighsInt j = cand.second;
+        }
+        const HighsInt j = flipCands[c].second;
         if (tryMove(&j, 1)) {
           improved = true;
           break;
@@ -521,13 +554,21 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
         for (HighsInt i = 0;
              i < std::min<HighsInt>(kPartners, partners.size()) && !improved;
              ++i) {
-          if (solves >= maxSolves) return solves;
+          if (solves >= maxSolves) {
+            lnsFlipObj = mipdata.upper_bound;
+            lnsFlipNext = c;
+            return solves;
+          }
           const HighsInt pair[2] = {j, partners[i].second};
           improved = tryMove(pair, 2);
         }
         if (improved) break;
       }
+      start = 0;
     }
+    // no improving flip from this incumbent
+    lnsFlipObj = mipdata.upper_bound;
+    lnsFlipNext = -1;
     return solves;
   };
 
@@ -557,6 +598,8 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       }
       double bestScore = -1;
       for (HighsInt t = 0; t < kNumTypes; ++t) {
+        // flips are pointless once none improves this incumbent
+        if (t == 2 && flipsExhausted()) continue;
         double score;
         if (types[t].tried == 0 || (deepTries[t] == 0 && t != 3))
           score = kHighsInf;
@@ -574,6 +617,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     LnsMove& nt = types[type];
     if (type == 2) {
       const double before = mipdata.upper_bound;
+      const double limitBefore = mipdata.optimality_limit;
       const double gapBefore = before - mipdata.lower_bound;
       const int64_t startIters = lp.getNumLpIterations();
       const HighsInt solves = flipSearch(nodeLimit);
@@ -590,7 +634,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                   "iterations\n",
                   who, int(it), int(solves), mipdata.upper_bound,
                   (long long)(lp.getNumLpIterations() - lpItersStart));
-      if (improved)
+      if (progressSince(before, limitBefore))
         since = 0;
       else
         ++since;
@@ -605,7 +649,8 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       // disagrees with the root LP solution (35%), otherwise any decision
       // column
       HighsInt seed = -1;
-      const double r = deep ? randgen.fraction() : 0.5 + 0.5 * randgen.fraction();
+      const double r =
+          deep ? randgen.fraction() : 0.5 + 0.5 * randgen.fraction();
       if (r < 0.5 && promiseTotal > 0) {
         double pick = randgen.fraction() * promiseTotal;
         for (HighsInt col : decisioncols) {
@@ -620,7 +665,8 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       if (seed == -1 && r < 0.85) {
         disagree.clear();
         for (HighsInt col : decisioncols)
-          if (!inN[col] && globaldom.col_lower_[col] != globaldom.col_upper_[col] &&
+          if (!inN[col] &&
+              globaldom.col_lower_[col] != globaldom.col_upper_[col] &&
               std::fabs(inc[col] - relaxationsol[col]) > 0.5)
             disagree.push_back(col);
         if (!disagree.empty())
@@ -700,6 +746,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                                       dom.col_upper_.data());
     dom.clearChangedCols();
     const double before = mipdata.upper_bound;
+    const double limitBefore = mipdata.optimality_limit;
     const double gapBefore = before - mipdata.lower_bound;
     st = solve(dom);
     HighsInt nodes = 0;
@@ -726,21 +773,14 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     if (!pruned && !dived)
       nodes = searchNeighbourhood(dom, neighbourhood, nodeLimit, exhausted);
     else if (!pruned && !tryIncumbent(st))
-      dive(dom, neighbourhood, std::max<HighsInt>(2, neighbourhood.size() / 40));
+      dive(dom, neighbourhood,
+           std::max<HighsInt>(2, neighbourhood.size() / 40));
     // a new incumbent from a neighbourhood often has cheap flips nearby
     if (deep && !pruned && mipdata.upper_bound < before - feastol &&
         !withinGap())
       flipSearch(30);
     const bool improved = mipdata.upper_bound < before - feastol;
-    // progress: in the deep search any improvement, in the quick search one
-    // that closes at least 5% of the gap
-    // progress: in the deep search any improvement, in the quick search one
-    // that closes at least 5% of the gap (so that the cut loop runs once it
-    // gets slow)
-    const bool progress =
-        deep ? improved
-             : mipdata.upper_bound <
-                   before - std::max(feastol, 0.05 * gapBefore);
+    const bool progress = progressSince(before, limitBefore);
     if (!dived) {
       // aim for neighbourhoods that the node limit just about exhausts:
       // grow one that was searched without finding anything, shrink one
