@@ -148,6 +148,15 @@ seeds:
 - Approximate DSE weights on small LPs: large MIPLIB variance.
 - Devex pricing, no cost perturbation, a cutoff margin, larger dive chunks
   and faster neighbourhood growth for the LNS: no gain.
+- Neighbourhood LPs started from the incumbent with the primal simplex:
+  twice the iterations of the dual simplex from the last LP's basis.
+- In a dive, fixing a rounding that conflicts with the chunk so far the
+  other way, or leaving it out, instead of undoing the chunk: the dispatch
+  suite took 14-16% longer.
+- With two threads, the helper running the quick search and LNS on the LP
+  without cuts while the main solver goes straight to the root cuts (with
+  or without passing the main solver's cuts to the helper): faster on the
+  ramp models, slower on the hard tick, about even overall.
 
 ## Benchmarking
 
