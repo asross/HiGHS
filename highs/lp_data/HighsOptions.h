@@ -445,6 +445,7 @@ struct HighsOptionsStruct {
   HighsInt simplex_price_strategy;
   HighsInt simplex_dse_exact_init_max_rows;
   bool simplex_keep_random_vectors;
+  bool full_lp_kkt_check;
   HighsInt simplex_unscaled_solution_strategy;
   HighsInt presolve_reduction_limit;
   HighsInt restart_presolve_reduction_limit;
@@ -619,6 +620,7 @@ struct HighsOptionsStruct {
         simplex_price_strategy(0),
         simplex_dse_exact_init_max_rows(0),
         simplex_keep_random_vectors(false),
+        full_lp_kkt_check(true),
         simplex_unscaled_solution_strategy(0),
         presolve_reduction_limit(0),
         restart_presolve_reduction_limit(0),
@@ -1591,6 +1593,15 @@ class HighsOptions : public HighsOptionsStruct {
         "for every solve (always the case above "
         "simplex_dse_exact_init_max_rows rows)",
         advanced, &simplex_keep_random_vectors, false);
+    records.push_back(record_bool);
+
+    record_bool = new OptionRecordBool(
+        "full_lp_kkt_check",
+        "Whether to assess all KKT measures of an LP solution with a basis "
+        "(relative infeasibilities, complementarity violations, primal-dual "
+        "objective error), rather than only its absolute primal and dual "
+        "infeasibilities",
+        advanced, &full_lp_kkt_check, true);
     records.push_back(record_bool);
 
     record_int =

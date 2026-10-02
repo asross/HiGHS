@@ -1057,11 +1057,96 @@ void lpNoBasisKktCheck(HighsModelStatus& model_status, HighsInfo& info,
   lpKktCheck(model_status, info, lp, solution, basis, options, message);
 }
 
+// For a basic solution of an LP that is re-solved often (as the MIP
+// solver's LP relaxation is), when only the absolute primal and dual
+// infeasibilities are wanted: their counts, maxima and sums as
+// getKktFailures finds them, in one pass, without the relative measures,
+// the complementarity violations or the primal-dual objective error
+static void lpBasicInfeasibilities(HighsModelStatus& model_status,
+                                   HighsInfo& info, const HighsLp& lp,
+                                   const HighsSolution& solution,
+                                   const HighsOptions& options) {
+  double primal_feasibility_tolerance = options.primal_feasibility_tolerance;
+  double dual_feasibility_tolerance = options.dual_feasibility_tolerance;
+  if (options.kkt_tolerance != kDefaultKktTolerance) {
+    primal_feasibility_tolerance = options.kkt_tolerance;
+    dual_feasibility_tolerance = options.kkt_tolerance;
+  }
+  info.objective_function_value = lp.objectiveValue(solution.col_value);
+  info.invalidateKkt();
+  const bool have_dual_solution = solution.dual_valid;
+  const bool have_integrality = lp.integrality_.size() != 0;
+  HighsInt num_primal = 0, num_dual = 0, num_semi = 0;
+  double max_primal = 0, sum_primal = 0, max_dual = 0, sum_dual = 0;
+  double max_semi = 0, sum_semi = 0;
+  double primal_infeasibility, dual_infeasibility, semi_infeasibility;
+  uint8_t at_status, mid_status;
+  for (HighsInt iVar = 0; iVar < lp.num_col_ + lp.num_row_; iVar++) {
+    const bool is_col = iVar < lp.num_col_;
+    const HighsInt iRow = iVar - lp.num_col_;
+    const double lower = is_col ? lp.col_lower_[iVar] : lp.row_lower_[iRow];
+    const double upper = is_col ? lp.col_upper_[iVar] : lp.row_upper_[iRow];
+    const double value =
+        is_col ? solution.col_value[iVar] : solution.row_value[iRow];
+    double dual = 0;
+    if (have_dual_solution)
+      dual = is_col ? solution.col_dual[iVar] : solution.row_dual[iRow];
+    dual *= (HighsInt)lp.sense_;
+    const HighsVarType integrality = is_col && have_integrality
+                                         ? lp.integrality_[iVar]
+                                         : HighsVarType::kContinuous;
+    getVariableKktFailures(
+        primal_feasibility_tolerance, dual_feasibility_tolerance,
+        options.mip_feasibility_tolerance, lower, upper, value, dual,
+        integrality, primal_infeasibility, dual_infeasibility,
+        semi_infeasibility, at_status, mid_status);
+    if (primal_infeasibility > 0) {
+      if (primal_infeasibility > primal_feasibility_tolerance) num_primal++;
+      max_primal = std::max(primal_infeasibility, max_primal);
+      sum_primal += primal_infeasibility;
+    }
+    if (semi_infeasibility > 0) {
+      num_semi++;
+      max_semi = std::max(semi_infeasibility, max_semi);
+      sum_semi += semi_infeasibility;
+    }
+    if (have_dual_solution && dual_infeasibility > 0) {
+      if (dual_infeasibility > dual_feasibility_tolerance) num_dual++;
+      max_dual = std::max(dual_infeasibility, max_dual);
+      sum_dual += dual_infeasibility;
+    }
+  }
+  info.num_primal_infeasibilities = num_primal;
+  info.max_primal_infeasibility = max_primal;
+  info.sum_primal_infeasibilities = sum_primal;
+  info.num_semi_infeasibilities = num_semi;
+  info.max_semi_infeasibility = max_semi;
+  info.sum_semi_infeasibilities = sum_semi;
+  // as lpKktCheck judges a basic solution
+  info.primal_solution_status =
+      num_primal ? kSolutionStatusInfeasible : kSolutionStatusFeasible;
+  info.dual_solution_status = kSolutionStatusNone;
+  if (have_dual_solution) {
+    info.num_dual_infeasibilities = num_dual;
+    info.max_dual_infeasibility = max_dual;
+    info.sum_dual_infeasibilities = sum_dual;
+    info.dual_solution_status =
+        num_dual ? kSolutionStatusInfeasible : kSolutionStatusFeasible;
+  }
+  if (model_status == HighsModelStatus::kUnboundedOrInfeasible &&
+      num_primal == 0)
+    model_status = HighsModelStatus::kUnbounded;
+}
+
 void lpKktCheck(HighsModelStatus& model_status, HighsInfo& info,
                 const HighsLp& lp, const HighsSolution& solution,
                 const HighsBasis& basis, const HighsOptions& options,
                 const std::string& message) {
   if (!solution.value_valid) return;
+  if (basis.valid && !options.full_lp_kkt_check) {
+    lpBasicInfeasibilities(model_status, info, lp, solution, options);
+    return;
+  }
   const bool has_dual_values = solution.dual_valid;
   const HighsLogOptions& log_options = options.log_options;
   double primal_feasibility_tolerance = options.primal_feasibility_tolerance;

@@ -198,6 +198,8 @@ HighsLpRelaxation::HighsLpRelaxation(const HighsMipSolver& mipsolver)
   // for a new basis (a BTRAN per row) is rarely worth it
   lpsolver.setOptionValue("simplex_dse_exact_init_max_rows", 20000);
   lpsolver.setOptionValue("simplex_keep_random_vectors", true);
+  // only the absolute infeasibilities of a re-solve are used
+  lpsolver.setOptionValue("full_lp_kkt_check", false);
   status = Status::kNotSet;
   numlpiters = 0;
   avgSolveIters = 0;
