@@ -31,6 +31,8 @@ HighsDebugStatus debugHighsLpSolution(
   // Non-trivially expensive analysis of a solution to a model
   //
   // Called to check the unscaled model status and solution params
+  if (solver_object.options_.highs_debug_level < kHighsDebugLevelCheap)
+    return HighsDebugStatus::kNotChecked;
   const bool check_model_status_and_highs_info = true;
   // Define an empty Hessian
   HighsHessian hessian;
@@ -55,7 +57,10 @@ HighsDebugStatus debugHighsSolution(const string message,
   // Set up a HighsModelStatus and HighsInfo just to
   // complete the parameter list.By setting
   // check_model_status_and_highs_info to be false they aren't
-  // used.
+  // used. Constructing a HighsInfo isn't cheap, so check the debug
+  // level first.
+  if (options.highs_debug_level < kHighsDebugLevelCheap)
+    return HighsDebugStatus::kNotChecked;
   HighsModelStatus dummy_model_status;
   HighsInfo dummy_highs_info;
   // Call resetModelStatusAndSolutionParams to side-step compiler
@@ -76,7 +81,10 @@ HighsDebugStatus debugHighsSolution(
   // Called to check the HiGHS model_status and info
   //
   // Copy the data from info to highs_info so general method can be used
+  // (only when debugging: copying a HighsInfo isn't cheap)
   //
+  if (options.highs_debug_level < kHighsDebugLevelCheap)
+    return HighsDebugStatus::kNotChecked;
   HighsInfo highs_info = info;
   const bool check_model_status_and_highs_info = true;
   return debugHighsSolution(message, options, model.lp_, model.hessian_,

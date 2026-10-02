@@ -193,6 +193,18 @@ class HEkk {
   // changes that keep the basis apart from added/deleted logicals
   // (cuts) and over basis resets; restored by the next dual solve
   std::vector<double> saved_dual_edge_weight_;
+  // Work vectors of computePrimal, computeDual and factorSolveError, kept
+  // so that each call does not set up (allocate and zero) new ones
+  HVector work_col_;
+  HVector work_col2_;
+  HVector work_row_;
+  HVector& workVector(HVector& vector, const HighsInt size) {
+    if (vector.size != size || HighsInt(vector.array.size()) != size)
+      vector.setup(size);
+    else
+      vector.clear();
+    return vector;
+  }
 
   bool simplex_in_scaled_space_;
   HighsSparseMatrix ar_matrix_;

@@ -3044,10 +3044,8 @@ void HEkk::computePrimal() {
   analysis_.simplexTimerStart(ComputePrimalClock);
   const HighsInt num_row = lp_.num_row_;
   const HighsInt num_col = lp_.num_col_;
-  // Setup a local buffer for the values of basic variables
-  HVector primal_col;
-  primal_col.setup(num_row);
-  primal_col.clear();
+  // A buffer for the values of basic variables
+  HVector& primal_col = workVector(work_col_, num_row);
   for (HighsInt i = 0; i < num_col + num_row; i++) {
     if (basis_.nonbasicFlag_[i] && info_.workValue_[i] != 0) {
       lp_.a_matrix_.collectAj(primal_col, i, info_.workValue_[i]);
@@ -3079,10 +3077,8 @@ void HEkk::computePrimal() {
 
 void HEkk::computeDual() {
   analysis_.simplexTimerStart(ComputeDualClock);
-  // Create a local buffer for the pi vector
-  HVector dual_col;
-  dual_col.setup(lp_.num_row_);
-  dual_col.clear();
+  // A buffer for the pi vector
+  HVector& dual_col = workVector(work_col_, lp_.num_row_);
   for (HighsInt iRow = 0; iRow < lp_.num_row_; iRow++) {
     const double value = info_.workCost_[basis_.basicIndex_[iRow]] +
                          info_.workShift_[basis_.basicIndex_[iRow]];
@@ -3104,9 +3100,8 @@ void HEkk::computeDual() {
 
   if (dual_col.count) {
     fullBtran(dual_col);
-    // Create a local buffer for the values of reduced costs
-    HVector dual_row;
-    dual_row.setup(lp_.num_col_);
+    // A buffer for the values of reduced costs
+    HVector& dual_row = workVector(work_row_, lp_.num_col_);
     fullPrice(dual_col, dual_row);
     for (HighsInt i = 0; i < lp_.num_col_; i++)
       info_.workDual_[i] -= dual_row.array[i];
@@ -3977,10 +3972,8 @@ double HEkk::factorSolveError() {
   const HighsSparseMatrix& a_matrix = this->lp_.a_matrix_;
   const vector<HighsInt>& basic_index = this->basis_.basicIndex_;
   const HighsSparseMatrix& ar_matrix = this->ar_matrix_;
-  HVector btran_rhs;
-  HVector ftran_rhs;
-  btran_rhs.setup(num_row);
-  ftran_rhs.setup(num_row);
+  HVector& btran_rhs = workVector(work_col_, num_row);
+  HVector& ftran_rhs = workVector(work_col2_, num_row);
 
   // Solve for a random solution
   HighsRandom random(1);

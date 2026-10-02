@@ -35,9 +35,8 @@ class HEkkDual {
  public:
   HEkkDual(HEkk& simplex)
       : ekk_instance_(simplex), dualRow(simplex), dualRHS(simplex) {
+    // sets up dualRow and dualRHS too
     initialiseInstance();
-    dualRow.setup();
-    dualRHS.setup();
     if (!(ekk_instance_.info_.simplex_strategy == kSimplexStrategyDualPlain))
       initialiseInstanceParallel(simplex);
   }
