@@ -48,6 +48,9 @@ struct HighsConcurrentLns {
   // solution within the target gap of it (the main solver then stops)
   std::atomic<double> mainLowerBound{-kHighsInf};
   std::atomic<bool> targetReached{false};
+  // the helper's lower bound (its root LP with its own cuts), which the
+  // main solver takes during its root node
+  std::atomic<double> helperLowerBound{-kHighsInf};
   std::thread thread;
 
   void offer(const std::vector<double>& sol, double obj) {

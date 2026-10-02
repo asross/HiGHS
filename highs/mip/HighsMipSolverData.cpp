@@ -2069,7 +2069,16 @@ void HighsMipSolverData::syncConcurrentLns() {
                                  ? mipsolver.concurrent_lns_
                                  : concurrent_lns.get();
   if (!pool) return;
-  if (!mipsolver.concurrent_lns_) pool->mainLowerBound = lower_bound;
+  if (mipsolver.concurrent_lns_) {
+    pool->helperLowerBound = lower_bound;
+  } else {
+    // the helper's bound is valid for the same model; the tree search has
+    // its own
+    const double helperBound = pool->helperLowerBound.load();
+    if (num_nodes == 0 && helperBound > lower_bound)
+      updateLowerBound(helperBound);
+    pool->mainLowerBound = lower_bound;
+  }
   std::vector<double> sol;
   if (pool->take(concurrent_lns_seen, upper_bound, sol))
     trySolution(sol, kSolutionSourceGraphLns);
