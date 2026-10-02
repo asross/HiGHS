@@ -203,8 +203,13 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // Dive: fix the most integral unfixed candidates toward the current LP
   // point, `chunk` per LP re-solve, up to the first one whose rounding
   // propagation rules out (the chunk then shrinks to what was fixed). A
-  // chunk whose LP is infeasible is undone and retried at a quarter of the
-  // size; a single failed fixing is flipped the other way.
+  // chunk whose LP is infeasible is undone, with the simplex iterate (basis,
+  // factorization, edge weights) of the LP before it, and retried at a
+  // quarter of the size; a single failed fixing is flipped the other way.
+  // (Going on from the infeasible LP's iterate cost thousands of simplex
+  // iterations per failed chunk on ramp models, and rounded that iterate
+  // rather than the LP solution; setting the basis instead costs a
+  // refactorization and, below 20000 rows, exact edge weights.)
   auto dive = [&](HighsDomain& dom, std::vector<HighsInt> candidates,
                   HighsInt chunk0) {
     HighsInt chunk = std::max(HighsInt{1}, chunk0);
@@ -212,9 +217,10 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     HighsInt solves = 0;
     bool fallback = false;
     std::vector<std::pair<double, HighsInt>> order;
+    // the last usable LP solution
+    std::vector<double> sol = lp.getLpSolver().getSolution().col_value;
     while (solves < maxSolves) {
       if (worker.terminatorTerminated() || mipdata.checkLimits()) return false;
-      const std::vector<double> sol = lp.getLpSolver().getSolution().col_value;
       order.clear();
       for (HighsInt col : candidates)
         if (dom.col_lower_[col] < dom.col_upper_[col])
@@ -251,16 +257,20 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
         chunk = nfix;
       }
       HighsLpRelaxation::Status st = HighsLpRelaxation::Status::kInfeasible;
+      bool saved = false;
       if (feasible) {
+        saved = lp.getLpSolver().putIterate() == HighsStatus::kOk;
         st = solve(dom);
         ++solves;
       }
       if (usable(st)) {
         if (tryIncumbent(st)) return true;
+        sol = lp.getLpSolver().getSolution().col_value;
         chunk = std::min(chunk0, 2 * chunk);
         continue;
       }
       restore(dom, snap, pos);
+      if (saved) lp.getLpSolver().getIterate();
       if (nfix > 1) {
         chunk = std::max(HighsInt{1}, chunk / 4);
         continue;
@@ -277,6 +287,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       ++solves;
       if (!usable(st)) return false;
       if (tryIncumbent(st)) return true;
+      sol = lp.getLpSolver().getSolution().col_value;
     }
     return false;
   };
