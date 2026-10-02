@@ -32,6 +32,7 @@ HighsTransformedLp::HighsTransformedLp(const HighsLpRelaxation& lprelaxation,
   bestVub.resize(numTransformedCol,
                  std::make_pair(-1, HighsImplications::VarBound()));
   boundTypes.resize(numTransformedCol);
+  fractional.assign(numTransformedCol, 1);
   vectorsum.setDimension(numTransformedCol);
 
   for (HighsInt col : mipsolver.mipdata_->continuous_cols) {
@@ -127,6 +128,29 @@ HighsTransformedLp::HighsTransformedLp(const HighsLpRelaxation& lprelaxation,
 
     boundDist[slackIndex] = std::min(lbDist[slackIndex], ubDist[slackIndex]);
   }
+
+  const double feastol = mipsolver.mipdata_->feastol;
+  const std::vector<double>& colValue = lpSolution.col_value;
+  auto isFrac = [&](double v) {
+    return std::fabs(v - std::round(v)) > feastol;
+  };
+  for (HighsInt col = 0; col != indexOffset; ++col) {
+    bool frac = lprelaxation.isColIntegral(col) && isFrac(colValue[col]);
+    const auto& vub = bestVub[col];
+    if (vub.first != -1)
+      frac = frac || isFrac(colValue[vub.first]) ||
+             vub.second.coef * colValue[vub.first] + vub.second.constant <
+                 colValue[col] - feastol;
+    const auto& vlb = bestVlb[col];
+    if (vlb.first != -1)
+      frac = frac || isFrac(colValue[vlb.first]) ||
+             vlb.second.coef * colValue[vlb.first] + vlb.second.constant >
+                 colValue[col] + feastol;
+    fractional[col] = frac;
+  }
+  for (HighsInt row = 0; row != numLpRow; ++row)
+    fractional[indexOffset + row] =
+        lprelaxation.isRowIntegral(row) && isFrac(lpSolution.row_value[row]);
 }
 
 bool HighsTransformedLp::transform(std::vector<double>& vals,

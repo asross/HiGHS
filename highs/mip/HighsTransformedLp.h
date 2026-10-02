@@ -45,6 +45,9 @@ class HighsTransformedLp {
     kVariableLb,
   };
   std::vector<BoundType> boundTypes;
+  // whether the column can make a transformed base row cut off the LP
+  // solution (see isFractional)
+  std::vector<uint8_t> fractional;
   HighsSparseVectorSum vectorsum;
 
  public:
@@ -53,6 +56,13 @@ class HighsTransformedLp {
                      const HighsDomain& globaldom);
 
   double boundDistance(HighsInt col) const { return boundDist[col]; }
+
+  // A base row cannot give a cut that the LP solution violates unless one of
+  // its columns is an integer column at a fractional value, or has a
+  // variable bound whose substitution brings one in (or that the solution
+  // violates): otherwise the transformed LP solution is a point of the
+  // mixed-integer set that every such cut is valid for.
+  bool isFractional(HighsInt col) const { return fractional[col]; }
 
   bool transform(std::vector<double>& vals, std::vector<double>& upper,
                  std::vector<double>& solval, std::vector<HighsInt>& inds,

@@ -308,8 +308,11 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
         double inArcColVal = 0.0;
         double inArcColBoundDist = 0.0;
 
+        // without a fractional column the row cannot give a violated cut
+        bool fractional = false;
         for (HighsInt j = 0; j != baseRowLen; ++j) {
           HighsInt col = baseRowInds[j];
+          fractional = fractional || transLp.isFractional(col);
           if (col >= lp.num_col_ || transLp.boundDistance(col) == 0.0 ||
               lpRelaxation.isColIntegral(col))
             continue;
@@ -350,7 +353,8 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
 
         // generate cut
         double rhs = 0;
-        success = cutGen.generateCut(transLp, baseRowInds, baseRowVals, rhs);
+        success = fractional &&
+                  cutGen.generateCut(transLp, baseRowInds, baseRowVals, rhs);
 
         lpAggregator.getCurrentAggregation(baseRowInds, baseRowVals, true);
         if (!aggregatedPath.empty() || bestOutArcCol != -1 ||
@@ -359,7 +363,8 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
 
         // generate reverse cut
         rhs = 0;
-        success |= cutGen.generateCut(transLp, baseRowInds, baseRowVals, rhs);
+        success |= fractional &&
+                   cutGen.generateCut(transLp, baseRowInds, baseRowVals, rhs);
 
         if (success || (bestOutArcCol == -1 && bestInArcCol == -1)) break;
 
