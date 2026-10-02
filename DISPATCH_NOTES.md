@@ -116,10 +116,11 @@ instructions, median 160G (between 81G and 231G); vanilla does not reach
 1% in 300 s with any seed.
 
 With two threads (`threads = 2`, close to production's two vCPUs), on a
-lightly loaded machine: all 23 instances reach 1%, in 252 s of wall time
-for the suite; the slowest are `dm_full_randsoc_ramp` (52 s),
-`dm_full_pert_s1_ramp` (44 s) and the hard tick (24 s); everything else
-takes under 20 s. IPX wins the root LP race on the large dispatch LPs
+lightly loaded machine: all 23 instances reach 1%, in about 300 s of wall
+time for the suite; the slowest are the full ramp models (28 s to 66 s over
+three seeds: `dm_full_randsoc_ramp` 43 s to 66 s, `dm_full_pert_s1_ramp`
+31 s to 53 s), then the hard tick (26 s); everything else takes under 25 s.
+IPX wins the root LP race on the large dispatch LPs
 (`dm_full_pert_s1_ramp`: 131 s -> 79 s with the race alone, earlier), and a
 helper thread searches neighbourhoods alongside.
 
