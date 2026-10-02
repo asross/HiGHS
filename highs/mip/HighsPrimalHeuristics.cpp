@@ -1130,7 +1130,10 @@ void HighsPrimalHeuristics::randomizedRounding(
   HighsRandom& randgen =
       mipsolver.mipdata_->parallelLockActive() ? worker.randgen : this->randgen;
 
+  HighsInt numFixed = 0;
   for (HighsInt i : intcols) {
+    // propagating after each fixing can take long on large models
+    if ((++numFixed & 1023) == 0 && mipsolver.mipdata_->checkLimits()) return;
     double intval;
     if (mipsolver.mipdata_->uplocks[i] == 0)
       intval = std::ceil(relaxationsol[i] - mipsolver.mipdata_->feastol);
