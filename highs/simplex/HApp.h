@@ -168,8 +168,10 @@ inline HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
   // Consider scaling the LP - either with any existing scaling, or by
   // considering computing scaling factors if there are none - and
   // then move to EKK
-  if (considerScaling(options, incumbent_lp))
+  if (considerScaling(options, incumbent_lp)) {
     ekk_instance.status_.has_ar_matrix = false;
+    ekk_instance.dual_values_valid_ = false;
+  }
   //
   const bool was_scaled = incumbent_lp.is_scaled_;
   if (!status.has_basis && !basis.valid && basis.useful) {

@@ -58,6 +58,7 @@ void HEkk::clearEkkDataStatus() {
   // Just clears the Ekk status values associated with Ekk-specific
   // data: doesn't clear "initialised_for_new_lp", "initialised_for_solve" or
   // NLA status
+  dual_values_valid_ = false;
   HighsSimplexStatus& status = this->status_;
   status.has_ar_matrix = false;
   status.has_dual_steepest_edge_weights = false;
@@ -297,6 +298,7 @@ void HEkk::invalidateBasis() {
   // Invalidate the basis of the simplex LP, and all its other
   // basis-related properties
   this->status_.has_basis = false;
+  dual_values_valid_ = false;
   this->invalidateBasisArtifacts();
 }
 
@@ -315,6 +317,8 @@ void HEkk::invalidateBasisArtifacts() {
 void HEkk::updateStatus(LpAction action) {
   assert(!this->status_.is_dualized);
   assert(!this->status_.is_permuted);
+  // only bound changes leave the dual values of the basis valid
+  if (action != LpAction::kNewBounds) dual_values_valid_ = false;
   switch (action) {
     case LpAction::kScale:
       this->invalidateBasisMatrix();
@@ -1140,6 +1144,7 @@ HighsStatus HEkk::solve(const bool force_phase2) {
 }
 
 HighsStatus HEkk::setBasis() {
+  dual_values_valid_ = false;
   // Set up nonbasicFlag and basicIndex for a logical basis
   const HighsInt num_col = lp_.num_col_;
   const HighsInt num_row = lp_.num_row_;
@@ -1193,6 +1198,7 @@ HighsStatus HEkk::setBasis() {
 }
 
 HighsStatus HEkk::setBasis(const HighsBasis& highs_basis) {
+  dual_values_valid_ = false;
   // Shouldn't have to check the incoming basis since this is an
   // internal call, but it may be a basis that's set up internally
   // with errors :-) ...
@@ -1665,7 +1671,11 @@ void HEkk::initialiseForSolve() {
   initialiseBound(SimplexAlgorithm::kPrimal, kSolvePhaseUnknown, false);
   initialiseNonbasicValueAndMove();
   computePrimal();  // Timed
-  computeDual();    // Timed
+  // after bound changes alone, the dual values of the last solve still hold
+  if (!(dual_values_valid_ && dual_values_scaled_ == lp_.is_scaled_ &&
+        dual_values_basis_hash_ == basis_.hash &&
+        dual_values_cost_hash_ == costHash()))
+    computeDual();  // Timed
   fresh_primal_ = true;
   fresh_unperturbed_dual_ = true;
   computeSimplexInfeasible();     // Timed
@@ -1942,6 +1952,7 @@ bool HEkk::getNonsingularInverse(const HighsInt solve_phase) {
 }
 
 bool HEkk::getBacktrackingBasis() {
+  dual_values_valid_ = false;
   if (!info_.valid_backtracking_basis_) return false;
   basis_ = info_.backtracking_basis_;
   info_.costs_shifted = (info_.backtracking_basis_costs_shifted_ != 0);
@@ -3082,6 +3093,7 @@ void HEkk::computePrimal() {
 
 void HEkk::computeDual() {
   analysis_.simplexTimerStart(ComputeDualClock);
+  dual_values_valid_ = false;
   // A buffer for the pi vector
   HVector& dual_col = workVector(work_col_, lp_.num_row_);
   for (HighsInt iRow = 0; iRow < lp_.num_row_; iRow++) {
@@ -3230,6 +3242,7 @@ void HEkk::updateFactor(HVector* column, HVector* row_ep, HighsInt* iRow,
 
 void HEkk::updatePivots(const HighsInt variable_in, const HighsInt row_out,
                         const HighsInt move_out) {
+  dual_values_valid_ = false;
   analysis_.simplexTimerStart(UpdatePivotsClock);
   HighsInt variable_out = basis_.basicIndex_[row_out];
 
@@ -3952,6 +3965,7 @@ void HEkk::putIterate() {
 }
 
 HighsStatus HEkk::getIterate() {
+  dual_values_valid_ = false;
   SimplexIterate& iterate = this->simplex_nla_.simplex_iterate_;
   if (!iterate.valid_) return HighsStatus::kError;
   this->simplex_nla_.getInvert();

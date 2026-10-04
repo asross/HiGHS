@@ -210,6 +210,23 @@ class HEkk {
   HighsSparseMatrix ar_matrix_;
   bool ar_matrix_is_scaled_ = false;
   bool random_vectors_drawn_for_solve_ = false;
+  // Whether info_.workDual_ holds the reduced costs of the current basis for
+  // the LP's own costs (no perturbation or shift): set at the end of a dual
+  // simplex solve that ends optimal, cleared by anything that changes the
+  // basis, the costs, the scaling or the dual values. A solve after bound
+  // changes alone then need not compute them again
+  bool dual_values_valid_ = false;
+  // whether those reduced costs are of the scaled LP, and hashes of the
+  // costs and the basis they are for: some changes of the costs (e.g. user
+  // objective scaling, blending objectives) reach the LP without notice
+  bool dual_values_scaled_ = false;
+  uint64_t dual_values_cost_hash_ = 0;
+  uint64_t dual_values_basis_hash_ = 0;
+  uint64_t costHash() const {
+    return HighsHashHelpers::vector_hash(lp_.col_cost_.data(),
+                                         lp_.col_cost_.size()) ^
+           (HighsHashHelpers::hash(lp_.offset_) + lp_.num_row_);
+  }
   // Values computed by initialiseForSolve or the dual simplex set-up that
   // nothing has changed since, so the dual simplex need not recompute them
   bool fresh_unperturbed_dual_ = false;

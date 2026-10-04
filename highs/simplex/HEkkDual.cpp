@@ -404,6 +404,16 @@ HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
   if (ekk_instance_.debugOkForSolve(SimplexAlgorithm::kDual, solve_phase) ==
       HighsDebugStatus::kLogicalError)
     return ekk_instance_.returnFromSolve(HighsStatus::kError);
+  // Optimal without a clean-up: the dual values were computed from scratch
+  // with the LP's costs after the last basis change
+  if (model_status == HighsModelStatus::kOptimal &&
+      solve_phase == kSolvePhaseOptimal && !info.costs_perturbed &&
+      !info.costs_shifted) {
+    ekk_instance_.dual_values_valid_ = true;
+    ekk_instance_.dual_values_scaled_ = ekk_instance_.lp_.is_scaled_;
+    ekk_instance_.dual_values_basis_hash_ = ekk_instance_.basis_.hash;
+    ekk_instance_.dual_values_cost_hash_ = ekk_instance_.costHash();
+  }
   return ekk_instance_.returnFromSolve(HighsStatus::kOk);
 }
 
@@ -2221,6 +2231,7 @@ void HEkkDual::updatePrimal(HVector* DSE_Vector) {
 void HEkkDual::shiftCost(const HighsInt iCol, const double amount) {
   HighsSimplexInfo& info = ekk_instance_.info_;
   info.costs_shifted = true;
+  ekk_instance_.dual_values_valid_ = false;
   assert(info.workShift_[iCol] == 0);
   if (!amount) return;
   double use_amount = amount;
@@ -2502,6 +2513,7 @@ void HEkkDual::correctDualInfeasibilities(HighsInt& free_infeasibility_count) {
     max_dual_infeasibility_for_shift =
         std::max(dual_infeasibility, max_dual_infeasibility_for_shift);
     info.costs_shifted = true;
+    ekk_instance_.dual_values_valid_ = false;
     double shift;
     if (move == kNonbasicMoveUp) {
       double new_dual = (1 + random.fraction()) * dual_feasibility_tolerance;
@@ -2727,6 +2739,7 @@ void HEkkDual::exitPhase1ResetDuals() {
                 "dual values: total = %g\n",
                 num_shift, sum_shift);
     info.costs_shifted = true;
+    ekk_instance_.dual_values_valid_ = false;
   }
 }
 
