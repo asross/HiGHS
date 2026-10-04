@@ -14,6 +14,58 @@ there and finds -84424), so it never gets within 1% in 300 s. Improving
 moves are small: one to nine binaries (single flips, swaps of two units in a
 period, edges of on/off runs).
 
+## A tick that no solver certifies in 180 s
+
+`hard_10-03_1340` (from production, October 3) is bound-limited:
+- Model: 55 periods, the first ones shorter. 28 banks of 1 to 8 storage
+  modules (202 in all), one binary per bank and period for charging all its
+  modules at fixed rates, and 25 per switch on or off. Discharges give heat,
+  at most 0.32 per module and proportional to its state of charge. Heat
+  sells up to 50 per period, above which it is vented, and below 36 a
+  shortfall costs 200 per unit. Electricity is bought at the period's
+  price.
+- The root bound after cuts (about -251620) matches CPLEX's after 180 s
+  (-251669). The best solution found by any means is -248801, after an hour
+  of this branch on two threads and then 25 minutes of fix-and-optimize
+  over 10-period windows. The two are 1.13% apart. Certifying 1% needs both
+  a solution close to that and a bound about 330 better than the root's. In
+  an hour on two threads the bound reached -251353, most of the gain in the
+  25 s after a restart.
+- Neither CPLEX nor this branch reaches 1% in 180 s. The limit is the
+  relaxation, not the machine or the second thread. With two threads, the
+  incumbent at 180 s is between -247.4k and -247.9k on this machine (4
+  seeds), better than CPLEX's. Two log lines show the second thread at
+  work: "Root LP: IPX won the race on two threads" (or the dual simplex),
+  and "Concurrent LNS helper thread started". The line "Thread count 1 (of
+  2 threads)" only describes the task scheduler. On Lambda, two full vCPUs
+  need at least 3538 MB of memory. With less, the second thread shares one
+  vCPU's time.
+- Why the LP is weak: with a fractional switch, a bank charges part-way all
+  the time. That tops up its modules and keeps their state of charge (and
+  so their discharge limit) high, with no switch changes. An integer
+  schedule alternates full-rate charging and idling and pays for each
+  change. No inequality in the switches and their changes alone can cut
+  this off, because constant part-way charging is the average of always-on
+  and always-off. Useful cuts must involve the states of charge.
+- Things that did not close the gap:
+  - cuts on each module's room for a charge (+33 at the root);
+  - substituting the discharges out;
+  - raising the switching cost gradually from zero;
+  - RINS at the root (128 s, no improvement);
+  - a Lagrangian bound by bank, with the heat and electricity balances
+    relaxed: -252124 at the root LP's duals, against -253940 for the LP and
+    -251620 after cuts. It reached -251976 after 14 subgradient steps, some
+    taking 45 minutes on hard bank subproblems.
+- A restart raises the bound. At the restart in the hour-long run, and when
+  one is forced after the root (+87, 15 s), presolve on the presolved model
+  removes about 1500 more rows and columns. The new cut loop then gets
+  further. The cut rows moved into the model do not cause this (without
+  them the result is the same). HiGHS presolve stops short of a fixpoint:
+  run on its own output, its aggregator substitutes about 1450 more
+  columns, and the root LP takes 8.7G instructions instead of 15.0G.
+  Neither a second presolve pass from the start nor a forced restart paid
+  over the dispatch suite (see Tried and reverted).
+
 ## Changes
 
 Graph LNS (`mip/HighsGraphLns.cpp`, option `mip_heuristic_run_graph_lns`, only
@@ -35,9 +87,13 @@ for `mip_rel_gap >= 1e-3`):
   most about one root LP's worth of LP iterations, so that where
   neighbourhood LPs are expensive (ramping) the root cuts come early: their
   bound often closes the gap with the incumbent so far.
-- Deep search after the root cuts, only if the quick search brought the
-  incumbent within three times the target gap (otherwise the model does not
-  suit it and the usual root heuristics run as without graph LNS): small
+- Deep search after the root cuts, only if the quick search improved the
+  incumbent and it is within three times the target gap of the bound with
+  the cuts (otherwise the model does not suit it and the usual root
+  heuristics run as without graph LNS). Measured against the bound before
+  the cuts, the quick search on `hard_10-03_1340` ended at 2.9% or 3.1%
+  depending on small changes elsewhere, so the deep search ran or did not.
+  The deep search itself has small
   neighbourhoods searched by a depth-first branch and bound with a node
   limit, a flip search (single flips and pairs of opposite flips in a row,
   ordered by reduced-cost gain, resumed where the last one stopped), and
@@ -51,9 +107,12 @@ for `mip_rel_gap >= 1e-3`):
   where strong branching then starts with a smaller budget (10000 LP
   iterations rather than 100000): the bound rarely matters there, and on
   the hard tick it cost about 70000 iterations in the first dozen nodes.
-- Stall rules measure progress against the gap (quick) or against what
-  separates the incumbent from the target gap (deep); both stop as soon as
-  the target gap is reached.
+- Stall rules measure progress against the gap (quick: 5% of it) or
+  against what separates the incumbent from the target gap (deep: 1% of
+  it). Both stop as soon as the target gap is reached. Where the bound stays
+  well short of the target, as on `hard_10-03_1340`, improvements are steps
+  of 1-5% of that excess, and the incumbent at the time limit is what
+  counts. With a 5% threshold the deep search stopped after ten such steps.
 
 Using a second core (option `mip_concurrent_helper`, on unless
 `threads = 1`, when graph LNS runs; makes the solve non-deterministic):
@@ -63,6 +122,10 @@ Using a second core (option `mip_concurrent_helper`, on unless
   79 s with two threads).
 - A helper thread runs graph LNS on a copy of the presolved model with its
   own seed, exchanging incumbents with the main solver.
+- The log says when the race ran ("Root LP: IPX won the race on two
+  threads", or the dual simplex) and when the helper started ("Concurrent
+  LNS helper thread started"). Both use their own thread, whatever the task
+  scheduler's thread count in the "Thread count" line.
 
 LP re-solves (all MIP solves benefit; same simplex iterations). Graph LNS
 and branch and bound solve many LPs with a few iterations each, so the fixed
@@ -73,6 +136,13 @@ cost of a solve dominates:
 - Values that are still fresh are not recomputed; the row-wise matrix is
   kept when the LP did not change; the simplex random vectors are kept
   (`simplex_keep_random_vectors`); work vectors are reused.
+- After bound changes alone, the dual values of the last dual simplex solve
+  are kept rather than recomputed (one BTRAN and a full PRICE), if it ended
+  optimal without perturbed or shifted costs. The basis and the costs are
+  checked by hash, since some cost changes reach the simplex unannounced.
+  Over 600 re-solves of `hard_10-03_1340` after single fixings, this uses
+  4.9% fewer instructions with the same iterations; MIP search paths are
+  unchanged.
 - Highs::run no longer assesses coefficient ranges without output, and the
   NLA and solution debug checks (which copied the LP and HighsInfo) only
   run at a debug level.
@@ -234,6 +304,35 @@ past the time limit on germanrr (see above).
   iterations with the basis.
 - RINS at the root after a stalled deep search on the hard tick: 128 s
   without an improvement.
+- No cost perturbation at the start of a dual simplex solve that starts
+  dual feasible, however large the primal infeasibilities (HiGHS skips it
+  only below 1e-3). Re-solves of `hard_10-03_1340` cost 9% less, but on
+  MIPLIB re-solves the effect is chaotic: mzzv42z +49%, swath1 +14%,
+  physiciansched6-2 -32%, or +83% if only one infeasibility is allowed. MIP
+  totals: MIPLIB 0.996 over 62 runs (the two seeds 0.95 and 1.05), with
+  1.29 times the LP iterations; the dispatch suite 0.917 (seeds 1.04 and
+  0.80).
+- Checking the factorization's accuracy only every 50 updates: re-solves
+  of `hard_10-03_1340` cost 5% less, but it changes search paths
+  (neos-911970) and drops a numerical safeguard.
+- A second presolve pass from the start (see the 10-03 tick above): on
+  `hard_10-03_1340` the root LP is 42% cheaper and the bound after the cut
+  loop is -251535 rather than -251623 (one run). Over the dispatch suite it
+  took 1.034 times the instructions (the two seeds 1.18 and 0.91), with
+  many of the simple models slower. Most of the extra reductions come from
+  the aggregator. Running it once more at the end of the first pass, after
+  a full rescan of candidates, after rescaling, or with a lower pivot
+  threshold gets only 70% of them.
+- A restart forced after the root when nothing is fixed: +60 to +90 on the
+  bound of `hard_10-03_1340`, but the dispatch suite is unchanged (0.998;
+  almost all of it finishes at the root).
+- Plain triangular solves instead of hyper-sparse ones, for the dense
+  inverses of the dispatch LPs: 3-5% fewer cycles per re-solve, but the
+  first LP takes twice as long.
+- Incremental dual values after removing cost shifts at the end of a solve:
+  the shifts are mostly on basic variables (entered on degenerate steps),
+  and the cost vector is sparse, so a full recomputation costs about the
+  same.
 
 ## Benchmarking
 
