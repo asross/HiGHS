@@ -64,7 +64,7 @@
 // where the incumbent disagrees with the LP solution, or random.
 //
 // The quick search stops after 5 neighbourhoods that do not close 5% of the
-// gap, the deep search after 10 that do not close 5% of what separates the
+// gap, the deep search after 10 that do not close 1% of what separates the
 // incumbent from the target gap; both also stop on an LP iteration budget
 // (for the quick search on a large model, about one root LP's worth), or
 // when the incumbent reaches the target gap. If the deep search pays,
@@ -361,15 +361,19 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   };
   // Progress (which resets the stall count): in the quick search, an
   // improvement closing at least 5% of the gap; in the deep search, one
-  // closing at least 5% of what separates the incumbent from the target gap
-  // (small steps far from it do not keep the deep search going)
+  // closing at least 1% of what separates the incumbent from the target gap.
+  // Where the bound stays well short of what the target needs (dispatch
+  // ticks whose switching costs leave a gap of over 1% that no relaxation
+  // here closes), steps of that size are all there is, and the incumbent
+  // at the time limit is what counts: with 5%, the deep search stopped after
+  // ten such steps and the tree search found little.
   auto progressSince = [&](double before, double limitBefore) {
     if (!deep)
       return mipdata.upper_bound <
              before - std::max(feastol, 0.05 * (before - mipdata.lower_bound));
     return mipdata.optimality_limit <
            limitBefore -
-               std::max(feastol, 0.05 * (limitBefore - mipdata.lower_bound));
+               std::max(feastol, 0.01 * (limitBefore - mipdata.lower_bound));
   };
   // The neighbourhood search is for a loose target gap (as for dispatch
   // or unit commitment models solved to 1%), when a good incumbent may be
