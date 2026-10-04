@@ -1183,6 +1183,9 @@ HighsStatus HighsLpRelaxation::optimizeRacingIpx() {
     winner.compare_exchange_strong(none, 1);
   }
   helper.join();
+  highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
+               "Root LP: %s won the race on two threads\n",
+               ipxWon ? "IPX" : "the dual simplex");
   if (!ipxWon) return callstatus;
   // count the dual simplex iterations so far, and go on from the IPX basis
   numlpiters +=

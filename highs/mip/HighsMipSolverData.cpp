@@ -2062,6 +2062,8 @@ void HighsMipSolverData::startConcurrentLns() {
     helper.setProfiling(&profiling);
     helper.run();
   });
+  highsLogUser(options.log_options, HighsLogType::kInfo,
+               "Concurrent LNS helper thread started\n");
 }
 
 void HighsMipSolverData::syncConcurrentLns() {
@@ -2303,11 +2305,12 @@ restart:
       heuristics.graphLNS(worker, firstlpsol, false);
       lns_quick_lp_iterations += quickIters + worker.getHeurLpIterations();
       // the neighbourhood search suits the model if it brings the
-      // incumbent within three times the target gap
-      lns_quick_improved =
-          upper_bound < before &&
+      // incumbent within three times the target gap (of the bound after
+      // the root cuts, for the deep search below)
+      lns_quick_improved = upper_bound < before;
+      skipAnalyticCenter =
+          lns_quick_improved &&
           upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit);
-      skipAnalyticCenter = lns_quick_improved;
     }
   }
 
@@ -2562,12 +2565,16 @@ restart:
   // If that was not enough, a deeper search runs on the LP with the root
   // cuts, whose solution and bound guide it much better, before the
   // sub-MIP heuristics below. It is best at closing the last part of the
-  // gap, so only runs if the quick search brought the incumbent within
-  // three times the target gap.
+  // gap, so only runs if the quick search improved the incumbent, and it
+  // is within three times the target gap of the bound with the cuts (on a
+  // dispatch tick, the quick search ended at 2.9% or 3.1% of the bound
+  // before them, depending on small changes elsewhere).
   // (a helper's root cuts are done: its main solver adds them to its own)
   if (mipsolver.concurrent_lns_) publishRootCuts();
   if (runGraphLns && !rootlpsol.empty() &&
-      (mipsolver.concurrent_lns_ || lns_quick_improved)) {
+      (mipsolver.concurrent_lns_ ||
+       (lns_quick_improved &&
+        upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit)))) {
     const int64_t lnsIters = -total_lp_iterations;
     const double lnsUpperBound = upper_bound;
     heuristics.graphLNS(worker, rootlpsol, true);
