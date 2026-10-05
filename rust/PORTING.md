@@ -53,3 +53,16 @@ precision refinement of a pivotal row, and logging/reports. In the common
 case an iteration makes no call into C++. HEkkDual.cpp is compiled in a
 unity build, so clang inlines e.g. HVector::norm2 into chooseRow
 contracted: check each compiled copy.
+
+## The QP solver
+
+QUASS (highs/qpsolver/) runs in Rust (rust/src/qp): solveqp in
+a_quass.cpp hands the Instance to `highs_rs_qp_solve` and maps the result
+back with quass2highs. Phase 1 (computeStartingPointHighs, an LP solve by
+Highs, or the hot start check), the timer and the logging are C++
+callbacks; basis.cpp, quass.cpp, ratiotest.cpp and the unused
+perturbation.cpp and scaling.cpp are not compiled. QpVector::dot is fused
+in most compiled copies but split by 4 in SteepestEdgePricing and
+Instance::objval (dot_split4). The C++ Cholesky factor writes past the
+size of its std::vector once the null space was empty at a recompute;
+cholesky.rs models the vector's capacity to follow it.

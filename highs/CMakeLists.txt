@@ -9,6 +9,10 @@ if(HIGHS_RUST)
   set(basiclu_sources)
   # IPX is ported to Rust (rust/src/ipx); ipx::LpSolver wraps it
   set(ipx_sources ipm/ipx/lp_solver_rs.cc)
+  # The QP solver is ported to Rust (rust/src/qp); solveqp in
+  # qpsolver/a_quass.cpp calls it (perturbation and scaling are unused)
+  list(REMOVE_ITEM highs_sources qpsolver/basis.cpp qpsolver/perturbation.cpp
+    qpsolver/quass.cpp qpsolver/ratiotest.cpp qpsolver/scaling.cpp)
   # With fewer sources the unity batches shift; keep the file-scope
   # `using namespace HighsExtras` of this file out of the hipo batch
   set_source_files_properties(HighsExternalApi.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
