@@ -4,7 +4,8 @@
 //! (simplex/dual_row.rs), its CHUZR HEkkDualRHS (simplex/dual_rhs.rs), the
 //! numerical kernels of HEkk on a view of its data (simplex/ekk.rs), the
 //! serial dual and the primal simplex drivers (simplex/dual.rs, primal.rs),
-//! BASICLU and the interior point solver IPX (basiclu/, ipx/), the MPS and
+//! BASICLU and the interior point solver IPX (basiclu/, ipx/), the PDLP
+//! solver cuPDLP-C (pdlp/), the MPS and
 //! LP readers, and the utilities
 //! (hashing, random numbers, double-double arithmetic).
 
@@ -15,6 +16,7 @@ pub mod util;
 
 pub mod basiclu;
 pub mod ipx;
+pub mod pdlp;
 pub mod factor;
 mod ffi;
 pub mod hvector;

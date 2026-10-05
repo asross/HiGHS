@@ -53,3 +53,15 @@ precision refinement of a pivotal row, and logging/reports. In the common
 case an iteration makes no call into C++. HEkkDual.cpp is compiled in a
 unity build, so clang inlines e.g. HVector::norm2 into chooseRow
 contracted: check each compiled copy.
+
+## PDLP (cuPDLP-C)
+
+rust/src/pdlp ports the CPU cuPDLP-C (highs/pdlp/cupdlp) and the glue of
+CupdlpWrapper.cpp: building the cuPDLP-C LP, scaling, the PDHG iterations,
+the hot start and the unscaled solution. With HIGHS_RUST the C sources are
+not built and highs/pdlp/CupdlpWrapperRs.cpp reads the options, calls
+`pdlp_rs_solve` and sets the model status; output goes through printf like
+cupdlp_printf. All reductions of libhighs's cuPDLP-C are blocked by 4
+(`dot_blocked`) except those of the power method, which clang leaves
+scalar and fused. The power method's logged residual stops at nrows where
+the C reads ax past its end when ncols > nrows.

@@ -19,7 +19,7 @@ mod basis;
 mod control;
 mod crossover;
 pub mod ffi;
-mod fmt;
+pub(crate) mod fmt;
 mod guess_basis;
 mod indexed_vector;
 mod ipm;
@@ -33,7 +33,7 @@ mod sparse_matrix;
 mod sparse_utils;
 mod starting_basis;
 mod symbolic_invert;
-mod utils;
+pub(crate) mod utils;
 
 #[cfg(test)]
 mod tests;

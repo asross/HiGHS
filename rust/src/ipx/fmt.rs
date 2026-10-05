@@ -13,7 +13,7 @@ pub(crate) fn fmt<T: Display>(v: T, width: usize) -> String {
 }
 
 /// printf's "%.{prec}e"
-fn sci_raw(d: f64, prec: usize) -> String {
+pub(crate) fn sci_raw(d: f64, prec: usize) -> String {
     if !d.is_finite() {
         return nonfinite(d);
     }
