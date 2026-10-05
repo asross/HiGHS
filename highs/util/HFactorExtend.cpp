@@ -25,6 +25,7 @@ void HFactor::deleteNonbasicCols(const HighsInt num_deleted_col) {
   num_col -= num_deleted_col;
 }
 
+#ifndef HIGHS_RUST
 void HFactor::addRows(const HighsSparseMatrix* ar_matrix) {
   invalidAMatrixAction();
   assert(kExtendInvertWhenAddingRows);
@@ -227,3 +228,4 @@ void HFactor::addRows(const HighsSparseMatrix* ar_matrix) {
   num_row += num_new_row;
   //  reportLu(kReportLuBoth, true);
 }
+#endif  // HIGHS_RUST

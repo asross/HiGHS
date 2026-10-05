@@ -447,6 +447,7 @@ set(highs_sources
     util/HFactorDebug.cpp
     util/HFactorExtend.cpp
     util/HFactorRefactor.cpp
+    util/HFactorRust.cpp
     util/HFactorUtils.cpp
     util/HighsDynamicLibrary.cpp
     util/HighsHash.cpp

@@ -9,6 +9,7 @@
 #cmakedefine HIGHS_SHARED_EXTRAS_LIBRARY
 #cmakedefine CMAKE_BUILD_TYPE "@CMAKE_BUILD_TYPE@"
 #cmakedefine HIGHSINT64
+#cmakedefine HIGHS_RUST
 #cmakedefine HIGHS_NO_DEFAULT_THREADS
 #cmakedefine HIGHS_HAVE_MM_PAUSE
 #cmakedefine HIGHS_HAVE_BUILTIN_CLZ

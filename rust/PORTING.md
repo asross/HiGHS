@@ -17,7 +17,11 @@ file readers in parallel. IPX, PDLP and QP last.
   (`objdump -d build/lib/libhighs.dylib`) when unsure.
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
-  measured win and a comment saying why it is sound.
+  measured win and a comment saying why it is sound. `rust/.cargo/config.toml`
+  turns off LLVM's runtime loop unrolling, which slows the short sparse
+  loops that clang leaves rolled.
+- **C++ switch.** `HIGHS_RUST` is defined in `HConfig.h`, so every
+  translation unit sees the same class layouts.
 - **Rust owns ported state.** A ported class keeps its C++ header as a thin
   wrapper around an opaque Rust handle until its callers are ported.
 - **Tests:** `cargo test` for each module, and the C++ unit tests
