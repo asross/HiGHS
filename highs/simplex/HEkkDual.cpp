@@ -26,6 +26,9 @@
 using std::fabs;
 
 HighsStatus HEkkDual::solve(const bool pass_force_phase2) {
+#ifdef HIGHS_RUST
+  if (rustEligible()) return solveRust(pass_force_phase2);
+#endif
   // Initialise control data for a particular solve
   initialiseSolve();
 

@@ -138,4 +138,16 @@ highs_rs::Ekk HEkk::rustView() {
   return v;
 }
 
+HEkk::RustBasisRecords::RustBasisRecords() : p(highs_rs_basis_records_new()) {}
+HEkk::RustBasisRecords::RustBasisRecords(const RustBasisRecords& other)
+    : RustBasisRecords() {
+  highs_rs_basis_records_copy(p, other.p);
+}
+HEkk::RustBasisRecords& HEkk::RustBasisRecords::operator=(
+    const RustBasisRecords& other) {
+  if (this != &other) highs_rs_basis_records_copy(p, other.p);
+  return *this;
+}
+HEkk::RustBasisRecords::~RustBasisRecords() { highs_rs_basis_records_free(p); }
+
 #endif  // HIGHS_RUST

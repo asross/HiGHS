@@ -1686,8 +1686,13 @@ void HEkk::initialiseForSolve() {
 
   bool primal_feasible = info_.num_primal_infeasibilities == 0;
   bool dual_feasible = info_.num_dual_infeasibilities == 0;
+#ifdef HIGHS_RUST
+  highs_rs_visited_basis_clear(basis_records_.p);
+  highs_rs_visited_basis_insert(basis_records_.p, basis_.hash);
+#else
   visited_basis_.clear();
   visited_basis_.insert(basis_.hash);
+#endif
   model_status_ = HighsModelStatus::kNotset;
   if (primal_feasible && dual_feasible)
     model_status_ = HighsModelStatus::kOptimal;
@@ -1912,9 +1917,15 @@ bool HEkk::getNonsingularInverse(const HighsInt solve_phase) {
     if (!getBacktrackingBasis()) return false;
     // Record that backtracking is taking place
     info_.backtracking_ = true;
+#ifdef HIGHS_RUST
+    highs_rs_visited_basis_clear(basis_records_.p);
+    highs_rs_visited_basis_insert(basis_records_.p, basis_.hash);
+    highs_rs_visited_basis_insert(basis_records_.p, deficient_hash);
+#else
     visited_basis_.clear();
     visited_basis_.insert(basis_.hash);
     visited_basis_.insert(deficient_hash);
+#endif
     this->updateStatus(LpAction::kBacktracking);
     HighsInt backtrack_rank_deficiency = computeFactor();
     // This basis has previously been inverted successfully, so it shouldn't be
@@ -3543,14 +3554,14 @@ void HEkk::updatePivots(const HighsInt variable_in, const HighsInt row_out,
   {
     const highs_rs::Ekk view = rustView();
     highs_rs_ekk_update_pivots(&view, variable_in, row_out, move_out);
-    visited_basis_.insert(basis_.hash);
+    highs_rs_visited_basis_insert(basis_records_.p, basis_.hash);
     status_.has_invert = false;
     status_.has_fresh_invert = false;
     status_.has_fresh_rebuild = false;
     analysis_.simplexTimerStop(UpdatePivotsClock);
     return;
   }
-#endif
+#else
   HighsInt variable_out = basis_.basicIndex_[row_out];
 
   // update hash value of basis
@@ -3593,6 +3604,7 @@ void HEkk::updatePivots(const HighsInt variable_in, const HighsInt row_out,
   // Data are no longer fresh from rebuild
   status_.has_fresh_rebuild = false;
   analysis_.simplexTimerStop(UpdatePivotsClock);
+#endif
 }
 
 bool HEkk::isBadBasisChange(const SimplexAlgorithm algorithm,
@@ -3607,7 +3619,12 @@ bool HEkk::isBadBasisChange(const SimplexAlgorithm algorithm,
   HighsHashHelpers::sparse_combine(currhash, variable_in);
 
   bool cycling_detected = false;
+#ifdef HIGHS_RUST
+  const bool posible_cycling =
+      highs_rs_visited_basis_find(basis_records_.p, currhash);
+#else
   const bool posible_cycling = visited_basis_.find(currhash) != nullptr;
+#endif
   if (posible_cycling) {
     if (iteration_count_ == previous_iteration_cycling_detected + 1) {
       // Cycling detected on successive iterations suggests infinite cycling
@@ -3636,6 +3653,10 @@ bool HEkk::isBadBasisChange(const SimplexAlgorithm algorithm,
   } else {
     // Look to see whether this basis change is in the list of bad
     // ones
+#ifdef HIGHS_RUST
+    return highs_rs_bad_basis_find_and_make_taboo(
+        basis_records_.p, row_out, variable_out, variable_in);
+#else
     for (auto& change : bad_basis_change_) {
       if (change.variable_out == variable_out &&
           change.variable_in == variable_in && change.row_out == row_out) {
@@ -3643,6 +3664,7 @@ bool HEkk::isBadBasisChange(const SimplexAlgorithm algorithm,
         return true;
       }
     }
+#endif
   }
 
   return false;
@@ -4403,6 +4425,61 @@ double HEkk::factorSolveError() {
   return solution_error;
 }
 
+#ifdef HIGHS_RUST
+void HEkk::clearBadBasisChange(const BadBasisChangeReason reason) {
+  highs_rs_bad_basis_clear(basis_records_.p, (int)reason);
+}
+
+void HEkk::updateBadBasisChange(const HVector& col_aq, double theta_primal) {
+  highs_rs_bad_basis_update(basis_records_.p, col_aq.array.data(),
+                            (int)col_aq.array.size(), theta_primal,
+                            options_->primal_feasibility_tolerance);
+}
+
+HighsInt HEkk::addBadBasisChange(const HighsInt row_out,
+                                 const HighsInt variable_out,
+                                 const HighsInt variable_in,
+                                 const BadBasisChangeReason reason,
+                                 const bool taboo) {
+  assert(0 <= row_out && row_out <= lp_.num_row_);
+  assert(0 <= variable_out && variable_out <= lp_.num_col_ + lp_.num_row_);
+  assert(variable_in == -1 ||
+         (0 <= variable_in && variable_in <= lp_.num_col_ + lp_.num_row_));
+  return highs_rs_bad_basis_add(basis_records_.p, row_out, variable_out,
+                                variable_in, (int)reason, taboo);
+}
+
+void HEkk::clearBadBasisChangeTabooFlag() {
+  highs_rs_bad_basis_clear_taboo_flag(basis_records_.p);
+}
+
+bool HEkk::tabooBadBasisChange() const {
+  return highs_rs_bad_basis_taboo(basis_records_.p);
+}
+
+void HEkk::applyTabooRowOut(double* values, const double overwrite_with) {
+  highs_rs_bad_basis_apply_taboo(basis_records_.p, values, lp_.num_row_,
+                                 overwrite_with, 0);
+}
+
+void HEkk::unapplyTabooRowOut(double* values) {
+  highs_rs_bad_basis_unapply_taboo(basis_records_.p, values, lp_.num_row_, 0);
+}
+
+void HEkk::applyTabooVariableIn(vector<double>& values,
+                                const double overwrite_with) {
+  assert(values.size() >=
+         static_cast<size_t>(lp_.num_col_) + static_cast<size_t>(lp_.num_row_));
+  highs_rs_bad_basis_apply_taboo(basis_records_.p, values.data(),
+                                 (int)values.size(), overwrite_with, 1);
+}
+
+void HEkk::unapplyTabooVariableIn(vector<double>& values) {
+  assert((HighsInt)values.size() >= lp_.num_col_ + lp_.num_row_);
+  highs_rs_bad_basis_unapply_taboo(basis_records_.p, values.data(),
+                                   (int)values.size(), 1);
+}
+#else
 void HEkk::clearBadBasisChange(const BadBasisChangeReason reason) {
   if (reason == BadBasisChangeReason::kAll) {
     bad_basis_change_.clear();
@@ -4525,6 +4602,8 @@ void HEkk::unapplyTabooVariableIn(vector<double>& values) {
           bad_basis_change_[iX].save_value;
   }
 }
+
+#endif  // HIGHS_RUST
 
 bool HEkk::logicalBasis() const {
   for (HighsInt iRow = 0; iRow < this->lp_.num_row_; iRow++) {

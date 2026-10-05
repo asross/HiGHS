@@ -88,11 +88,34 @@ struct HVecCall {
            (int)v.packIndex.size(),
            v.packValue.data(),
            (int)v.packValue.size()} {}
-  ~HVecCall() {
+  ~HVecCall() { pull(); }
+  // HEkkDual: sync the scalars for C++ use of the HVector during a
+  // long-running Rust call (pull), and back (push)
+  void pull() {
     v.count = rs.count;
     v.synthetic_tick = rs.synthetic_tick;
     v.packFlag = rs.pack_flag != 0;
     v.packCount = rs.pack_count;
+  }
+  void push() {
+    // The C++ may have reallocated the arrays
+    rs.size = v.size;
+    rs.index = v.index.data();
+    rs.n_index = (int)v.index.size();
+    rs.array = v.array.data();
+    rs.n_array = (int)v.array.size();
+    rs.cwork = v.cwork.data();
+    rs.n_cwork = (int)v.cwork.size();
+    rs.iwork = v.iwork.data();
+    rs.n_iwork = (int)v.iwork.size();
+    rs.pack_index = v.packIndex.data();
+    rs.n_pack_index = (int)v.packIndex.size();
+    rs.pack_value = v.packValue.data();
+    rs.n_pack_value = (int)v.packValue.size();
+    rs.count = v.count;
+    rs.synthetic_tick = v.synthetic_tick;
+    rs.pack_flag = (unsigned char)v.packFlag;
+    rs.pack_count = v.packCount;
   }
   HVec* get() { return &rs; }
   HVecCall(const HVecCall&) = delete;
@@ -306,6 +329,28 @@ highs_rs::NumericalTrouble highs_rs_ekk_reinvert_on_numerical_trouble(
     double current_pivot_threshold);
 int highs_rs_ekk_choose_price_technique(int price_strategy,
                                         double row_ep_density);
+// HEkkDual: the records of visited bases and bad basis changes
+// (rust/src/simplex/basis_records.rs)
+void* highs_rs_basis_records_new();
+void highs_rs_basis_records_free(void* p);
+void highs_rs_basis_records_copy(void* p, const void* from);
+void highs_rs_visited_basis_clear(void* p);
+void highs_rs_visited_basis_insert(void* p, uint64_t hash);
+bool highs_rs_visited_basis_find(const void* p, uint64_t hash);
+void highs_rs_bad_basis_clear(void* p, int reason);
+void highs_rs_bad_basis_update(void* p, const double* col_aq_array, int n,
+                               double theta_primal, double tolerance);
+int highs_rs_bad_basis_add(void* p, int row_out, int variable_out,
+                           int variable_in, int reason, bool taboo);
+void highs_rs_bad_basis_clear_taboo_flag(void* p);
+bool highs_rs_bad_basis_taboo(const void* p);
+bool highs_rs_bad_basis_find_and_make_taboo(void* p, int row_out,
+                                            int variable_out,
+                                            int variable_in);
+void highs_rs_bad_basis_apply_taboo(void* p, double* values, int n,
+                                    double overwrite_with, int which);
+void highs_rs_bad_basis_unapply_taboo(const void* p, double* values, int n,
+                                      int which);
 }
 
 #endif  // HIGHS_RUST
