@@ -19,6 +19,11 @@
 #include "util/HighsRandom.h"
 
 class HighsLpSolverObject;
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct Ekk;
+}
+#endif
 
 class HEkk {
  public:
@@ -172,6 +177,11 @@ class HEkk {
   HighsDebugStatus debugNlaCheckInvert(
       const std::string message, const HighsInt alt_debug_level = -1) const;
   bool debugNlaScalingOk(const HighsLp& lp) const;
+
+#ifdef HIGHS_RUST
+  // The view of the data for the Rust kernels (simplex/HEkkRust.cpp)
+  highs_rs::Ekk rustView();
+#endif
 
   // Data members
   HighsCallback* callback_;

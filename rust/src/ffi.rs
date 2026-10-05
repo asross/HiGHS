@@ -51,7 +51,7 @@ pub struct CHVec {
 impl CHVec {
     /// # Safety
     /// The pointers must be valid for their lengths and unaliased
-    unsafe fn view<'a>(&self) -> HVec<'a> {
+    pub(crate) unsafe fn view<'a>(&self) -> HVec<'a> {
         HVec {
             size: self.size,
             count: self.count,
@@ -68,7 +68,7 @@ impl CHVec {
     }
 
     /// Copy the scalars back from a view
-    fn store(&mut self, v: &HVec) {
+    pub(crate) fn store(&mut self, v: &HVec) {
         self.count = v.count;
         self.synthetic_tick = v.synthetic_tick;
         self.pack_flag = v.pack_flag as u8;

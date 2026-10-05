@@ -14,7 +14,11 @@ file readers in parallel. IPX, PDLP and QP last.
   same order, so solves are bit-identical: same nodes and LP iterations as C++
   (bench: `cyc.py` compares). Clang contracts `a -= b * c` into a fused
   multiply-add on arm64; use `mul_add` there. Check the C++ disassembly
-  (`objdump -d build/lib/libhighs.dylib`) when unsure.
+  (`objdump -d build/lib/libhighs.dylib`) when unsure: it is per compiled
+  copy, not per source line. A reduction loop `s += a * b` that clang
+  interleaves by 4 runs its main part unfused and its remainder loop fused
+  (see `HVec::norm2`, `compute_dual_for_tableau_column`), and the same
+  source inlined elsewhere may be compiled differently (`norm2_fused`).
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`
@@ -22,6 +26,8 @@ file readers in parallel. IPX, PDLP and QP last.
   loops that clang leaves rolled.
 - **C++ switch.** `HIGHS_RUST` is defined in `HConfig.h`, so every
   translation unit sees the same class layouts.
+- **HEkk's data** is reached through `EkkView` (rust/src/simplex/ekk.rs,
+  see its module comment), filled per call by `HEkk::rustView()`.
 - **Rust owns ported state.** A ported class keeps its C++ header as a thin
   wrapper around an opaque Rust handle until its callers are ported.
 - **Tests:** `cargo test` for each module, and the C++ unit tests

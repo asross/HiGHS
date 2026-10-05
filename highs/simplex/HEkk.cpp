@@ -17,6 +17,7 @@
 #include "parallel/HighsParallel.h"
 #include "simplex/HEkkDual.h"
 #include "simplex/HEkkPrimal.h"
+#include "simplex/HEkkRust.h"
 #include "simplex/HSimplexDebug.h"
 #include "simplex/HSimplexReport.h"
 #include "simplex/SimplexTimer.h"
@@ -1994,6 +1995,12 @@ void HEkk::putBacktrackingBasis(
 
 void HEkk::computePrimalObjectiveValue() {
   analysis_.simplexTimerStart(ComputePrObjClock);
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_compute_primal_objective_value(&view);
+  }
+#else
   info_.primal_objective_value = 0;
   for (HighsInt iRow = 0; iRow < lp_.num_row_; iRow++) {
     HighsInt iVar = basis_.basicIndex_[iRow];
@@ -2011,6 +2018,7 @@ void HEkk::computePrimalObjectiveValue() {
   // Objective value calculation is done using primal values and
   // original costs so offset is vanilla
   info_.primal_objective_value += lp_.offset_;
+#endif
   // Now have primal objective value
   status_.has_primal_objective_value = true;
   analysis_.simplexTimerStop(ComputePrObjClock);
@@ -2018,6 +2026,12 @@ void HEkk::computePrimalObjectiveValue() {
 
 void HEkk::computeDualObjectiveValue(const HighsInt phase) {
   analysis_.simplexTimerStart(ComputeDuObjClock);
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_compute_dual_objective_value(&view, phase);
+  }
+#else
   info_.dual_objective_value = 0;
   const HighsInt num_tot = lp_.num_col_ + lp_.num_row_;
   for (HighsInt iCol = 0; iCol < num_tot; iCol++) {
@@ -2034,6 +2048,7 @@ void HEkk::computeDualObjectiveValue(const HighsInt phase) {
     // sign implied by sense_
     info_.dual_objective_value += ((HighsInt)lp_.sense_) * lp_.offset_;
   }
+#endif
   // Now have dual objective value
   status_.has_dual_objective_value = true;
   analysis_.simplexTimerStop(ComputeDuObjClock);
@@ -2135,8 +2150,16 @@ void HEkk::computeDualSteepestEdgeWeights(const bool initial) {
   HVector row_ep;
   row_ep.setup(num_row);
   assert((HighsInt)dual_edge_weight_.size() >= num_row);
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall v(row_ep);
+    highs_rs_ekk_compute_dual_steepest_edge_weights(&view, v.get());
+  }
+#else
   for (HighsInt iRow = 0; iRow < num_row; iRow++)
     dual_edge_weight_[iRow] = computeDualSteepestEdgeWeight(iRow, row_ep);
+#endif
   if (analysis_.analyse_simplex_time) {
     analysis_.simplexTimerStop(SimplexIzDseWtClock);
     analysis_.simplexTimerStop(DseIzClock);
@@ -2151,6 +2174,12 @@ void HEkk::computeDualSteepestEdgeWeights(const bool initial) {
 
 double HEkk::computeDualSteepestEdgeWeight(const HighsInt iRow,
                                            HVector& row_ep) {
+#ifdef HIGHS_RUST
+  row_ep.next = nullptr;
+  const highs_rs::Ekk view = rustView();
+  highs_rs::HVecCall v(row_ep);
+  return highs_rs_ekk_compute_dual_steepest_edge_weight(&view, iRow, v.get());
+#endif
   row_ep.clear();
   row_ep.count = 1;
   row_ep.index[0] = iRow;
@@ -2243,6 +2272,21 @@ void HEkk::updateDualSteepestEdgeWeights(
   const HighsInt* variable_index = column->index.data();
   const double* column_array = column->array.data();
 
+#ifdef HIGHS_RUST
+  {
+    assert((HighsInt)dual_edge_weight_.size() >= num_row);
+    (void)column_count;
+    (void)variable_index;
+    (void)column_array;
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall c(*const_cast<HVector*>(column));
+    highs_rs_ekk_update_dual_steepest_edge_weights(
+        &view, row_out, variable_in, c.get(), new_pivotal_edge_weight, Kai,
+        dual_steepest_edge_array);
+  }
+  analysis_.simplexTimerStop(DseUpdateWeightClock);
+  return;
+#endif
   const double col_aq_scale = simplex_nla_.variableScaleFactor(variable_in);
   const double col_ap_scale = simplex_nla_.basicColScaleFactor(row_out);
   const double inv_col_ap_scale = 1.0 / col_ap_scale;
@@ -2397,6 +2441,19 @@ void HEkk::updateDualDevexWeights(const HVector* column,
     fflush(stdout);
   }
   assert((HighsInt)dual_edge_weight_.size() >= num_row);
+#ifdef HIGHS_RUST
+  {
+    (void)column_count;
+    (void)variable_index;
+    (void)column_array;
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall c(*const_cast<HVector*>(column));
+    highs_rs_ekk_update_dual_devex_weights(&view, c.get(),
+                                           new_pivotal_edge_weight);
+  }
+  analysis_.simplexTimerStop(DevexUpdateWeightClock);
+  return;
+#endif
   HighsInt to_entry;
   const bool use_row_indices =
       simplex_nla_.sparseLoopStyle(column_count, num_row, to_entry);
@@ -2462,6 +2519,11 @@ std::string HEkk::simplexStrategyToString(
 }
 
 void HEkk::zeroBasicDuals() {
+#ifdef HIGHS_RUST
+  const highs_rs::Ekk view = rustView();
+  highs_rs_ekk_zero_basic_duals(&view);
+  return;
+#endif
   for (HighsInt iRow = 0; iRow < lp_.num_row_; iRow++)
     info_.workDual_[basis_.basicIndex_[iRow]] = 0;
 }
@@ -2475,6 +2537,16 @@ void HEkk::setNonbasicMove() {
   double upper;
   const HighsInt num_tot = lp_.num_col_ + lp_.num_row_;
   basis_.nonbasicMove_.resize(num_tot);
+#ifdef HIGHS_RUST
+  {
+    (void)have_solution;
+    (void)lower;
+    (void)upper;
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_set_nonbasic_move(&view);
+    return;
+  }
+#endif
 
   for (HighsInt iVar = 0; iVar < num_tot; iVar++) {
     if (!basis_.nonbasicFlag_[iVar]) {
@@ -2561,6 +2633,11 @@ void HEkk::allocateWorkAndBaseArrays() {
 }
 
 void HEkk::initialiseLpColBound() {
+#ifdef HIGHS_RUST
+  const highs_rs::Ekk view = rustView();
+  highs_rs_ekk_initialise_lp(&view, 2);
+  return;
+#endif
   for (HighsInt iCol = 0; iCol < lp_.num_col_; iCol++) {
     info_.workLower_[iCol] = lp_.col_lower_[iCol];
     info_.workUpper_[iCol] = lp_.col_upper_[iCol];
@@ -2571,6 +2648,11 @@ void HEkk::initialiseLpColBound() {
 }
 
 void HEkk::initialiseLpRowBound() {
+#ifdef HIGHS_RUST
+  const highs_rs::Ekk view = rustView();
+  highs_rs_ekk_initialise_lp(&view, 3);
+  return;
+#endif
   for (HighsInt iRow = 0; iRow < lp_.num_row_; iRow++) {
     HighsInt iCol = lp_.num_col_ + iRow;
     info_.workLower_[iCol] = -lp_.row_upper_[iRow];
@@ -2583,6 +2665,52 @@ void HEkk::initialiseLpRowBound() {
 
 void HEkk::initialiseCost(const SimplexAlgorithm algorithm,
                           const HighsInt solve_phase, const bool perturb) {
+#ifdef HIGHS_RUST
+  {
+    analysis_.net_num_single_cost_shift = 0;
+    const bool report_cost_perturbation = options_->output_flag;
+    const bool perturbing = algorithm != SimplexAlgorithm::kPrimal &&
+                            perturb &&
+                            info_.dual_simplex_cost_perturbation_multiplier != 0;
+    if (perturbing && report_cost_perturbation)
+      highsLogDev(options_->log_options, HighsLogType::kInfo,
+                  "Cost perturbation for %s\n", lp_.model_name_.c_str());
+    highs_rs::CostPerturbationReport r{};
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_initialise_cost(&view, (int)algorithm, perturb, &r);
+    if (!r.perturbed || !report_cost_perturbation) return;
+    const HighsLogOptions& log_options = options_->log_options;
+    highsLogDev(log_options, HighsLogType::kInfo,
+                "   Initially have %" HIGHSINT_FORMAT
+                " nonzero costs (%3" HIGHSINT_FORMAT "%%)",
+                (HighsInt)r.num_original_nonzero_cost, (HighsInt)r.pct0);
+    if (r.num_original_nonzero_cost) {
+      highsLogDev(log_options, HighsLogType::kInfo,
+                  " with min / average / max = %g / %g / %g\n",
+                  r.min_abs_cost, r.average_abs_cost, r.max_abs_cost);
+    } else {
+      highsLogDev(log_options, HighsLogType::kInfo,
+                  " but perturb as if max cost was 1\n");
+    }
+    if (r.large)
+      highsLogDev(
+          log_options, HighsLogType::kInfo,
+          "   Large so set max_abs_cost = sqrt(sqrt(max_abs_cost)) = %g\n",
+          r.large_max_abs_cost);
+    if (r.small_boxed_rate)
+      highsLogDev(log_options, HighsLogType::kInfo,
+                  "   Small boxedRate (%g) so set max_abs_cost = "
+                  "min(max_abs_cost, 1.0) = "
+                  "%g\n",
+                  r.boxed_rate, r.small_boxed_max_abs_cost);
+    highsLogDev(log_options, HighsLogType::kInfo,
+                "   Perturbation column base = %g\n", cost_perturbation_base_);
+    highsLogDev(log_options, HighsLogType::kInfo,
+                "   Perturbation row    base = %g\n",
+                r.row_cost_perturbation_base);
+    return;
+  }
+#endif
   // Copy the cost
   initialiseLpColCost();
   initialiseLpRowCost();
@@ -2712,6 +2840,15 @@ void HEkk::initialiseCost(const SimplexAlgorithm algorithm,
 
 void HEkk::initialiseBound(const SimplexAlgorithm algorithm,
                            const HighsInt solve_phase, const bool perturb) {
+#ifdef HIGHS_RUST
+  {
+    assert(algorithm == SimplexAlgorithm::kPrimal ||
+           algorithm == SimplexAlgorithm::kDual);
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_initialise_bound(&view, (int)algorithm, solve_phase, perturb);
+    return;
+  }
+#endif
   initialiseLpColBound();
   initialiseLpRowBound();
   info_.bounds_shifted = false;
@@ -2839,6 +2976,11 @@ void HEkk::initialiseBound(const SimplexAlgorithm algorithm,
 }
 
 void HEkk::initialiseLpColCost() {
+#ifdef HIGHS_RUST
+  const highs_rs::Ekk view = rustView();
+  highs_rs_ekk_initialise_lp(&view, 0);
+  return;
+#endif
   double cost_scale_factor = pow(2.0, options_->cost_scale_factor);
   for (HighsInt iCol = 0; iCol < lp_.num_col_; iCol++) {
     info_.workCost_[iCol] =
@@ -2848,6 +2990,11 @@ void HEkk::initialiseLpColCost() {
 }
 
 void HEkk::initialiseLpRowCost() {
+#ifdef HIGHS_RUST
+  const highs_rs::Ekk view = rustView();
+  highs_rs_ekk_initialise_lp(&view, 1);
+  return;
+#endif
   for (HighsInt iCol = lp_.num_col_; iCol < lp_.num_col_ + lp_.num_row_;
        iCol++) {
     info_.workCost_[iCol] = 0;
@@ -2859,6 +3006,13 @@ void HEkk::initialiseNonbasicValueAndMove() {
   // Initialise workValue and nonbasicMove from nonbasicFlag and
   // bounds, except for boxed variables when nonbasicMove is used to
   // set workValue=workLower/workUpper
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_initialise_nonbasic_value_and_move(&view);
+    return;
+  }
+#endif
   const HighsInt num_tot = lp_.num_col_ + lp_.num_row_;
   for (HighsInt iVar = 0; iVar < num_tot; iVar++) {
     if (!basis_.nonbasicFlag_[iVar]) {
@@ -2915,6 +3069,16 @@ void HEkk::initialiseNonbasicValueAndMove() {
 
 void HEkk::pivotColumnFtran(const HighsInt iCol, HVector& col_aq) {
   analysis_.simplexTimerStart(FtranClock);
+#ifdef HIGHS_RUST
+  if (!analysis_.analyse_simplex_summary_data) {
+    col_aq.next = nullptr;
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall v(col_aq);
+    highs_rs_ekk_pivot_column_ftran(&view, iCol, v.get());
+    analysis_.simplexTimerStop(FtranClock);
+    return;
+  }
+#endif
   col_aq.clear();
   col_aq.packFlag = true;
   lp_.a_matrix_.collectAj(col_aq, iCol, 1);
@@ -2933,6 +3097,16 @@ void HEkk::pivotColumnFtran(const HighsInt iCol, HVector& col_aq) {
 
 void HEkk::unitBtran(const HighsInt iRow, HVector& row_ep) {
   analysis_.simplexTimerStart(BtranClock);
+#ifdef HIGHS_RUST
+  if (!analysis_.analyse_simplex_summary_data) {
+    row_ep.next = nullptr;
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall v(row_ep);
+    highs_rs_ekk_unit_btran(&view, iRow, v.get());
+    analysis_.simplexTimerStop(BtranClock);
+    return;
+  }
+#endif
   row_ep.clear();
   row_ep.count = 1;
   row_ep.index[0] = iRow;
@@ -2960,12 +3134,22 @@ void HEkk::fullBtran(HVector& buffer) {
   if (analysis_.analyse_simplex_summary_data)
     analysis_.operationRecordBefore(kSimplexNlaBtranFull, buffer,
                                     info_.dual_col_density);
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall v(buffer);
+    highs_rs_ekk_full_btran(&view, v.get());
+  }
+  if (analysis_.analyse_simplex_summary_data)
+    analysis_.operationRecordAfter(kSimplexNlaBtranFull, buffer);
+#else
   simplex_nla_.btran(buffer, info_.dual_col_density,
                      analysis_.pointer_serial_factor_clocks);
   if (analysis_.analyse_simplex_summary_data)
     analysis_.operationRecordAfter(kSimplexNlaBtranFull, buffer);
   const double local_dual_col_density = (double)buffer.count / lp_.num_row_;
   updateOperationResultDensity(local_dual_col_density, info_.dual_col_density);
+#endif
   analysis_.simplexTimerStop(BtranFullClock);
 }
 
@@ -2973,6 +3157,13 @@ void HEkk::choosePriceTechnique(const HighsInt price_strategy,
                                 const double row_ep_density,
                                 bool& use_col_price,
                                 bool& use_row_price_w_switch) const {
+#ifdef HIGHS_RUST
+  const int technique =
+      highs_rs_ekk_choose_price_technique(price_strategy, row_ep_density);
+  use_col_price = technique & 1;
+  use_row_price_w_switch = technique & 2;
+  return;
+#endif
   // By default switch to column PRICE when pi_p has at least this
   // density
   const double density_for_column_price_switch = 0.75;
@@ -2987,6 +3178,18 @@ void HEkk::choosePriceTechnique(const HighsInt price_strategy,
 void HEkk::tableauRowPrice(const bool quad_precision, const HVector& row_ep,
                            HVector& row_ap, const HighsInt debug_report) {
   analysis_.simplexTimerStart(PriceClock);
+#ifdef HIGHS_RUST
+  if (!quad_precision && debug_report == kDebugReportOff &&
+      !analysis_.analyse_simplex_summary_data) {
+    row_ap.next = nullptr;
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall ep(const_cast<HVector&>(row_ep));
+    highs_rs::HVecCall ap(row_ap);
+    highs_rs_ekk_tableau_row_price(&view, ep.get(), ap.get());
+    analysis_.simplexTimerStop(PriceClock);
+    return;
+  }
+#endif
   const HighsInt solver_num_row = lp_.num_row_;
   const HighsInt solver_num_col = lp_.num_col_;
   const double local_density = 1.0 * row_ep.count / solver_num_row;
@@ -3049,8 +3252,17 @@ void HEkk::fullPrice(const HVector& full_col, HVector& full_row) {
     analysis_.operationRecordBefore(kSimplexNlaPriceFull, full_col,
                                     expected_density);
   }
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall col(const_cast<HVector&>(full_col));
+    highs_rs::HVecCall row(full_row);
+    highs_rs_ekk_full_price(&view, col.get(), row.get());
+  }
+#else
   const bool quad_precision = false;
   lp_.a_matrix_.priceByColumn(quad_precision, full_row, full_col);
+#endif
   if (analysis_.analyse_simplex_summary_data)
     analysis_.operationRecordAfter(kSimplexNlaPriceFull, full_row);
   analysis_.simplexTimerStop(PriceFullClock);
@@ -3062,6 +3274,14 @@ void HEkk::computePrimal() {
   const HighsInt num_col = lp_.num_col_;
   // A buffer for the values of basic variables
   HVector& primal_col = workVector(work_col_, num_row);
+#ifdef HIGHS_RUST
+  (void)num_col;
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall col(primal_col);
+    highs_rs_ekk_compute_primal(&view, col.get());
+  }
+#else
   for (HighsInt i = 0; i < num_col + num_row; i++) {
     if (basis_.nonbasicFlag_[i] && info_.workValue_[i] != 0) {
       lp_.a_matrix_.collectAj(primal_col, i, info_.workValue_[i]);
@@ -3087,6 +3307,7 @@ void HEkk::computePrimal() {
   info_.num_primal_infeasibilities = kHighsIllegalInfeasibilityCount;
   info_.max_primal_infeasibility = kHighsIllegalInfeasibilityMeasure;
   info_.sum_primal_infeasibilities = kHighsIllegalInfeasibilityMeasure;
+#endif
 
   analysis_.simplexTimerStop(ComputePrimalClock);
 }
@@ -3096,6 +3317,15 @@ void HEkk::computeDual() {
   dual_values_valid_ = false;
   // A buffer for the pi vector
   HVector& dual_col = workVector(work_col_, lp_.num_row_);
+#ifdef HIGHS_RUST
+  {
+    HVector& dual_row = workVector(work_row_, lp_.num_col_);
+    const highs_rs::Ekk view = rustView();
+    highs_rs::HVecCall col(dual_col);
+    highs_rs::HVecCall row(dual_row);
+    highs_rs_ekk_compute_dual(&view, col.get(), row.get());
+  }
+#else
   for (HighsInt iRow = 0; iRow < lp_.num_row_; iRow++) {
     const double value = info_.workCost_[basis_.basicIndex_[iRow]] +
                          info_.workShift_[basis_.basicIndex_[iRow]];
@@ -3133,6 +3363,7 @@ void HEkk::computeDual() {
   info_.num_dual_infeasibilities = kHighsIllegalInfeasibilityCount;
   info_.max_dual_infeasibility = kHighsIllegalInfeasibilityMeasure;
   info_.sum_dual_infeasibilities = kHighsIllegalInfeasibilityMeasure;
+#endif
 
   analysis_.simplexTimerStop(ComputeDualClock);
 }
@@ -3141,6 +3372,12 @@ double HEkk::computeDualForTableauColumn(const HighsInt iVar,
                                          const HVector& tableau_column) const {
   const vector<double>& workCost = info_.workCost_;
   const vector<HighsInt>& basicIndex = basis_.basicIndex_;
+#ifdef HIGHS_RUST
+  return highs_rs_ekk_compute_dual_for_tableau_column(
+      workCost.data(), workCost.size(), basicIndex.data(), basicIndex.size(),
+      iVar, tableau_column.count, tableau_column.index.data(),
+      tableau_column.array.data(), tableau_column.array.size());
+#endif
 
   double dual = info_.workCost_[iVar];
   for (HighsInt i = 0; i < tableau_column.count; i++) {
@@ -3154,6 +3391,26 @@ bool HEkk::reinvertOnNumericalTrouble(
     const std::string method_name, double& numerical_trouble_measure,
     const double alpha_from_col, const double alpha_from_row,
     const double numerical_trouble_tolerance) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::NumericalTrouble trouble =
+        highs_rs_ekk_reinvert_on_numerical_trouble(
+            alpha_from_col, alpha_from_row, numerical_trouble_tolerance,
+            info_.update_count, info_.factor_pivot_threshold);
+    numerical_trouble_measure = trouble.measure;
+    debugReportReinvertOnNumericalTrouble(
+        method_name, numerical_trouble_measure, alpha_from_col, alpha_from_row,
+        numerical_trouble_tolerance, trouble.reinvert);
+    if (trouble.new_pivot_threshold) {
+      highsLogUser(options_->log_options, HighsLogType::kWarning,
+                   "   Increasing Markowitz threshold to %g\n",
+                   trouble.new_pivot_threshold);
+      info_.factor_pivot_threshold = trouble.new_pivot_threshold;
+      simplex_nla_.setPivotThreshold(trouble.new_pivot_threshold);
+    }
+    return trouble.reinvert;
+  }
+#endif
   double abs_alpha_from_col = fabs(alpha_from_col);
   double abs_alpha_from_row = fabs(alpha_from_row);
   double min_abs_alpha = min(abs_alpha_from_col, abs_alpha_from_row);
@@ -3201,10 +3458,30 @@ bool HEkk::reinvertOnNumericalTrouble(
 // called from the likes of HDual::updatePivots
 void HEkk::transformForUpdate(HVector* column, HVector* row_ep,
                               const HighsInt variable_in, HighsInt* row_out) {
+#ifdef HIGHS_RUST
+  if (simplex_nla_.scale_ == nullptr) return;
+  const highs_rs::Ekk view = rustView();
+  highs_rs::HVecCall aq(*column);
+  highs_rs::HVecCall ep(*row_ep);
+  highs_rs_ekk_transform_for_update(&view, aq.get(), ep.get(), variable_in,
+                                    *row_out);
+#else
   simplex_nla_.transformForUpdate(column, row_ep, variable_in, *row_out);
+#endif
 }
 
 void HEkk::flipBound(const HighsInt iCol) {
+#ifdef HIGHS_RUST
+  const HighsInt num_tot = lp_.num_col_ + lp_.num_row_;
+  assert((HighsInt)basis_.nonbasicMove_.size() >= num_tot &&
+         (HighsInt)info_.workValue_.size() >= num_tot &&
+         (HighsInt)info_.workLower_.size() >= num_tot &&
+         (HighsInt)info_.workUpper_.size() >= num_tot);
+  highs_rs_ekk_flip_bound(num_tot, basis_.nonbasicMove_.data(),
+                          info_.workValue_.data(), info_.workLower_.data(),
+                          info_.workUpper_.data(), iCol);
+  return;
+#endif
   const int8_t move = basis_.nonbasicMove_[iCol] = -basis_.nonbasicMove_[iCol];
   info_.workValue_[iCol] =
       move == 1 ? info_.workLower_[iCol] : info_.workUpper_[iCol];
@@ -3213,6 +3490,24 @@ void HEkk::flipBound(const HighsInt iCol) {
 void HEkk::updateFactor(HVector* column, HVector* row_ep, HighsInt* iRow,
                         HighsInt* hint) {
   analysis_.simplexTimerStart(UpdateFactorClock);
+#ifdef HIGHS_RUST
+  if (!simplex_nla_.update_.valid_ && !column->next) {
+    simplex_nla_.factor_.refactor_info_.clear();
+    {
+      const highs_rs::Ekk view = rustView();
+      highs_rs::HVecCall aq(*column);
+      highs_rs::HVecCall ep(*row_ep);
+      highs_rs_ekk_update_factor(&view, aq.get(), ep.get(), *iRow, hint);
+    }
+    status_.has_invert = true;
+    analysis_.simplexTimerStop(UpdateFactorClock);
+    if (debugNlaCheckInvert("HEkk::updateFactor",
+                            options_->highs_debug_level - 1) ==
+        HighsDebugStatus::kError)
+      *hint = kRebuildReasonPossiblySingularBasis;
+    return;
+  }
+#endif
   simplex_nla_.update(column, row_ep, iRow, hint);
   // Now have a representation of B^{-1}, but it is not fresh
   status_.has_invert = true;
@@ -3244,6 +3539,18 @@ void HEkk::updatePivots(const HighsInt variable_in, const HighsInt row_out,
                         const HighsInt move_out) {
   dual_values_valid_ = false;
   analysis_.simplexTimerStart(UpdatePivotsClock);
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_update_pivots(&view, variable_in, row_out, move_out);
+    visited_basis_.insert(basis_.hash);
+    status_.has_invert = false;
+    status_.has_fresh_invert = false;
+    status_.has_fresh_rebuild = false;
+    analysis_.simplexTimerStop(UpdatePivotsClock);
+    return;
+  }
+#endif
   HighsInt variable_out = basis_.basicIndex_[row_out];
 
   // update hash value of basis
@@ -3344,7 +3651,15 @@ bool HEkk::isBadBasisChange(const SimplexAlgorithm algorithm,
 void HEkk::updateMatrix(const HighsInt variable_in,
                         const HighsInt variable_out) {
   analysis_.simplexTimerStart(UpdateMatrixClock);
+#ifdef HIGHS_RUST
+  {
+    assert(ar_matrix_.format_ == MatrixFormat::kRowwisePartitioned);
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_update_matrix(&view, variable_in, variable_out);
+  }
+#else
   ar_matrix_.update(variable_in, variable_out, lp_.a_matrix_);
+#endif
   //  assert(ar_matrix_.debugPartitionOk(basis_.nonbasicFlag_.data()));
   analysis_.simplexTimerStop(UpdateMatrixClock);
 }
@@ -3378,6 +3693,14 @@ void HEkk::computeSimplexPrimalInfeasible() {
   // phase 1 and dual phase 2, albeit using different bounds in
   // workLower/Upper.
   analysis_.simplexTimerStart(ComputePrIfsClock);
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_compute_simplex_primal_infeasible(&view);
+  }
+  analysis_.simplexTimerStop(ComputePrIfsClock);
+  return;
+#endif
   const double scaled_primal_feasibility_tolerance =
       options_->primal_feasibility_tolerance;
   HighsInt& num_primal_infeasibility = info_.num_primal_infeasibilities;
@@ -3434,6 +3757,14 @@ void HEkk::computeSimplexPrimalInfeasible() {
 
 void HEkk::computeSimplexDualInfeasible() {
   analysis_.simplexTimerStart(ComputeDuIfsClock);
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    highs_rs_ekk_compute_simplex_dual_infeasible(&view);
+  }
+  analysis_.simplexTimerStop(ComputeDuIfsClock);
+  return;
+#endif
   // Computes num/max/sum of dual infeasibilities in phase 1 and phase
   // 2 according to nonbasicMove. The bounds are only used to identify
   // free variables. Fixed variables are assumed to have
@@ -3480,6 +3811,17 @@ void HEkk::computeSimplexLpDualInfeasible() {
   // primal variable at the bound corresponding to the sign of the
   // dual so should only be used in dual phase 1 - where it's only
   // used for reporting after rebuilds.
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Ekk view = rustView();
+    const highs_rs::Infeasibility infeasibility =
+        highs_rs_ekk_compute_simplex_lp_dual_infeasible(&view);
+    analysis_.num_dual_phase_1_lp_dual_infeasibility = infeasibility.num;
+    analysis_.max_dual_phase_1_lp_dual_infeasibility = infeasibility.max;
+    analysis_.sum_dual_phase_1_lp_dual_infeasibility = infeasibility.sum;
+    return;
+  }
+#endif
   const double scaled_dual_feasibility_tolerance =
       options_->dual_feasibility_tolerance;
   HighsInt& num_dual_infeasibility =
