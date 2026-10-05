@@ -19,6 +19,112 @@
 #include "io/filereaderlp/reader.hpp"
 #include "lp_data/HighsLpUtils.h"
 
+#ifdef HIGHS_RUST
+#include <fstream>
+
+#include "HConfig.h"  // for ZLIB_FOUND
+#ifdef ZLIB_FOUND
+#include "../extern/zstr/zstr.hpp"
+#endif
+
+#include "io/RustFfi.h"
+
+// The LP file reader is in rust/src/io/lp.rs. This mirrors its
+// repr(C) view.
+struct RsLpView {
+  int status;  // FilereaderRetcode
+  bool maximize;
+  int num_row, num_col;
+  double offset;
+  RsSlice<int> a_start, a_index;
+  RsSlice<double> a_value, col_cost, col_lower, col_upper, row_lower,
+      row_upper;
+  RsSlice<HighsVarType> integrality;
+  RsSlice<int> q_start, q_index;
+  RsSlice<double> q_value;
+  RsSlice<char> objective_name;
+  RsSlice<RsSlice<char>> row_names, col_names;
+  RsSlice<RsMessage> messages;
+};
+extern "C" void* highs_rs_lp_read(const char* buf, size_t len, RsLpView* view);
+extern "C" void highs_rs_lp_free(void* handle);
+
+FilereaderRetcode FilereaderLp::readModelFromFile(const HighsOptions& options,
+                                                  const std::string filename,
+                                                  HighsModel& model) {
+  static_assert(sizeof(HighsInt) == 4, "the Rust reader returns 32-bit ints");
+  static_assert(sizeof(HighsVarType) == 1, "the Rust reader returns bytes");
+#ifdef ZLIB_FOUND
+  zstr::ifstream f;
+  try {
+    f.open(filename);
+  } catch (const strict_fstream::Exception& e) {
+  }
+#else
+  std::ifstream f;
+  f.open(filename);
+#endif
+  if (!f.is_open()) {
+    FILE* file = fopen(filename.c_str(), "r");
+    if (file == nullptr) return FilereaderRetcode::kFileNotFound;
+    fclose(file);
+    return FilereaderRetcode::kParserError;
+  }
+  std::string buf;
+  std::vector<char> chunk(1 << 16);
+  while (f.read(chunk.data(), chunk.size()) || f.gcount())
+    buf.append(chunk.data(), f.gcount());
+  f.close();
+
+  RsLpView v;
+  void* handle = highs_rs_lp_read(buf.data(), buf.size(), &v);
+  for (size_t i = 0; i < v.messages.len; i++) {
+    const RsMessage& m = v.messages.ptr[i];
+    const std::string text = m.text.str();
+    if (m.kind < 0)
+      printf("%s", text.c_str());
+    else
+      highsLogUser(options.log_options, HighsLogType(m.kind), "%s",
+                   text.c_str());
+  }
+  const auto result = FilereaderRetcode(v.status);
+  if (result != FilereaderRetcode::kParserError) {
+    HighsLp& lp = model.lp_;
+    HighsHessian& hessian = model.hessian_;
+    lp.num_row_ = v.num_row;
+    lp.num_col_ = v.num_col;
+    lp.sense_ = v.maximize ? ObjSense::kMaximize : ObjSense::kMinimize;
+    lp.offset_ = v.offset;
+    lp.objective_name_ = v.objective_name.str();
+    lp.col_cost_ = v.col_cost.vec();
+    lp.col_lower_ = v.col_lower.vec();
+    lp.col_upper_ = v.col_upper.vec();
+    lp.row_lower_ = v.row_lower.vec();
+    lp.row_upper_ = v.row_upper.vec();
+    lp.integrality_ = v.integrality.vec();
+    lp.row_names_.resize(v.row_names.len);
+    for (size_t i = 0; i < v.row_names.len; i++)
+      lp.row_names_[i] = v.row_names.ptr[i].str();
+    lp.col_names_.resize(v.col_names.len);
+    for (size_t i = 0; i < v.col_names.len; i++)
+      lp.col_names_[i] = v.col_names.ptr[i].str();
+    lp.a_matrix_.format_ = MatrixFormat::kColwise;
+    lp.a_matrix_.start_ = v.a_start.vec();
+    lp.a_matrix_.index_ = v.a_index.vec();
+    lp.a_matrix_.value_ = v.a_value.vec();
+    if (v.q_start.len) {
+      hessian.dim_ = v.num_col;
+      hessian.format_ = HessianFormat::kSquare;
+      hessian.start_ = v.q_start.vec();
+      hessian.index_ = v.q_index.vec();
+      hessian.value_ = v.q_value.vec();
+    }
+    lp.ensureColwise();
+  }
+  highs_rs_lp_free(handle);
+  return result;
+}
+#else
 FilereaderRetcode FilereaderLp::readModelFromFile(const HighsOptions& options,
                                                   const std::string filename,
                                                   HighsModel& model) {
@@ -305,6 +411,7 @@ FilereaderRetcode FilereaderLp::readModelFromFile(const HighsOptions& options,
   lp.ensureColwise();
   return warning_issued ? FilereaderRetcode::kWarning : FilereaderRetcode::kOk;
 }
+#endif
 
 void FilereaderLp::writeToFile(FILE* file, const char* format, ...) {
   va_list argptr;

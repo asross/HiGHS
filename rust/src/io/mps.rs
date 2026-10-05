@@ -24,10 +24,10 @@ pub const LOG_WARNING: i32 = 4;
 pub const LOG_ERROR: i32 = 5;
 
 /// HighsVarType values
-const CONTINUOUS: u8 = 0;
-const INTEGER: u8 = 1;
-const SEMI_CONTINUOUS: u8 = 2;
-const SEMI_INTEGER: u8 = 3;
+pub(super) const CONTINUOUS: u8 = 0;
+pub(super) const INTEGER: u8 = 1;
+pub(super) const SEMI_CONTINUOUS: u8 = 2;
+pub(super) const SEMI_INTEGER: u8 = 3;
 
 const INF: f64 = f64::INFINITY;
 
@@ -205,7 +205,7 @@ fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
 }
 
 /// printf's %g
-fn g(v: f64) -> String {
+pub(super) fn g(v: f64) -> String {
     if v.is_nan() {
         return "nan".into();
     }
@@ -247,7 +247,7 @@ fn get_value(word: &[u8]) -> f64 {
 
 /// Length of the longest prefix of `w` that is a plain decimal number
 /// [+-]digits[.digits][e[+-]digits], or 0.
-fn decimal_prefix(w: &[u8]) -> usize {
+pub(super) fn decimal_prefix(w: &[u8]) -> usize {
     let digits = |mut i: usize| {
         while w.get(i).is_some_and(u8::is_ascii_digit) {
             i += 1;
@@ -1411,15 +1411,15 @@ pub struct Slice<T> {
 }
 
 impl<T> Slice<T> {
-    fn new(s: &[T]) -> Self {
+    pub(super) fn new(s: &[T]) -> Self {
         Slice { ptr: s.as_ptr(), len: s.len() }
     }
 }
 
 #[repr(C)]
 pub struct Message {
-    kind: i32,
-    text: Slice<u8>,
+    pub(super) kind: i32,
+    pub(super) text: Slice<u8>,
 }
 
 /// What C++ copies into the HighsModel; mirrored in FilereaderMps.cpp

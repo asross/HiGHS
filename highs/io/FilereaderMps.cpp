@@ -23,19 +23,10 @@ using free_format_parser::HMpsFF;
 #include "../extern/zstr/zstr.hpp"
 #endif
 
-// The free format MPS parser is in rust/src/io/mps.rs. These mirror its
-// repr(C) types.
-template <typename T>
-struct RsSlice {
-  const T* ptr;
-  size_t len;
-  std::vector<T> vec() const { return std::vector<T>(ptr, ptr + len); }
-  std::string str() const { return std::string(ptr, len); }
-};
-struct RsMessage {
-  int kind;  // HighsLogType, or 0 for highsLogDev
-  RsSlice<char> text;
-};
+#include "io/RustFfi.h"
+
+// The free format MPS parser is in rust/src/io/mps.rs. This mirrors its
+// repr(C) view.
 struct RsMpsView {
   int status;  // FreeFormatParserReturnCode
   bool warning_issued;
