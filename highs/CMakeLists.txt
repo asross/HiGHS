@@ -7,6 +7,11 @@ include(sources)
 if(HIGHS_RUST)
   # BASICLU is ported to Rust (rust/src/basiclu), which exports its C API
   set(basiclu_sources)
+  # IPX is ported to Rust (rust/src/ipx); ipx::LpSolver wraps it
+  set(ipx_sources ipm/ipx/lp_solver_rs.cc)
+  # With fewer sources the unity batches shift; keep the file-scope
+  # `using namespace HighsExtras` of this file out of the hipo batch
+  set_source_files_properties(HighsExternalApi.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 set(sources ${highs_sources} ${cupdlp_sources} ${ipx_sources} ${basiclu_sources} ${hipo_sources} ${factor_highs_sources} ${hipo_util_sources})
 set(headers ${highs_headers} ${cupdlp_headers} ${ipx_headers} ${basiclu_headers} ${hipo_headers} ${factor_highs_headers} ${hipo_util_headers})
