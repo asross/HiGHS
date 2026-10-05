@@ -1,6 +1,8 @@
 //! Rust ports of HiGHS kernels, called from C++ through `extern "C"` shims.
 //! Ported so far: the hyper-sparse triangular solve of HFactor (solveHyper).
 
+pub mod io;
+
 const K_HIGHS_TINY: f64 = 1e-14;
 
 /// A triangular factor in HFactor's layout: column (or row) `i` has entries
