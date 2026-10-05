@@ -126,12 +126,7 @@ class HFactor {
         debug_report_(false),
         basis_matrix_limit_size(0),
         update_method(0),
-        build_timer_(nullptr),
-        nwork(0),
-        u_merit_x(0),
-        // clang-format off
-        u_total_x(0) {};
-  // clang-format on
+        build_timer_(nullptr) {};
 
   /**
    * @brief Copy problem size and pointers of constraint matrix, and set
@@ -375,8 +370,9 @@ class HFactor {
   // Internal timing
   HighsTimer* build_timer_;
 
+#ifndef HIGHS_RUST
   // Working buffer
-  HighsInt nwork;
+  HighsInt nwork = 0;
   vector<HighsInt> iwork;
   vector<double> dwork;
 
@@ -436,8 +432,8 @@ class HFactor {
   vector<HighsInt> u_pivot_index;
   vector<double> u_pivot_value;
 
-  HighsInt u_merit_x;  // Only in PF and MPF
-  HighsInt u_total_x;  // Only in PF and MPF
+  HighsInt u_merit_x = 0;  // Only in PF and MPF
+  HighsInt u_total_x = 0;  // Only in PF and MPF
   vector<HighsInt> u_start;
   vector<HighsInt> u_last_p;
   vector<HighsInt> u_index;
@@ -454,6 +450,18 @@ class HFactor {
   vector<HighsInt> pf_start;
   vector<HighsInt> pf_index;
   vector<double> pf_value;
+#else
+  // The factor's data, owned by Rust (rust/src/factor.rs)
+  struct RustFactor {
+    void* p;
+    RustFactor();
+    RustFactor(RustFactor&& other) noexcept;
+    RustFactor& operator=(RustFactor&& other) noexcept;
+    ~RustFactor();
+  };
+  RustFactor rs_;
+  void setupRust();
+#endif
 
   HVector rhs_;
 
@@ -502,6 +510,7 @@ class HFactor {
   void updateMPF(HVector* aq, HVector* ep, HighsInt iRow, HighsInt* hint);
   void updateAPF(HVector* aq, HVector* ep, HighsInt iRow);
 
+#ifndef HIGHS_RUST
   /**
    * Local in-line functions
    */
@@ -581,6 +590,7 @@ class HFactor {
       row_link_first[-xlast - 2] = xnext;
     if (xnext >= 0) row_link_last[xnext] = xlast;
   }
+#endif
   friend class HSimplexNla;
 };
 

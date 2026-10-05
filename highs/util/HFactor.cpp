@@ -10,7 +10,6 @@
  */
 #include "util/HFactor.h"
 
-#include <algorithm>
 #include <cassert>
 #include <iostream>
 
@@ -32,6 +31,7 @@ using std::make_pair;
 using std::min;
 using std::pair;
 
+#ifndef HIGHS_RUST
 static void solveMatrixT(const HighsInt X_Start, const HighsInt x_end,
                          const HighsInt y_start, const HighsInt y_end,
                          const HighsInt* t_index, const double* t_value,
@@ -59,32 +59,11 @@ static void solveMatrixT(const HighsInt X_Start, const HighsInt x_end,
   }
 }
 
-#ifdef HIGHS_RUST
-extern "C" void highs_rs_solve_hyper(
-    int h_size, const int* lookup, int n_lookup, const int* pivot_index,
-    const double* pivot_value, const int* start, const int* end, int n_pivot,
-    const int* index, const double* value, int n_entry, int* rhs_count,
-    int* rhs_index, double* rhs_array, int n_row, unsigned char* cwork,
-    int n_cwork, int* iwork, int n_iwork, double* synthetic_tick);
-#endif
-
 static void solveHyper(const HighsInt h_size, const HighsInt* h_lookup,
                        const HighsInt* h_pivot_index,
                        const double* h_pivot_value, const HighsInt* h_start,
                        const HighsInt* h_end, const HighsInt* h_index,
-                       const double* h_value, HVector* rhs,
-                       const HighsInt n_lookup, const HighsInt n_pivot,
-                       const HighsInt n_entry) {
-#ifdef HIGHS_RUST
-  static_assert(sizeof(HighsInt) == 4, "the Rust kernels take 32-bit ints");
-  highs_rs_solve_hyper(
-      h_size, h_lookup, n_lookup, h_pivot_index, h_pivot_value, h_start, h_end,
-      n_pivot, h_index, h_value, n_entry, &rhs->count, rhs->index.data(),
-      rhs->array.data(), rhs->size,
-      reinterpret_cast<unsigned char*>(rhs->cwork.data()), rhs->cwork.size(),
-      rhs->iwork.data(), rhs->iwork.size(), &rhs->synthetic_tick);
-  return;
-#endif
+                       const double* h_value, HVector* rhs) {
   HighsInt rhs_count = rhs->count;
   HighsInt* rhs_index = rhs->index.data();
   double* rhs_array = rhs->array.data();
@@ -179,6 +158,8 @@ static void solveHyper(const HighsInt h_size, const HighsInt* h_lookup,
   }
 }
 
+#endif
+
 void HFactor::setup(const HighsSparseMatrix& a_matrix,
                     std::vector<HighsInt>& basic_index,
                     const double pivot_threshold, const double pivot_tolerance,
@@ -261,6 +242,10 @@ void HFactor::setupGeneral(
 
   use_original_HFactor_logic = use_original_HFactor_logic_;
   update_method = update_method_;
+
+#ifdef HIGHS_RUST
+  setupRust();
+#else
 
   // Allocate for working buffer
   iwork.reserve(num_row * 2);
@@ -355,6 +340,7 @@ void HFactor::setupGeneral(
   pf_start.reserve(kPFVectors + 1);
   pf_index.reserve(basis_matrix_limit_size * kPFEntriesMultiplier);
   pf_value.reserve(basis_matrix_limit_size * kPFEntriesMultiplier);
+#endif
 
   // Set up the local HVector for use when RHS is
   // std::vector<double>.
@@ -375,6 +361,8 @@ void HFactor::setupMatrix(const HighsSparseMatrix* a_matrix) {
               a_matrix->value_.data());
 }
 
+// Implemented in HFactorRust.cpp when the factor is ported to Rust
+#ifndef HIGHS_RUST
 HighsInt HFactor::build(HighsTimerClock* factor_timer_clock_pointer) {
   // Set up a timer to prevent build running longer than time_limit_,
   // which is kHighsInf by default, and only set to a finite value in
@@ -494,6 +482,8 @@ void HFactor::ftranCall(HVector& vector, const double expected_density,
   factor_timer.stop(FactorFtran, factor_timer_clock_pointer);
 }
 
+#endif
+
 void HFactor::ftranCall(std::vector<double>& vector,
                         HighsTimerClock* factor_timer_clock_pointer) {
   FactorTimer factor_timer;
@@ -510,6 +500,7 @@ void HFactor::ftranCall(std::vector<double>& vector,
   factor_timer.stop(FactorFtran, factor_timer_clock_pointer);
 }
 
+#ifndef HIGHS_RUST
 void HFactor::btranCall(HVector& vector, const double expected_density,
                         HighsTimerClock* factor_timer_clock_pointer) const {
   const bool use_indices = vector.count >= 0;
@@ -521,6 +512,8 @@ void HFactor::btranCall(HVector& vector, const double expected_density,
   if (use_indices) vector.reIndex();
   factor_timer.stop(FactorBtran, factor_timer_clock_pointer);
 }
+
+#endif
 
 void HFactor::btranCall(std::vector<double>& vector,
                         HighsTimerClock* factor_timer_clock_pointer) {
@@ -535,6 +528,7 @@ void HFactor::btranCall(std::vector<double>& vector,
   vector = std::move(this->rhs_.array);
 }
 
+#ifndef HIGHS_RUST
 void HFactor::update(HVector* aq, HVector* ep, HighsInt* iRow, HighsInt* hint) {
   // Updating implies a change of basis. Since the refactorizaion info
   // no longer corresponds to the current basis, it must be
@@ -552,6 +546,8 @@ void HFactor::update(HVector* aq, HVector* ep, HighsInt* iRow, HighsInt* hint) {
   if (update_method == kUpdateMethodApf) updateAPF(aq, ep, *iRow);
 }
 
+#endif
+
 bool HFactor::setPivotThreshold(const double new_pivot_threshold) {
   if (new_pivot_threshold < kMinPivotThreshold) return false;
   if (new_pivot_threshold > kMaxPivotThreshold) return false;
@@ -565,6 +561,7 @@ void HFactor::setTimeLimit(const double time_limit) {
   this->time_limit_ = time_limit;
 }
 
+#ifndef HIGHS_RUST
 void HFactor::luClear() {
   l_start.clear();
   l_start.push_back(0);
@@ -1599,10 +1596,7 @@ void HFactor::ftranL(HVector& rhs, const double expected_density,
     const HighsInt* l_index = this->l_index.data();
     const double* l_value = this->l_value.data();
     solveHyper(num_row, l_pivot_lookup.data(), l_pivot_index.data(), 0,
-               l_start.data(), &l_start[1], &l_index[0], &l_value[0], &rhs,
-               l_pivot_lookup.size(),
-               std::min(l_pivot_index.size(), l_start.size() - 1),
-               this->l_index.size());
+               l_start.data(), &l_start[1], &l_index[0], &l_value[0], &rhs);
     factor_timer.stop(FactorFtranLowerHyper, factor_timer_clock_pointer);
   }
   factor_timer.stop(FactorFtranLower, factor_timer_clock_pointer);
@@ -1651,10 +1645,7 @@ void HFactor::btranL(HVector& rhs, const double expected_density,
     const HighsInt* lr_index = this->lr_index.data();
     const double* lr_value = this->lr_value.data();
     solveHyper(num_row, l_pivot_lookup.data(), l_pivot_index.data(), 0,
-               lr_start.data(), &lr_start[1], &lr_index[0], &lr_value[0], &rhs,
-               l_pivot_lookup.size(),
-               std::min(l_pivot_index.size(), lr_start.size() - 1),
-               this->lr_index.size());
+               lr_start.data(), &lr_start[1], &lr_index[0], &lr_value[0], &rhs);
     factor_timer.stop(FactorBtranLowerHyper, factor_timer_clock_pointer);
   }
 
@@ -1771,10 +1762,7 @@ void HFactor::ftranU(HVector& rhs, const double expected_density,
     const double* u_value = this->u_value.data();
     solveHyper(num_row, u_pivot_lookup.data(), u_pivot_index.data(),
                u_pivot_value.data(), u_start.data(), u_last_p.data(),
-               &u_index[0], &u_value[0], &rhs, u_pivot_lookup.size(),
-               std::min({u_pivot_index.size(), u_pivot_value.size(),
-                         u_start.size(), u_last_p.size()}),
-               this->u_index.size());
+               &u_index[0], &u_value[0], &rhs);
     factor_timer.stop(use_clock, factor_timer_clock_pointer);
   }
   if (update_method == kUpdateMethodPf) {
@@ -1850,10 +1838,7 @@ void HFactor::btranU(HVector& rhs, const double expected_density,
     factor_timer.start(FactorBtranUpperHyper, factor_timer_clock_pointer);
     solveHyper(num_row, u_pivot_lookup.data(), u_pivot_index.data(),
                u_pivot_value.data(), &ur_start[0], ur_lastp.data(),
-               &ur_index[0], &ur_value[0], &rhs, u_pivot_lookup.size(),
-               std::min({u_pivot_index.size(), u_pivot_value.size(),
-                         ur_start.size(), ur_lastp.size()}),
-               ur_index.size());
+               &ur_index[0], &ur_value[0], &rhs);
     factor_timer.stop(FactorBtranUpperHyper, factor_timer_clock_pointer);
   }
 
@@ -2599,6 +2584,8 @@ void HFactor::setInvert(const InvertibleRepresentation& invert) {
   this->pf_pivot_index = invert.pf_pivot_index;
   this->pf_pivot_value = invert.pf_pivot_value;
 }
+
+#endif  // HIGHS_RUST
 
 void InvertibleRepresentation::clear() {
   this->l_pivot_index.clear();

@@ -27,6 +27,7 @@ void RefactorInfo::clear() {
   this->pivot_type.clear();
 }
 
+#ifndef HIGHS_RUST
 HighsInt HFactor::rebuild(HighsTimerClock* factor_timer_clock_pointer) {
   const bool report_lu = false;
   // Check that the refactorization information should be used
@@ -302,3 +303,4 @@ HighsInt HFactor::rebuild(HighsTimerClock* factor_timer_clock_pointer) {
   buildFinish();
   return 0;
 }
+#endif  // HIGHS_RUST

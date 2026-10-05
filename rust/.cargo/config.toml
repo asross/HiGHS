@@ -1,0 +1,5 @@
+[build]
+# No runtime loop unrolling: LLVM unrolls the loops over factor columns
+# 6-fold behind a division by 6 for the trip count, which costs more than it
+# saves on short columns (clang leaves the C++ loops rolled)
+rustflags = ["-C", "llvm-args=-unroll-runtime=false"]

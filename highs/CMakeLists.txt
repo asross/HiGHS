@@ -496,10 +496,12 @@ if(HIGHS_RUST)
     OUTPUT ${HIGHS_RUST_LIB}
     COMMAND ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
             --target-dir ${CMAKE_BINARY_DIR}/rust
+    # So that cargo reads rust/.cargo/config.toml
+    WORKING_DIRECTORY ${HIGHS_RUST_DIR}
     DEPENDS ${highs_rust_sources} ${HIGHS_RUST_DIR}/Cargo.toml
+            ${HIGHS_RUST_DIR}/.cargo/config.toml
     COMMENT "Building the Rust kernels")
   add_custom_target(highs_rs DEPENDS ${HIGHS_RUST_LIB})
   add_dependencies(${highs_rust_target} highs_rs)
-  target_compile_definitions(${highs_rust_target} PRIVATE HIGHS_RUST)
   target_link_libraries(${highs_rust_target} ${highs_rust_link} ${HIGHS_RUST_LIB})
 endif()

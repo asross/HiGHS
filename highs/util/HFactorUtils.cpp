@@ -15,6 +15,7 @@ void HFactor::invalidAMatrixAction() {
   refactor_info_.clear();
 }
 
+#ifndef HIGHS_RUST
 void HFactor::reportLu(const HighsInt l_u_or_both, const bool full) const {
   if (l_u_or_both < kReportLuJustL || l_u_or_both > kReportLuBoth) return;
   if (l_u_or_both & 1) {
@@ -120,3 +121,4 @@ void HFactor::reportAsm() const {
     }
   }
 }
+#endif  // HIGHS_RUST

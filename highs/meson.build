@@ -335,6 +335,7 @@ _srcs = [
     'util/HFactorDebug.cpp',
     'util/HFactorExtend.cpp',
     'util/HFactorRefactor.cpp',
+    'util/HFactorRust.cpp',
     'util/HFactorUtils.cpp',
     'util/HSet.cpp',
     'util/HVectorBase.cpp',
