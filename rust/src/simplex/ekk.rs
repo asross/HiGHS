@@ -30,9 +30,10 @@
 //!   So a view must be rebuilt after anything that may resize them.
 //! - Scalars that a kernel writes, or that change between kernel calls of
 //!   one solve, are pointers (`&mut`); options are values.
-//! - Still C++-owned and touched only on the C++ side of each call:
-//!   visited_basis_ (a HighsHashTable), status_ flags, analysis_ (timers,
-//!   operation records), logging, bad_basis_change_, and the
+//! - visited_basis_ and bad_basis_change_ are Rust-owned
+//!   (basis_records.rs). Still C++-owned and touched only on the C++ side
+//!   of each call:
+//!   status_ flags, analysis_ (timers, operation records), logging, and the
 //!   ProductFormUpdate of simplex_nla_ (so updateFactor stays C++).
 //!   HVectors other than HEkk's arrays come per call as `CHVec`s, sized by
 //!   C++.

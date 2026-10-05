@@ -37,3 +37,15 @@ file readers in parallel. IPX, PDLP and QP last.
 
 Build: `cmake -B build-rust -DCMAKE_BUILD_TYPE=Release -DHIGHS_RUST=ON &&
 cmake --build build-rust -j8`.
+
+## The dual simplex driver
+
+HEkkDual::solve for the serial strategy runs in Rust (simplex/dual.rs)
+when no simplex analysis, timing or debugging is asked for
+(HEkkDual::rustEligible); SIP and PAMI stay C++. What it still calls in
+C++ is listed in the `DualCallbacks` of dual.rs: INVERT with backtracking,
+the primal clean-up, the infeasibility proof and dual ray, the quad
+precision refinement of a pivotal row, and logging/reports. In the common
+case an iteration makes no call into C++. HEkkDual.cpp is compiled in a
+unity build, so clang inlines e.g. HVector::norm2 into chooseRow
+contracted: check each compiled copy.
