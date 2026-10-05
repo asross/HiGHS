@@ -21,6 +21,8 @@
 
 #include "util/HVector.h"
 
+struct HighsSimplexStatus;
+
 namespace highs_rs {
 
 // Mirror of CSlice in rust/src/simplex/ekk.rs
@@ -186,6 +188,25 @@ struct Ekk {
   Slice<const HighsInt> factor_a_start;
   Slice<const HighsInt> factor_a_index;
   Slice<const double> factor_a_value;
+  // HEkkPrimal
+  HighsSimplexStatus* status;
+  HighsInt* iteration_count;
+  double* updated_primal_objective_value;
+  bool* allow_bound_perturbation;
+  bool* backtracking;
+  HighsInt* primal_phase1_iteration_count;
+  HighsInt* primal_phase2_iteration_count;
+  HighsInt* primal_bound_swap;
+  double* col_basic_feasibility_change_density;
+  double* row_basic_feasibility_change_density;
+  double* col_steepest_edge_density;
+  double primal_simplex_phase1_cost_perturbation_multiplier;
+  int simplex_primal_edge_weight_strategy;
+  int simplex_iteration_limit;
+  // Whether HEkk::bailout() has more to check than the iteration limit
+  bool bailout_in_cpp;
+  // Whether HighsSimplexAnalysis::iterationReport() reports
+  bool iteration_report;
 };
 
 // Mirrors of the results of some kernels
@@ -225,8 +246,7 @@ void highs_rs_ekk_compute_dual(const highs_rs::Ekk* ekk,
                                highs_rs::HVec* dual_col,
                                highs_rs::HVec* dual_row);
 void highs_rs_ekk_full_btran(const highs_rs::Ekk* ekk, highs_rs::HVec* buffer);
-void highs_rs_ekk_full_price(const highs_rs::Ekk* ekk,
-                             highs_rs::HVec* full_col,
+void highs_rs_ekk_full_price(const highs_rs::Ekk* ekk, highs_rs::HVec* full_col,
                              highs_rs::HVec* full_row);
 void highs_rs_ekk_unit_btran(const highs_rs::Ekk* ekk, int i_row,
                              highs_rs::HVec* row_ep);

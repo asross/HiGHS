@@ -20,6 +20,8 @@
 
 static_assert(sizeof(HighsInt) == 4, "the Rust HEkk kernels take 32-bit ints");
 static_assert(sizeof(bool) == 1, "Rust bools are bytes");
+static_assert(sizeof(HighsSimplexStatus) == 13,
+              "HighsSimplexStatus is mirrored by SimplexStatus in ekk.rs");
 
 highs_rs::Ekk HEkk::rustView() {
   using highs_rs::slice;
@@ -109,6 +111,30 @@ highs_rs::Ekk HEkk::rustView() {
   v.factor_a_start = {factor.a_start, has_a ? factor.num_col + 1 : 0};
   v.factor_a_index = {factor.a_index, a_nnz};
   v.factor_a_value = {factor.a_value, a_nnz};
+  // HEkkPrimal
+  v.status = &status_;
+  v.iteration_count = &iteration_count_;
+  v.updated_primal_objective_value = &info_.updated_primal_objective_value;
+  v.allow_bound_perturbation = &info_.allow_bound_perturbation;
+  v.backtracking = &info_.backtracking_;
+  v.primal_phase1_iteration_count = &info_.primal_phase1_iteration_count;
+  v.primal_phase2_iteration_count = &info_.primal_phase2_iteration_count;
+  v.primal_bound_swap = &info_.primal_bound_swap;
+  v.col_basic_feasibility_change_density =
+      &info_.col_basic_feasibility_change_density;
+  v.row_basic_feasibility_change_density =
+      &info_.row_basic_feasibility_change_density;
+  v.col_steepest_edge_density = &info_.col_steepest_edge_density;
+  v.primal_simplex_phase1_cost_perturbation_multiplier =
+      info_.primal_simplex_phase1_cost_perturbation_multiplier;
+  v.simplex_primal_edge_weight_strategy =
+      options_->simplex_primal_edge_weight_strategy;
+  v.simplex_iteration_limit = options_->simplex_iteration_limit;
+  v.bailout_in_cpp = options_->time_limit < kHighsInf ||
+                     (callback_ && callback_->user_callback &&
+                      callback_->active[kCallbackSimplexInterrupt]);
+  v.iteration_report =
+      *options_->log_options.log_dev_level >= (HighsInt)kIterationReportLogType;
   return v;
 }
 

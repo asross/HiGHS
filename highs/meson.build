@@ -323,6 +323,7 @@ _srcs = [
     'simplex/HEkkDualRowRust.cpp',
     'simplex/HEkkInterface.cpp',
     'simplex/HEkkPrimal.cpp',
+    'simplex/HEkkPrimalRust.cpp',
     'simplex/HEkkRust.cpp',
     'simplex/HSimplex.cpp',
     'simplex/HSimplexDebug.cpp',

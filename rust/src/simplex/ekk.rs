@@ -349,6 +349,23 @@ pub struct CEkk {
     factor_a_start: CSlice<i32>,
     factor_a_index: CSlice<i32>,
     factor_a_value: CSlice<f64>,
+    // HEkkPrimal
+    status: *mut SimplexStatus,
+    iteration_count: *mut i32,
+    updated_primal_objective_value: *mut f64,
+    allow_bound_perturbation: *mut bool,
+    backtracking: *mut bool,
+    primal_phase1_iteration_count: *mut i32,
+    primal_phase2_iteration_count: *mut i32,
+    primal_bound_swap: *mut i32,
+    col_basic_feasibility_change_density: *mut f64,
+    row_basic_feasibility_change_density: *mut f64,
+    col_steepest_edge_density: *mut f64,
+    primal_simplex_phase1_cost_perturbation_multiplier: f64,
+    simplex_primal_edge_weight_strategy: i32,
+    simplex_iteration_limit: i32,
+    bailout_in_cpp: bool,
+    iteration_report: bool,
 }
 
 /// Column-wise matrix (lp_.a_matrix_)
@@ -467,6 +484,44 @@ pub struct EkkView<'a> {
     pub total_synthetic_tick: &'a mut f64,
     pub factor: &'a mut HFactor,
     pub factor_a: AMatrix<'a>,
+    // HEkkPrimal
+    pub status: &'a mut SimplexStatus,
+    pub iteration_count: &'a mut i32,
+    pub updated_primal_objective_value: &'a mut f64,
+    pub allow_bound_perturbation: &'a mut bool,
+    pub backtracking: &'a mut bool,
+    pub primal_phase1_iteration_count: &'a mut i32,
+    pub primal_phase2_iteration_count: &'a mut i32,
+    pub primal_bound_swap: &'a mut i32,
+    pub col_basic_feasibility_change_density: &'a mut f64,
+    pub row_basic_feasibility_change_density: &'a mut f64,
+    pub col_steepest_edge_density: &'a mut f64,
+    pub primal_simplex_phase1_cost_perturbation_multiplier: f64,
+    pub simplex_primal_edge_weight_strategy: i32,
+    pub simplex_iteration_limit: i32,
+    /// Whether HEkk::bailout() has more to check than the iteration limit
+    /// (a time limit or a user interrupt callback)
+    pub bailout_in_cpp: bool,
+    /// Whether HighsSimplexAnalysis::iterationReport() reports
+    pub iteration_report: bool,
+}
+
+/// HighsSimplexStatus (simplex/SimplexStruct.h)
+#[repr(C)]
+pub struct SimplexStatus {
+    pub initialised_for_new_lp: bool,
+    pub is_dualized: bool,
+    pub is_permuted: bool,
+    pub initialised_for_solve: bool,
+    pub has_basis: bool,
+    pub has_ar_matrix: bool,
+    pub has_nla: bool,
+    pub has_dual_steepest_edge_weights: bool,
+    pub has_invert: bool,
+    pub has_fresh_invert: bool,
+    pub has_fresh_rebuild: bool,
+    pub has_dual_objective_value: bool,
+    pub has_primal_objective_value: bool,
 }
 
 impl CEkk {
@@ -561,6 +616,23 @@ impl CEkk {
                 index: self.factor_a_index.get(),
                 value: self.factor_a_value.get(),
             },
+            status: &mut *self.status,
+            iteration_count: &mut *self.iteration_count,
+            updated_primal_objective_value: &mut *self.updated_primal_objective_value,
+            allow_bound_perturbation: &mut *self.allow_bound_perturbation,
+            backtracking: &mut *self.backtracking,
+            primal_phase1_iteration_count: &mut *self.primal_phase1_iteration_count,
+            primal_phase2_iteration_count: &mut *self.primal_phase2_iteration_count,
+            primal_bound_swap: &mut *self.primal_bound_swap,
+            col_basic_feasibility_change_density: &mut *self.col_basic_feasibility_change_density,
+            row_basic_feasibility_change_density: &mut *self.row_basic_feasibility_change_density,
+            col_steepest_edge_density: &mut *self.col_steepest_edge_density,
+            primal_simplex_phase1_cost_perturbation_multiplier: self
+                .primal_simplex_phase1_cost_perturbation_multiplier,
+            simplex_primal_edge_weight_strategy: self.simplex_primal_edge_weight_strategy,
+            simplex_iteration_limit: self.simplex_iteration_limit,
+            bailout_in_cpp: self.bailout_in_cpp,
+            iteration_report: self.iteration_report,
         }
     }
 }
@@ -691,7 +763,7 @@ impl EkkView<'_> {
     }
 
     /// HighsSparseMatrix::priceByColumn of lp_.a_matrix_ (double precision)
-    fn price_by_column(&self, column: &HVec, result: &mut HVec) {
+    pub(crate) fn price_by_column(&self, column: &HVec, result: &mut HVec) {
         result.count =
             matrix::price_by_column(self.a.start, self.a.index, self.a.value, column.array, result.array, result.index)
                 as i32;
@@ -699,7 +771,7 @@ impl EkkView<'_> {
 
     /// HighsSparseMatrix::priceByRowWithSwitch of ar_matrix_ (double
     /// precision)
-    fn price_by_row_with_switch(
+    pub(crate) fn price_by_row_with_switch(
         &self,
         column: &HVec,
         result: &mut HVec,

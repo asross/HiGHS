@@ -18,6 +18,10 @@
 using std::min;
 
 HighsStatus HEkkPrimal::solve(const bool pass_force_phase2) {
+#ifdef HIGHS_RUST
+  if (useRust()) return solveRust(pass_force_phase2);
+  initialiseInstance();
+#endif
   ekk_instance_.clearFreshValues();
   // Initialise control data for a particular solve
   initialiseSolve();
@@ -277,54 +281,62 @@ HighsStatus HEkkPrimal::solve(const bool pass_force_phase2) {
     ekk_instance_.model_status_ = HighsModelStatus::kOptimal;
 
   if (solve_phase == kSolvePhaseOptimalCleanup) {
-    highsLogDev(options.log_options, HighsLogType::kInfo,
-                "HEkkPrimal:: Using dual simplex to try to clean up num / "
-                "max / sum = %" HIGHSINT_FORMAT
-                " / %g / %g primal infeasibilities\n",
-                info.num_primal_infeasibilities, info.max_primal_infeasibility,
-                info.sum_primal_infeasibilities);
-    ekk_instance_.computePrimalObjectiveValue();
-    // Use dual to clean up. This almost always yields optimality,
-    // and shouldn't yield infeasibility - since the current point
-    // is dual feasible - but can yield
-    // unboundedness. Time/iteration limit return is, of course,
-    // possible, as are solver error
-    HighsStatus return_status = HighsStatus::kOk;
-    // Switch off any bound perturbation
-    double save_dual_simplex_cost_perturbation_multiplier =
-        info.dual_simplex_cost_perturbation_multiplier;
-    info.dual_simplex_cost_perturbation_multiplier = 0;
-    HighsInt simplex_strategy = info.simplex_strategy;
-    info.simplex_strategy = kSimplexStrategyDualPlain;
-    HEkkDual dual_solver(ekk_instance_);
-    HighsStatus call_status = dual_solver.solve(true);
-    // Restore any bound perturbation
-    info.dual_simplex_cost_perturbation_multiplier =
-        save_dual_simplex_cost_perturbation_multiplier;
-    info.simplex_strategy = simplex_strategy;
-    assert(ekk_instance_.called_return_from_solve_);
-    return_status = interpretCallStatus(options.log_options, call_status,
-                                        return_status, "HEkkDual::solve");
-    // Reset called_return_from_solve_ to be false, since it's
-    // called for this solve
-    ekk_instance_.called_return_from_solve_ = false;
+    const HighsStatus return_status = cleanupWithDual();
     if (return_status != HighsStatus::kOk)
       return ekk_instance_.returnFromSolve(return_status);
-    if (ekk_instance_.model_status_ == HighsModelStatus::kOptimal &&
-        info.num_primal_infeasibilities + info.num_dual_infeasibilities)
-      highsLogDev(options.log_options, HighsLogType::kWarning,
-                  "HEkkPrimal:: Dual simplex clean up yields  optimality, but "
-                  "with %" HIGHSINT_FORMAT
-                  " (max %g) primal infeasibilities and %" HIGHSINT_FORMAT
-                  " (max %g) dual infeasibilities\n",
-                  info.num_primal_infeasibilities,
-                  info.max_primal_infeasibility, info.num_dual_infeasibilities,
-                  info.max_dual_infeasibility);
   }
   if (ekk_instance_.debugOkForSolve(algorithm, solve_phase) ==
       HighsDebugStatus::kLogicalError)
     return ekk_instance_.returnFromSolve(HighsStatus::kError);
   return ekk_instance_.returnFromSolve(HighsStatus::kOk);
+}
+
+HighsStatus HEkkPrimal::cleanupWithDual() {
+  HighsOptions& options = *ekk_instance_.options_;
+  HighsSimplexInfo& info = ekk_instance_.info_;
+
+  highsLogDev(options.log_options, HighsLogType::kInfo,
+              "HEkkPrimal:: Using dual simplex to try to clean up num / "
+              "max / sum = %" HIGHSINT_FORMAT
+              " / %g / %g primal infeasibilities\n",
+              info.num_primal_infeasibilities, info.max_primal_infeasibility,
+              info.sum_primal_infeasibilities);
+  ekk_instance_.computePrimalObjectiveValue();
+  // Use dual to clean up. This almost always yields optimality,
+  // and shouldn't yield infeasibility - since the current point
+  // is dual feasible - but can yield
+  // unboundedness. Time/iteration limit return is, of course,
+  // possible, as are solver error
+  HighsStatus return_status = HighsStatus::kOk;
+  // Switch off any bound perturbation
+  double save_dual_simplex_cost_perturbation_multiplier =
+      info.dual_simplex_cost_perturbation_multiplier;
+  info.dual_simplex_cost_perturbation_multiplier = 0;
+  HighsInt simplex_strategy = info.simplex_strategy;
+  info.simplex_strategy = kSimplexStrategyDualPlain;
+  HEkkDual dual_solver(ekk_instance_);
+  HighsStatus call_status = dual_solver.solve(true);
+  // Restore any bound perturbation
+  info.dual_simplex_cost_perturbation_multiplier =
+      save_dual_simplex_cost_perturbation_multiplier;
+  info.simplex_strategy = simplex_strategy;
+  assert(ekk_instance_.called_return_from_solve_);
+  return_status = interpretCallStatus(options.log_options, call_status,
+                                      return_status, "HEkkDual::solve");
+  // Reset called_return_from_solve_ to be false, since it's
+  // called for this solve
+  ekk_instance_.called_return_from_solve_ = false;
+  if (return_status != HighsStatus::kOk) return return_status;
+  if (ekk_instance_.model_status_ == HighsModelStatus::kOptimal &&
+      info.num_primal_infeasibilities + info.num_dual_infeasibilities)
+    highsLogDev(options.log_options, HighsLogType::kWarning,
+                "HEkkPrimal:: Dual simplex clean up yields  optimality, but "
+                "with %" HIGHSINT_FORMAT
+                " (max %g) primal infeasibilities and %" HIGHSINT_FORMAT
+                " (max %g) dual infeasibilities\n",
+                info.num_primal_infeasibilities, info.max_primal_infeasibility,
+                info.num_dual_infeasibilities, info.max_dual_infeasibility);
+  return HighsStatus::kOk;
 }
 
 void HEkkPrimal::initialiseInstance() {
