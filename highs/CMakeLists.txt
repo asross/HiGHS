@@ -4,6 +4,10 @@ endif()
 
 # Define library.
 include(sources)
+if(HIGHS_RUST)
+  # BASICLU is ported to Rust (rust/src/basiclu), which exports its C API
+  set(basiclu_sources)
+endif()
 set(sources ${highs_sources} ${cupdlp_sources} ${ipx_sources} ${basiclu_sources} ${hipo_sources} ${factor_highs_sources} ${hipo_util_sources})
 set(headers ${highs_headers} ${cupdlp_headers} ${ipx_headers} ${basiclu_headers} ${hipo_headers} ${factor_highs_headers} ${hipo_util_headers})
 

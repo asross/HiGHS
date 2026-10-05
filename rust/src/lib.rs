@@ -9,6 +9,7 @@ pub mod matrix;
 pub mod simplex;
 pub mod util;
 
+pub mod basiclu;
 pub mod factor;
 mod ffi;
 pub mod hvector;
