@@ -195,7 +195,21 @@ class HEkk {
   HighsSimplexInfo info_;
   HighsModelStatus model_status_;
   SimplexBasis basis_;
+#ifdef HIGHS_RUST
+  // The records of visited bases and bad basis changes, owned by Rust
+  // (rust/src/simplex/basis_records.rs) so that the dual simplex
+  // iterations in Rust reach them directly
+  struct RustBasisRecords {
+    void* p;
+    RustBasisRecords();
+    RustBasisRecords(const RustBasisRecords& other);
+    RustBasisRecords& operator=(const RustBasisRecords& other);
+    ~RustBasisRecords();
+  };
+  RustBasisRecords basis_records_;
+#else
   HighsHashTable<uint64_t> visited_basis_;
+#endif
   HighsRandom random_;
   std::vector<double> dual_edge_weight_;
   std::vector<double> scattered_dual_edge_weight_;
@@ -312,7 +326,9 @@ class HEkk {
   bool debug_dual_feasible;
   double debug_max_relative_dual_steepest_edge_weight_error;
 
+#ifndef HIGHS_RUST
   std::vector<HighsSimplexBadBasisChangeRecord> bad_basis_change_;
+#endif
   std::vector<double> primal_phase1_dual_;
 
   HighsSimplexStats simplex_stats_;

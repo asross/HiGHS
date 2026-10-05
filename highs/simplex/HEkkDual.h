@@ -31,6 +31,12 @@ const HighsInt kHighsSlicedLimit = kSimplexConcurrencyLimit;
 /**
  * @brief Dual simplex solver for HiGHS
  */
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct HVecCall;
+}
+#endif
+
 class HEkkDual {
  public:
   HEkkDual(HEkk& simplex)
@@ -369,6 +375,17 @@ class HEkkDual {
 
   bool isBadBasisChange();
   void assessPossiblyDualUnbounded();
+
+#ifdef HIGHS_RUST
+  // The Rust driver (rust/src/simplex/dual.rs) for the serial dual
+  // simplex, used when no simplex analysis, timing or debugging is asked
+  // for; its C++ callbacks are in HEkkDualRust.cpp
+  bool rustEligible() const;
+  HighsStatus solveRust(const bool force_phase2);
+  struct RustGlue;
+  highs_rs::HVecCall* rs_row_ep_ = nullptr;
+  highs_rs::HVecCall* rs_row_ap_ = nullptr;
+#endif
 
   // Devex scalars
   HighsInt num_devex_iterations =
