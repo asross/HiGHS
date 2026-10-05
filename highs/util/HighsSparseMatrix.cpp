@@ -1411,12 +1411,36 @@ bool HighsSparseMatrix::debugPartitionOk(const int8_t* in_partition) const {
   return ok;
 }
 
+#ifdef HIGHS_RUST
+extern "C" {
+int highs_rs_price_by_column(int num_col, const int* start, const int* index,
+                             const double* value, int num_row,
+                             const double* column, double* result,
+                             int* result_index);
+int highs_rs_price_by_row(int num_row, int num_col, const int* start,
+                          const int* end, int num_nz, const int* index,
+                          const double* value, int column_count,
+                          const int* column_index, const double* column,
+                          bool hyper, int from_index, double switch_density,
+                          int result_count, double* result, int* result_index);
+}
+#endif
+
 void HighsSparseMatrix::priceByColumn(const bool quad_precision,
                                       HVector& result, const HVector& column,
                                       const HighsInt debug_report) const {
   assert(this->isColwise());
   if (debug_report >= kDebugReportAll)
     printf("\nHighsSparseMatrix::priceByColumn:\n");
+#ifdef HIGHS_RUST
+  if (!quad_precision) {
+    result.count = highs_rs_price_by_column(
+        num_col_, start_.data(), index_.data(), value_.data(),
+        column.array.size(), column.array.data(), result.array.data(),
+        result.index.data());
+    return;
+  }
+#endif
   result.count = 0;
   for (HighsInt iCol = 0; iCol < this->num_col_; iCol++) {
     double value = 0;
@@ -1463,6 +1487,20 @@ void HighsSparseMatrix::priceByRowWithSwitch(
     const double expected_density, const HighsInt from_index,
     const double switch_density, const HighsInt debug_report) const {
   assert(this->isRowwise());
+#ifdef HIGHS_RUST
+  if (!quad_precision && debug_report == kDebugReportOff) {
+    assert(result.count >= 0);
+    const bool partitioned = format_ == MatrixFormat::kRowwisePartitioned;
+    result.count = highs_rs_price_by_row(
+        num_row_, num_col_, start_.data(),
+        partitioned ? p_end_.data() : start_.data() + 1, index_.size(),
+        index_.data(), value_.data(), column.count, column.index.data(),
+        column.array.data(), expected_density <= kHyperPriceDensity,
+        from_index, switch_density, result.count, result.array.data(),
+        result.index.data());
+    return;
+  }
+#endif
   HighsSparseVectorSum sum;
   // todo @Julian: Setting up the sparse vector sum is equivalent to calling
   // HVector::setup() I think there should instead be overloads where the result

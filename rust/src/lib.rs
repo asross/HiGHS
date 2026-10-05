@@ -1,5 +1,8 @@
 //! Rust ports of HiGHS kernels, called from C++ through `extern "C"` shims.
-//! Ported so far: the hyper-sparse triangular solve of HFactor (solveHyper).
+//! Ported so far: the hyper-sparse triangular solve of HFactor (solveHyper)
+//! and the double-precision PRICE kernels of HighsSparseMatrix.
+
+pub mod matrix;
 
 const K_HIGHS_TINY: f64 = 1e-14;
 
