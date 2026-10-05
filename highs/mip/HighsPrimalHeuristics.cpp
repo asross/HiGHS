@@ -83,7 +83,7 @@ bool HighsPrimalHeuristics::solveSubMip(
     HighsMipWorker& worker, const HighsLp& lp, const HighsBasis& basis,
     double fixingRate, std::vector<double> colLower,
     std::vector<double> colUpper, HighsInt maxleaves, HighsInt maxnodes,
-    HighsInt stallnodes) {
+    HighsInt stallnodes, const HighsSolution* start, double timeCap) {
   HighsOptions submipoptions = *mipsolver.options_mip_;
   HighsLp submip = lp;
 
@@ -111,9 +111,12 @@ bool HighsPrimalHeuristics::solveSubMip(
   submipoptions.mip_max_stall_nodes = stallnodes;
   submipoptions.mip_pscost_minreliable = 0;
   submipoptions.time_limit -= mipsolver.timer_.read();
+  submipoptions.time_limit = std::min(submipoptions.time_limit, timeCap);
   submipoptions.objective_bound = worker.upper_limit;
 
-  if (!mipsolver.submip) {
+  // the gap target is the caller's, not the sub-MIP's (also for the
+  // crossover of a concurrent LNS helper, itself a sub-MIP)
+  if (!mipsolver.submip || (start && mipsolver.concurrent_lns_)) {
     double curr_abs_gap = worker.upper_limit - mipsolver.mipdata_->lower_bound;
 
     if (curr_abs_gap == kHighsInf) {
@@ -133,11 +136,21 @@ bool HighsPrimalHeuristics::solveSubMip(
     submipoptions.presolve = kHighsOnString;
   submipoptions.mip_detect_symmetry = false;
   submipoptions.mip_heuristic_effort = 0.8;
+  // a concurrent LNS helper runs without the heuristics that solve
+  // sub-MIPs; its crossover sub-MIP gets the main solver's settings (RINS
+  // and RENS find most of its improvements)
+  if (start && mipsolver.concurrent_lns_) {
+    submipoptions.mip_heuristic_run_rins = mipsolver.concurrent_lns_->runRins;
+    submipoptions.mip_heuristic_run_rens = mipsolver.concurrent_lns_->runRens;
+    submipoptions.mip_heuristic_run_root_reduced_cost =
+        mipsolver.concurrent_lns_->runRootReducedCost;
+  }
   // setup solver and run it
 
   HighsSolution solution;
   solution.value_valid = false;
   solution.dual_valid = false;
+  if (start) solution = *start;
   if (!mipsolver.submip && !mipsolver.mipdata_->parallelLockActive()) {
     mipsolver.profiling_->start(kMipClockSubMipSolve);
   }
@@ -253,6 +266,49 @@ bool HighsPrimalHeuristics::solveSubMip(
   }
 
   return true;
+}
+
+// Crossover: the integer columns where the incumbent and another good
+// solution agree are fixed, and the rest is solved as a sub-MIP from the
+// better of the two (as SCIP's crossover heuristic, and the polishing of
+// Rothberg, INFORMS J. Computing 19, 2007). The other solution has to come
+// from an independent search: on the dispatch tick hard_10-03_1340, good
+// solutions from different seeds differ in about 12% of the switches, and
+// a sub-MIP over those gained 550 to 950 within 40 s (six pairs), where
+// random neighbourhoods of the same size gained under 50, and solutions of
+// one search 35 s apart differ in under 1% of the switches
+HighsInt HighsPrimalHeuristics::crossover(HighsMipWorker& worker,
+                                          const std::vector<double>& other,
+                                          double otherObjective,
+                                          double timeCap) {
+  HighsMipSolverData& mipdata = *mipsolver.mipdata_;
+  const std::vector<double>& inc = mipdata.incumbent;
+  if (inc.empty() || other.size() != inc.size()) return 0;
+  const HighsDomain& globaldom = worker.getGlobalDomain();
+  if (globaldom.infeasible()) return 0;
+  std::vector<double> lower = globaldom.col_lower_;
+  std::vector<double> upper = globaldom.col_upper_;
+  HighsInt numDiffer = 0;
+  for (HighsInt col : mipdata.integral_cols) {
+    const double value = std::round(inc[col]);
+    if (value != std::round(other[col])) {
+      ++numDiffer;
+    } else if (value >= lower[col] && value <= upper[col]) {
+      lower[col] = value;
+      upper[col] = value;
+    }
+  }
+  if (numDiffer == 0) return 0;
+  HighsSolution start;
+  start.col_value = otherObjective < mipdata.upper_bound ? other : inc;
+  start.value_valid = true;
+  calculateRowValuesQuad(*mipsolver.model_, start);
+  const double fixingRate =
+      1.0 - double(numDiffer) / std::max(size_t{1}, mipdata.integral_cols.size());
+  solveSubMip(worker, *mipsolver.model_, mipdata.firstrootbasis, fixingRate,
+              std::move(lower), std::move(upper), kHighsIInf, kHighsIInf, 100,
+              &start, timeCap);
+  return numDiffer;
 }
 
 double HighsPrimalHeuristics::determineTargetFixingRate(

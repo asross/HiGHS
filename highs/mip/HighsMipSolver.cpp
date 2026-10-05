@@ -1043,6 +1043,8 @@ restart:
 }
 
 void HighsMipSolver::cleanupSolve() {
+  // take the helper's best solution even if no crossover took place
+  if (mipdata_->concurrent_lns) mipdata_->concurrent_lns->independent = false;
   mipdata_->syncConcurrentLns();
   // the helper's root bound is valid for the whole solve
   if (mipdata_->concurrent_lns &&

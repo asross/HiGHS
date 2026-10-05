@@ -1327,6 +1327,7 @@ double HighsMipSolverData::percentageInactiveIntegers() const {
 
 void HighsMipSolverData::performRestart() {
   // the helper's solutions would be for the model before the restart
+  if (concurrent_lns) concurrent_lns->independent = false;
   syncConcurrentLns();
   stopConcurrentLns();
   HighsBasis root_basis;
@@ -2019,6 +2020,10 @@ void HighsMipSolverData::startConcurrentLns() {
   if (time_left < 1) return;
   concurrent_lns.reset(new HighsConcurrentLns());
   HighsConcurrentLns* pool = concurrent_lns.get();
+  pool->independent = options.mip_concurrent_crossover;
+  pool->runRins = options.mip_heuristic_run_rins;
+  pool->runRens = options.mip_heuristic_run_rens;
+  pool->runRootReducedCost = options.mip_heuristic_run_root_reduced_cost;
   if (!incumbent.empty()) pool->offer(incumbent, upper_bound);
   concurrent_lns_seen = pool->version;
 
@@ -2071,6 +2076,9 @@ void HighsMipSolverData::syncConcurrentLns() {
                                  ? mipsolver.concurrent_lns_
                                  : concurrent_lns.get();
   if (!pool) return;
+  // while the two search independently (until the crossover), each only
+  // offers its incumbents: the main solver takes the best at the end
+  const bool independent = pool->independent.load();
   if (mipsolver.concurrent_lns_) {
     pool->helperLowerBound = lower_bound;
     // the helper's bound with its incumbent may close the gap on its own
@@ -2084,11 +2092,55 @@ void HighsMipSolverData::syncConcurrentLns() {
     if (num_nodes == 0 && helperBound > lower_bound)
       updateLowerBound(helperBound);
     pool->mainLowerBound = lower_bound;
+    int state = pool->crossoverState.load();
+    if (state == 1 && !crossoverStartLogged) {
+      crossoverStartLogged = true;
+      highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
+                   "Crossover of the two searches' solutions started\n");
+    } else if (state == 2 && pool->crossoverState.compare_exchange_strong(state, 3)) {
+      const double offset = mipsolver.model_->offset_;
+      highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
+                   "Crossover (%" HIGHSINT_FORMAT
+                   " integer columns differ): %.12g -> %.12g\n",
+                   pool->crossoverDiffer, pool->crossoverBefore + offset,
+                   pool->crossoverAfter + offset);
+    }
   }
   std::vector<double> sol;
-  if (pool->take(concurrent_lns_seen, upper_bound, sol))
+  if (!independent && pool->take(concurrent_lns_seen, upper_bound, sol))
     trySolution(sol, kSolutionSourceGraphLns);
-  if (!incumbent.empty()) pool->offer(incumbent, upper_bound);
+  if (!incumbent.empty()) {
+    pool->offer(incumbent, upper_bound);
+    if (independent)
+      pool->offerOwn(mipsolver.concurrent_lns_ ? 1 : 0, incumbent, upper_bound);
+  }
+}
+
+// After its quick search, the helper crosses its incumbent with the main
+// solver's (from the main solver's own quick search, with another seed):
+// solutions from different seeds differ much more than solutions of one
+// search over time (see HighsPrimalHeuristics::crossover). Then the two
+// exchange incumbents as usual
+void HighsMipSolverData::crossoverWithMain(HighsMipWorker& worker) {
+  HighsConcurrentLns* pool = mipsolver.concurrent_lns_;
+  // the main solver's partner solution is the end of its quick search
+  if (!pool || !pool->independent.load() || !pool->mainQuickDone.load())
+    return;
+  syncConcurrentLns();
+  std::vector<double> other;
+  double otherObjective;
+  const bool haveOther = pool->ownBest(0, other, otherObjective);
+  pool->independent = false;
+  if (!haveOther || incumbent.empty()) return;
+  pool->crossoverBefore = std::min(upper_bound, otherObjective);
+  pool->crossoverState = 1;
+  const double timeLimit = mipsolver.options_mip_->time_limit;
+  pool->crossoverDiffer = heuristics.crossover(
+      worker, other, otherObjective,
+      timeLimit < kHighsInf ? 0.2 * timeLimit : kHighsInf);
+  pool->crossoverAfter = upper_bound;
+  pool->crossoverState = 2;
+  syncConcurrentLns();
 }
 
 // The helper hands its root cuts to the main solver, which adds them to its
@@ -2298,8 +2350,11 @@ restart:
     startConcurrentLns();
     // once (restarts come back here), and not in a concurrent LNS helper,
     // whose main solver does it at the same time: the helper goes on to
-    // the deep search, with the main solver's incumbents
-    if (numRestarts == 0 && !mipsolver.concurrent_lns_) {
+    // the deep search, with the main solver's incumbents (unless the two
+    // search independently until a crossover: then the helper's search
+    // starts from a solution of its own)
+    if (numRestarts == 0 &&
+        (!mipsolver.concurrent_lns_ || mipsolver.concurrent_lns_->independent)) {
       const double before = upper_bound;
       const int64_t quickIters = -worker.getHeurLpIterations();
       heuristics.graphLNS(worker, firstlpsol, false);
@@ -2312,6 +2367,11 @@ restart:
           lns_quick_improved &&
           upper_bound - lower_bound <= 3 * (upper_bound - optimality_limit);
     }
+    if (concurrent_lns && concurrent_lns->independent) {
+      syncConcurrentLns();
+      concurrent_lns->mainQuickDone = true;
+    }
+    crossoverWithMain(worker);
   }
 
   heuristics.flushStatistics(mipsolver, worker);
@@ -2389,6 +2449,7 @@ restart:
 
     ++nseparounds;
     syncConcurrentLns();
+    crossoverWithMain(worker);
     if (importRootCuts(worker)) {
       profiling->stop(kMipClockRootSeparation);
       return clockOff(profiling);
@@ -2590,6 +2651,7 @@ restart:
     if (mipsolver.concurrent_lns_) {
       for (HighsInt round = 0; round < 50 && !checkLimits(); ++round) {
         syncConcurrentLns();
+        crossoverWithMain(worker);
         heuristics.graphLNS(worker, rootlpsol, true);
         heuristics.flushStatistics(mipsolver, worker);
       }

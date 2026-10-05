@@ -126,6 +126,20 @@ Using a second core (option `mip_concurrent_helper`, on unless
   threads", or the dual simplex) and when the helper started ("Concurrent
   LNS helper thread started"). Both use their own thread, whatever the task
   scheduler's thread count in the "Thread count" line.
+- Optionally (`mip_concurrent_crossover`, off by default), the helper and
+  the main solver search independently, each with its own quick search,
+  until the helper crosses its incumbent with the main solver's: the
+  integer columns where they agree are fixed and the rest solved as a
+  sub-MIP. Good solutions from different seeds differ in about 12% of the
+  switches of `hard_10-03_1340`, and offline such sub-MIPs gained 550 to
+  950 in 40 s (six pairs), where random neighbourhoods of the same size
+  gained under 50 and solutions of one search 35 s apart differ in under 1%
+  of the switches. In the solver, with two threads and 180 s, the
+  incumbent at the time limit is better by 209 on `hard_10-03_1340` and by
+  85 on `diverse_10-01_0052` (means over 4 seeds, noisy). But where the gap
+  can be closed, the main solver misses the helper's solutions until the
+  crossover: the dispatch suite takes 1.08 times the main thread's
+  instructions (46 runs), the old hard tick 1.4-1.7 times. Hence an option.
 
 LP re-solves (all MIP solves benefit; same simplex iterations). Graph LNS
 and branch and bound solve many LPs with a few iterations each, so the fixed
@@ -263,6 +277,7 @@ past the time limit on germanrr (see above).
 
 - `mip_heuristic_run_graph_lns` (default true)
 - `mip_concurrent_helper` (default true)
+- `mip_concurrent_crossover` (default false)
 - `simplex_dse_exact_init_max_rows` (default no limit; the MIP's LP
   relaxation uses 20000)
 - `simplex_keep_random_vectors` (default false; true in the MIP's LP
@@ -329,6 +344,17 @@ past the time limit on germanrr (see above).
 - Plain triangular solves instead of hyper-sparse ones, for the dense
   inverses of the dispatch LPs: 3-5% fewer cycles per re-solve, but the
   first LP takes twice as long.
+- Keeping the basic primal values over re-solves when no nonbasic value
+  changed (exact, checked against a copy of the nonbasic values): only 28%
+  of re-solves on `hard_10-03_1340` and 39% on neos-911970 qualify, and
+  computePrimal is one FTRAN, so the gain was 0.1%.
+- Other ways to a better incumbent on `hard_10-03_1340` (prototypes, single
+  thread): relax-and-fix over time windows (later windows infeasible or
+  slow); switching costs over a growing horizon of periods, warm-started
+  (-246641 in 150 s); banks made integer in groups, lowest initial state of
+  charge first, earlier groups fixed (-246358 in 97 s); proximity search
+  (Fischetti and Monaci) from a 70 s solution (+25 in 110 s). The solver
+  itself has about -247200 after 70 s and -247600 after 180 s.
 - Incremental dual values after removing cost shifts at the end of a solve:
   the shifts are mostly on basic variables (entered on degenerate steps),
   and the cost vector is sparse, so a full recomputation costs about the

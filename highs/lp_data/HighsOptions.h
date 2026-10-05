@@ -506,6 +506,7 @@ struct HighsOptionsStruct {
   bool mip_heuristic_run_rens;
   bool mip_heuristic_run_graph_lns;
   bool mip_concurrent_helper;
+  bool mip_concurrent_crossover;
   bool mip_heuristic_run_root_reduced_cost;
   bool mip_heuristic_run_zi_round;
   bool mip_heuristic_run_shifting;
@@ -677,6 +678,7 @@ struct HighsOptionsStruct {
         mip_heuristic_run_rens(false),
         mip_heuristic_run_graph_lns(false),
         mip_concurrent_helper(false),
+        mip_concurrent_crossover(false),
         mip_heuristic_run_root_reduced_cost(false),
         mip_heuristic_run_zi_round(false),
         mip_heuristic_run_shifting(false),
@@ -1265,6 +1267,15 @@ class HighsOptions : public HighsOptionsStruct {
         "root LP and to run graph LNS alongside the MIP solver: this makes "
         "the solve non-deterministic",
         advanced, &mip_concurrent_helper, true);
+    records.push_back(record_bool);
+
+    record_bool = new OptionRecordBool(
+        "mip_concurrent_crossover",
+        "Whether the concurrent LNS helper and the MIP solver search "
+        "independently until the helper crosses its solution with the MIP "
+        "solver's (a better solution at the time limit where the gap cannot "
+        "be closed, at the cost of a slower solve where it can)",
+        advanced, &mip_concurrent_crossover, false);
     records.push_back(record_bool);
 
     record_bool =

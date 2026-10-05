@@ -746,6 +746,9 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   double promiseTotal = 0;
   for (HighsInt it = 0; since < maxStall && it < maxIt; ++it) {
     mipdata.syncConcurrentLns();
+    // a helper crosses its incumbent with the main solver's once that is
+    // ready (see HighsMipSolverData::crossoverWithMain)
+    if (mipsolver.concurrent_lns_) mipdata.crossoverWithMain(worker);
     if (worker.terminatorTerminated() || mipdata.checkLimits() ||
         lpBudgetExceeded() || withinGap())
       break;

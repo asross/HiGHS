@@ -66,7 +66,13 @@ class HighsPrimalHeuristics {
   bool solveSubMip(HighsMipWorker& worker, const HighsLp& lp,
                    const HighsBasis& basis, double fixingRate,
                    std::vector<double> colLower, std::vector<double> colUpper,
-                   HighsInt maxleaves, HighsInt maxnodes, HighsInt stallnodes);
+                   HighsInt maxleaves, HighsInt maxnodes, HighsInt stallnodes,
+                   const HighsSolution* start = nullptr,
+                   double timeCap = kHighsInf);
+
+  // returns the number of integer columns where the solutions differ
+  HighsInt crossover(HighsMipWorker& worker, const std::vector<double>& other,
+                     double otherObjective, double timeCap);
 
   double determineTargetFixingRate(HighsMipWorker& worker);
 

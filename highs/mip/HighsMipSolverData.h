@@ -58,6 +58,21 @@ struct HighsConcurrentLns {
   std::vector<double> cutValue, cutRhs;
   std::vector<uint8_t> cutIntegral;
   std::thread thread;
+  // Until the helper has crossed its incumbent with the main solver's
+  // (HighsPrimalHeuristics::crossover), at the end of its own quick
+  // search, the two search independently: neither takes the other's
+  // incumbents. Each one's best is kept here for that ([0]: main solver)
+  std::atomic<bool> independent{false};
+  std::atomic<bool> mainQuickDone{false};
+  // the main solver's settings of the heuristics that the helper turns off
+  bool runRins = true, runRens = true, runRootReducedCost = true;
+  std::vector<double> ownSolution[2];
+  double ownObjective[2] = {kHighsInf, kHighsInf};
+  // the crossover, for the main solver's log: 1 running, 2 done (then the
+  // main solver logs it and sets 3)
+  std::atomic<int> crossoverState{0};
+  HighsInt crossoverDiffer = 0;
+  double crossoverBefore = kHighsInf, crossoverAfter = kHighsInf;
 
   void offer(const std::vector<double>& sol, double obj) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -74,6 +89,19 @@ struct HighsConcurrentLns {
     seen = version.load();
     if (objective >= obj) return false;
     sol = solution;
+    return true;
+  }
+  void offerOwn(int who, const std::vector<double>& sol, double obj) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (obj >= ownObjective[who]) return;
+    ownObjective[who] = obj;
+    ownSolution[who] = sol;
+  }
+  bool ownBest(int who, std::vector<double>& sol, double& obj) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (ownSolution[who].empty()) return false;
+    sol = ownSolution[who];
+    obj = ownObjective[who];
     return true;
   }
 };
@@ -220,17 +248,19 @@ struct HighsMipSolverData {
   // lns_tree_wait iterations of tree search
   int64_t lns_tree_next = -1;
   int64_t lns_tree_wait = 0;
-  // whether the quick graph-LNS search brought the incumbent within three
-  // times the target gap (kept over restarts): if not, the neighbourhood
-  // search does not suit the model
+  // whether the quick graph-LNS search improved the incumbent (kept over
+  // restarts): if not, the neighbourhood search does not suit the model
   bool lns_quick_improved = false;
   // the LP iterations of the quick graph-LNS search
   int64_t lns_quick_lp_iterations = 0;
 
   std::unique_ptr<HighsConcurrentLns> concurrent_lns;
   int64_t concurrent_lns_seen = 0;
+  bool crossoverStartLogged = false;
   bool useConcurrentHelper() const;
   void startConcurrentLns();
+  // in a concurrent LNS helper: cross its incumbent with the main solver's
+  void crossoverWithMain(HighsMipWorker& worker);
   void syncConcurrentLns();
   void stopConcurrentLns();
   void publishRootCuts();
