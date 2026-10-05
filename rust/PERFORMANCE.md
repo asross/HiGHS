@@ -72,3 +72,6 @@ Notes:
 - QP (not in perf.py; generated QPs, see the QP port commit): 0.90.
 - MIP is still mostly C++ (presolve, search, cuts, propagation), so its
   ratio reflects only the LP solves inside it.
+- Unit tests (ctest -j1, `-DBUILD_TESTING=ON -DALL_TESTS=ON`, 168/168 pass
+  in both): 197 s C++, 133 s Rust (wall time, quiet machine); unit_tests_all
+  76 s -> 53 s.
