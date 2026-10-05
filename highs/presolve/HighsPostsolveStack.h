@@ -27,6 +27,54 @@
 #include "util/HighsDataStack.h"
 #include "util/HighsMatrixSlice.h"
 
+#ifdef HIGHS_RUST
+// The undo side of the postsolve stack runs in Rust (rust/src/presolve):
+// it reads the records pushed on reductionValues, so their layout is fixed
+// (see the static_asserts in HighsPostsolveStack.cpp)
+struct PostsolveRsStack {
+  const char* data;
+  size_t data_len;
+  const void* reductions;  // std::pair<ReductionType, size_t>
+  size_t num_reductions;
+  const HighsInt* orig_col_index;
+  size_t num_col;
+  const HighsInt* orig_row_index;
+  size_t num_row;
+};
+struct PostsolveRsTolerances {
+  double primal_feasibility;
+  double dual_feasibility;
+  double mip_feasibility;
+};
+struct PostsolveRsSolution {
+  double* col_value;
+  double* col_dual;
+  HighsBasisStatus* col_status;
+  size_t num_col;
+  double* row_value;
+  double* row_dual;
+  HighsBasisStatus* row_status;
+  size_t num_row;
+  bool dual_valid;
+  bool basis_valid;
+};
+extern "C" {
+void highs_rs_postsolve_undo(const PostsolveRsStack* s,
+                             const PostsolveRsTolerances* tol,
+                             const PostsolveRsSolution* x, size_t until,
+                             HighsInt report_col);
+void highs_rs_postsolve_reduced_primal(const PostsolveRsStack* s, double* sol,
+                                       size_t num_orig_col);
+void highs_rs_postsolve_compress_index_maps(
+    HighsInt* orig_row_index, size_t num_orig_row, HighsInt* orig_col_index,
+    size_t num_orig_col, const HighsInt* new_row_index, size_t num_new_row,
+    const HighsInt* new_col_index, size_t num_new_col, size_t* new_num_row,
+    size_t* new_num_col);
+bool highs_rs_postsolve_duplicate_col_ok_merge(const void* r,
+                                               double tolerance);
+}
+#endif
+
 // class HighsOptions;
 namespace presolve {
 class HighsPostsolveStack {
@@ -538,9 +586,32 @@ class HighsPostsolveStack {
     return true;
   }
 
+#ifdef HIGHS_RUST
+  PostsolveRsStack rustStack() const {
+    return {reductionValues.getData(),
+            reductionValues.getCurrentDataSize(),
+            reductions.data(),
+            reductions.size(),
+            origColIndex.data(),
+            origColIndex.size(),
+            origRowIndex.data(),
+            origRowIndex.size()};
+  }
+
+  void undoRust(const HighsOptions& options, HighsSolution& solution,
+                HighsBasis& basis, size_t until, HighsInt report_col) const;
+#endif
+
   std::vector<double> getReducedPrimalSolution(
       const std::vector<double>& origPrimalSolution) {
     std::vector<double> reducedSolution = origPrimalSolution;
+#ifdef HIGHS_RUST
+    const PostsolveRsStack s = rustStack();
+    highs_rs_postsolve_reduced_primal(&s, reducedSolution.data(),
+                                      reducedSolution.size());
+    reducedSolution.resize(origColIndex.size());
+    return reducedSolution;
+#else
 
     for (const std::pair<ReductionType, size_t>& primalColTransformation :
          reductions) {
@@ -570,6 +641,7 @@ class HighsPostsolveStack {
 
     reducedSolution.resize(reducedNumCol);
     return reducedSolution;
+#endif
   }
 
   bool isColLinearlyTransformable(HighsInt col) const {
@@ -611,6 +683,13 @@ class HighsPostsolveStack {
   void undo(const HighsOptions& options, HighsSolution& solution,
             HighsBasis& basis, const HighsInt report_col = -1,
             const bool thread_safe = false) {
+#ifdef HIGHS_RUST
+    // Rust only reads the stack, so this is thread safe
+    assert(solution.value_valid);
+    assert(origNumCol > 0);
+    assert(origNumRow >= 0);
+    undoRust(options, solution, basis, 0, report_col);
+#else
     HighsDataStack reductionValuesCopy;
     std::vector<Nonzero> colValuesCopy;
     std::vector<Nonzero> rowValuesCopy;
@@ -774,6 +853,7 @@ class HighsPostsolveStack {
     assert(!containsNanOrInf(solution.col_dual));
     assert(!containsNanOrInf(solution.row_dual));
 #endif
+#endif
   }
 
   /// undo presolve steps for primal solution
@@ -820,6 +900,9 @@ class HighsPostsolveStack {
     bool perform_dual_postsolve = solution.dual_valid;
     assert((solution.col_dual.size() == solution.col_value.size()) ==
            perform_dual_postsolve);
+#ifdef HIGHS_RUST
+    undoRust(options, solution, basis, numReductions, -1);
+#else
     bool perform_basis_postsolve = basis.valid;
 
     // expand solution to original index space
@@ -949,6 +1032,7 @@ class HighsPostsolveStack {
     // assert(!containsNanOrInf(solution.row_value));
     assert(!containsNanOrInf(solution.col_dual));
     assert(!containsNanOrInf(solution.row_dual));
+#endif
 #endif
   }
 

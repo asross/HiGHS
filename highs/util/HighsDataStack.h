@@ -78,6 +78,8 @@ class HighsDataStack {
   void setPosition(size_t position_) { this->position = position_; }
 
   size_t getCurrentDataSize() const { return data.size(); }
+
+  const char* getData() const { return data.data(); }
 };
 
 #endif
