@@ -11,11 +11,14 @@
 
 #include "HighsExternalDeps.h"
 
+#ifdef ZLIB_FOUND
+#include "zlib.h"  // defines ZLIB_VERSION
+#endif
+
 namespace HighsExtras {
 
 #ifdef ZLIB_FOUND
 constexpr bool __zlib_enabled = true;
-#include "zlib.h"  // defines ZLIB_VERSION
 #else
 constexpr bool __zlib_enabled = false;
 #define ZLIB_VERSION "unknown"

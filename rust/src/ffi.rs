@@ -8,7 +8,7 @@ use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 /// # Safety
 /// `p` must be valid for `n` reads (or `n <= 0`)
-unsafe fn sl<'a, T>(p: *const T, n: i32) -> &'a [T] {
+pub(crate) unsafe fn sl<'a, T>(p: *const T, n: i32) -> &'a [T] {
     if n <= 0 || p.is_null() {
         &[]
     } else {
@@ -18,7 +18,7 @@ unsafe fn sl<'a, T>(p: *const T, n: i32) -> &'a [T] {
 
 /// # Safety
 /// `p` must be valid for `n` reads and writes (or `n <= 0`), unaliased
-unsafe fn sl_mut<'a, T>(p: *mut T, n: i32) -> &'a mut [T] {
+pub(crate) unsafe fn sl_mut<'a, T>(p: *mut T, n: i32) -> &'a mut [T] {
     if n <= 0 || p.is_null() {
         &mut []
     } else {

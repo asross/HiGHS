@@ -26,6 +26,15 @@ impl HighsRandom {
         }
     }
 
+    /// The generator with a given state, such as a C++ HighsRandom's
+    pub fn from_state(state: u64) -> Self {
+        HighsRandom { state }
+    }
+
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
     #[inline]
     fn advance(&mut self) {
         self.state ^= self.state >> 12;

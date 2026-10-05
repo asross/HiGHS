@@ -24,6 +24,7 @@ using std::min;
 using std::nth_element;
 using std::pair;
 
+#ifndef HIGHS_RUST
 void HEkkDualRHS::setup() {
   const HighsInt numRow = ekk_instance_.lp_.num_row_;
   workMark.resize(numRow);
@@ -496,6 +497,8 @@ void HEkkDualRHS::createInfeasList(double columnDensity) {
     workCutoff = 0;
   }
 }
+
+#endif  // HIGHS_RUST
 
 void HEkkDualRHS::assessOptimality() {
   HighsInt num_work_infeasibilities = 0;

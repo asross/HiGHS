@@ -4139,9 +4139,7 @@ bool HEkk::tabooBadBasisChange() const {
   return false;
 }
 
-void HEkk::applyTabooRowOut(vector<double>& values,
-                            const double overwrite_with) {
-  assert(values.size() >= static_cast<size_t>(lp_.num_row_));
+void HEkk::applyTabooRowOut(double* values, const double overwrite_with) {
   for (auto& change : bad_basis_change_) {
     if (change.taboo) {
       HighsInt iRow = change.row_out;
@@ -4151,8 +4149,7 @@ void HEkk::applyTabooRowOut(vector<double>& values,
   }
 }
 
-void HEkk::unapplyTabooRowOut(vector<double>& values) {
-  assert((HighsInt)values.size() >= lp_.num_row_);
+void HEkk::unapplyTabooRowOut(double* values) {
   // Unapply taboo rows in opposite order in case the row appears
   // twice in the list. This way the first saved value for the row is
   // what remains, not overwrite_with

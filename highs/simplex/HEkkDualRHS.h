@@ -112,6 +112,7 @@ class HEkkDualRHS {
   // References:
   HEkk& ekk_instance_;
 
+#ifndef HIGHS_RUST
   double workCutoff;   //!< Limit for row to be in list with greatest primal
                        //!< infeasibilities
   HighsInt workCount;  //!< Number of rows in list with greatest primal
@@ -129,6 +130,28 @@ class HEkkDualRHS {
   HighsInt partSwitch;
   std::vector<HighsInt> workPartition;
   HighsSimplexAnalysis* analysis;
+#else
+  // The state is owned by Rust (rust/src/simplex/dual_rhs.rs). workCount
+  // and workCutoff are mirrored after each call that can change them, and
+  // work_infeasibility points into the Rust array
+  struct RustDualRhs {
+    void* p;
+    RustDualRhs();
+    RustDualRhs(const RustDualRhs&) = delete;
+    RustDualRhs& operator=(const RustDualRhs&) = delete;
+    ~RustDualRhs();
+  };
+  RustDualRhs rs_;
+  void mirror();
+
+  double workCutoff = 0;
+  HighsInt workCount = 0;
+  struct {
+    double* p = nullptr;
+    double& operator[](HighsInt i) const { return p[i]; }
+    double* data() const { return p; }
+  } work_infeasibility;
+#endif
 };
 
 #endif /* SIMPLEX_HEKKDUALRHS_H_ */
