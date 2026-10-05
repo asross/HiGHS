@@ -1431,10 +1431,12 @@ void HighsSparseMatrix::priceByColumn(const bool quad_precision,
            iEl++)
         value += column.array[this->index_[iEl]] * this->value_[iEl];
     }
-    if (fabs(value) > kHighsTiny) {
-      result.array[iCol] = value;
-      result.index[result.count++] = iCol;
-    }
+    // branchless, as the test mispredicts often (the result is cleared on
+    // entry, so storing a zero is what skipping the entry would leave)
+    const bool nonzero = fabs(value) > kHighsTiny;
+    result.array[iCol] = nonzero ? value : 0.0;
+    result.index[result.count] = iCol;
+    result.count += nonzero;
   }
 }
 

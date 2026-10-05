@@ -128,9 +128,14 @@ void HVectorBase<Real>::reIndex() {
    */
   // Don't do it if there are relatively few nonzeros
   if (count >= 0 && count <= size * 0.1) return;
-  count = 0;
-  for (HighsInt i = 0; i < size; i++)
-    if ((double)array[i]) index[count++] = i;
+  // branchless: at these densities, a branch on each value mispredicts
+  // often (index has room for size entries)
+  HighsInt num = 0;
+  for (HighsInt i = 0; i < size; i++) {
+    index[num] = i;
+    num += (double)array[i] != 0;
+  }
+  count = num;
 }
 
 template <typename Real>

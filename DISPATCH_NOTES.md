@@ -168,6 +168,21 @@ cost of a solve dominates:
   solve), with a product over the proof's rows only. Most LNS flip LPs on
   the hard tick are infeasible.
 
+Low-level (results bit for bit the same; search paths unchanged): the
+code runs at about 3.2 instructions per cycle on the M1, so the waste is in
+mispredicted branches rather than memory. After a solve whose result is
+over 10% dense, `HVector::reIndex` rescans the array with a branch on each
+value, and the nonzeros of a dense FTRAN result are effectively random:
+it is now branchless (the hard tick's root node 4.3% fewer cycles), as is
+the store in `priceByColumn` (0.6%). Row propagation computed every
+element's implied bound in double-double arithmetic: a double estimate with
+a wide margin now skips the elements whose bound cannot be tighter (2.2%).
+Over nine dispatch and MIPLIB instances, 0.962 of the cycles (geometric
+mean). Not worth it: LTO (unity builds already inline across files); PGO
+(0.977, an option when building the production wheel); branchless
+infeasibility sweeps (their branches predict well: 1.8% slower) and
+triangular solves (the columns are long: 9% slower).
+
 Cut separation (`mip/HighsPathSeparator.cpp`): an aggregation, or a path for
 a path mixing cut, whose transformation has no integer column at a
 fractional value (counting those brought in by variable bound substitution)

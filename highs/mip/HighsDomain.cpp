@@ -1419,6 +1419,7 @@ HighsInt HighsDomain::propagateRowUpper(const HighsInt* Rindex,
   assert(std::isfinite(double(minactivity)));
   if (ninfmin > 1) return 0;
   HighsInt numchgs = 0;
+  const double minact = double(minactivity);
   for (HighsInt i = 0; i != Rlen; ++i) {
     HighsCDouble minresact;
     double actcontribution = activityContributionMin(
@@ -1428,6 +1429,16 @@ HighsInt HighsDomain::propagateRowUpper(const HighsInt* Rindex,
 
       minresact = minactivity;
     } else {
+      // A bound can only be accepted if the implied value is strictly
+      // inside the current bound: skip the exact (double-double)
+      // computation where a double estimate, with a generous margin for
+      // its rounding errors, shows that it is not
+      if (impliedBoundNoTighter(Rindex[i], Rvalue[i] > 0,
+                                (Rupper - (minact - actcontribution)) / Rvalue[i],
+                                (std::fabs(Rupper) + std::fabs(minact) +
+                                 std::fabs(actcontribution)) /
+                                    std::fabs(Rvalue[i])))
+        continue;
       minresact = minactivity - actcontribution;
     }
 
@@ -1463,6 +1474,7 @@ HighsInt HighsDomain::propagateRowLower(const HighsInt* Rindex,
   assert(std::isfinite(double(maxactivity)));
   if (ninfmax > 1) return 0;
   HighsInt numchgs = 0;
+  const double maxact = double(maxactivity);
   for (HighsInt i = 0; i != Rlen; ++i) {
     HighsCDouble maxresact;
     double actcontribution = activityContributionMax(
@@ -1472,6 +1484,13 @@ HighsInt HighsDomain::propagateRowLower(const HighsInt* Rindex,
 
       maxresact = maxactivity;
     } else {
+      // as in propagateRowUpper
+      if (impliedBoundNoTighter(Rindex[i], Rvalue[i] < 0,
+                                (Rlower - (maxact - actcontribution)) / Rvalue[i],
+                                (std::fabs(Rlower) + std::fabs(maxact) +
+                                 std::fabs(actcontribution)) /
+                                    std::fabs(Rvalue[i])))
+        continue;
       maxresact = maxactivity - actcontribution;
     }
 

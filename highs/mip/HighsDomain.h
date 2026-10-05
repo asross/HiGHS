@@ -427,6 +427,18 @@ class HighsDomain {
 
   double adjustedUb(HighsInt col, HighsCDouble boundVal, bool& accept) const;
 
+  // Whether a bound implied for col (an upper bound if upper, else a lower
+  // bound), estimated in double as estimate with terms of magnitude up to
+  // scale, is surely not strictly inside the current bound, so that
+  // adjustedUb or adjustedLb would not accept it. The margin is thousands
+  // of times the rounding error of the estimate
+  bool impliedBoundNoTighter(HighsInt col, bool upper, double estimate,
+                             double scale) const {
+    const double margin = 1e-12 * (scale + std::fabs(estimate));
+    return upper ? estimate - margin >= col_upper_[col]
+                 : estimate + margin <= col_lower_[col];
+  }
+
   double adjustedLb(HighsInt col, HighsCDouble boundVal, bool& accept) const;
 
   HighsInt propagateRowUpper(const HighsInt* Rindex, const double* Rvalue,
