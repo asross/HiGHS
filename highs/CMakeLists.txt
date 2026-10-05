@@ -478,3 +478,28 @@ if(FAST_BUILD)
 else()
   target_link_libraries(libhighs Threads::Threads)
 endif()
+
+# Kernels ported to Rust (rust/), built by cargo and linked statically
+if(HIGHS_RUST)
+  if(TARGET highs)
+    set(highs_rust_target highs)
+    set(highs_rust_link PRIVATE)
+  else()
+    set(highs_rust_target libhighs)
+    set(highs_rust_link)
+  endif()
+  find_program(CARGO cargo REQUIRED HINTS $ENV{HOME}/.cargo/bin)
+  set(HIGHS_RUST_DIR ${PROJECT_SOURCE_DIR}/rust)
+  set(HIGHS_RUST_LIB ${CMAKE_BINARY_DIR}/rust/release/${CMAKE_STATIC_LIBRARY_PREFIX}highs_rs${CMAKE_STATIC_LIBRARY_SUFFIX})
+  file(GLOB_RECURSE highs_rust_sources ${HIGHS_RUST_DIR}/src/*.rs)
+  add_custom_command(
+    OUTPUT ${HIGHS_RUST_LIB}
+    COMMAND ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
+            --target-dir ${CMAKE_BINARY_DIR}/rust
+    DEPENDS ${highs_rust_sources} ${HIGHS_RUST_DIR}/Cargo.toml
+    COMMENT "Building the Rust kernels")
+  add_custom_target(highs_rs DEPENDS ${HIGHS_RUST_LIB})
+  add_dependencies(${highs_rust_target} highs_rs)
+  target_compile_definitions(${highs_rust_target} PRIVATE HIGHS_RUST)
+  target_link_libraries(${highs_rust_target} ${highs_rust_link} ${HIGHS_RUST_LIB})
+endif()

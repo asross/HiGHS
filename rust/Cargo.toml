@@ -1,0 +1,12 @@
+[package]
+name = "highs-rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

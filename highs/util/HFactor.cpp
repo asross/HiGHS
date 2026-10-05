@@ -10,6 +10,7 @@
  */
 #include "util/HFactor.h"
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 
@@ -58,11 +59,32 @@ static void solveMatrixT(const HighsInt X_Start, const HighsInt x_end,
   }
 }
 
+#ifdef HIGHS_RUST
+extern "C" void highs_rs_solve_hyper(
+    int h_size, const int* lookup, int n_lookup, const int* pivot_index,
+    const double* pivot_value, const int* start, const int* end, int n_pivot,
+    const int* index, const double* value, int n_entry, int* rhs_count,
+    int* rhs_index, double* rhs_array, int n_row, unsigned char* cwork,
+    int n_cwork, int* iwork, int n_iwork, double* synthetic_tick);
+#endif
+
 static void solveHyper(const HighsInt h_size, const HighsInt* h_lookup,
                        const HighsInt* h_pivot_index,
                        const double* h_pivot_value, const HighsInt* h_start,
                        const HighsInt* h_end, const HighsInt* h_index,
-                       const double* h_value, HVector* rhs) {
+                       const double* h_value, HVector* rhs,
+                       const HighsInt n_lookup, const HighsInt n_pivot,
+                       const HighsInt n_entry) {
+#ifdef HIGHS_RUST
+  static_assert(sizeof(HighsInt) == 4, "the Rust kernels take 32-bit ints");
+  highs_rs_solve_hyper(
+      h_size, h_lookup, n_lookup, h_pivot_index, h_pivot_value, h_start, h_end,
+      n_pivot, h_index, h_value, n_entry, &rhs->count, rhs->index.data(),
+      rhs->array.data(), rhs->size,
+      reinterpret_cast<unsigned char*>(rhs->cwork.data()), rhs->cwork.size(),
+      rhs->iwork.data(), rhs->iwork.size(), &rhs->synthetic_tick);
+  return;
+#endif
   HighsInt rhs_count = rhs->count;
   HighsInt* rhs_index = rhs->index.data();
   double* rhs_array = rhs->array.data();
@@ -1577,7 +1599,10 @@ void HFactor::ftranL(HVector& rhs, const double expected_density,
     const HighsInt* l_index = this->l_index.data();
     const double* l_value = this->l_value.data();
     solveHyper(num_row, l_pivot_lookup.data(), l_pivot_index.data(), 0,
-               l_start.data(), &l_start[1], &l_index[0], &l_value[0], &rhs);
+               l_start.data(), &l_start[1], &l_index[0], &l_value[0], &rhs,
+               l_pivot_lookup.size(),
+               std::min(l_pivot_index.size(), l_start.size() - 1),
+               this->l_index.size());
     factor_timer.stop(FactorFtranLowerHyper, factor_timer_clock_pointer);
   }
   factor_timer.stop(FactorFtranLower, factor_timer_clock_pointer);
@@ -1626,7 +1651,10 @@ void HFactor::btranL(HVector& rhs, const double expected_density,
     const HighsInt* lr_index = this->lr_index.data();
     const double* lr_value = this->lr_value.data();
     solveHyper(num_row, l_pivot_lookup.data(), l_pivot_index.data(), 0,
-               lr_start.data(), &lr_start[1], &lr_index[0], &lr_value[0], &rhs);
+               lr_start.data(), &lr_start[1], &lr_index[0], &lr_value[0], &rhs,
+               l_pivot_lookup.size(),
+               std::min(l_pivot_index.size(), lr_start.size() - 1),
+               this->lr_index.size());
     factor_timer.stop(FactorBtranLowerHyper, factor_timer_clock_pointer);
   }
 
@@ -1743,7 +1771,10 @@ void HFactor::ftranU(HVector& rhs, const double expected_density,
     const double* u_value = this->u_value.data();
     solveHyper(num_row, u_pivot_lookup.data(), u_pivot_index.data(),
                u_pivot_value.data(), u_start.data(), u_last_p.data(),
-               &u_index[0], &u_value[0], &rhs);
+               &u_index[0], &u_value[0], &rhs, u_pivot_lookup.size(),
+               std::min({u_pivot_index.size(), u_pivot_value.size(),
+                         u_start.size(), u_last_p.size()}),
+               this->u_index.size());
     factor_timer.stop(use_clock, factor_timer_clock_pointer);
   }
   if (update_method == kUpdateMethodPf) {
@@ -1819,7 +1850,10 @@ void HFactor::btranU(HVector& rhs, const double expected_density,
     factor_timer.start(FactorBtranUpperHyper, factor_timer_clock_pointer);
     solveHyper(num_row, u_pivot_lookup.data(), u_pivot_index.data(),
                u_pivot_value.data(), &ur_start[0], ur_lastp.data(),
-               &ur_index[0], &ur_value[0], &rhs);
+               &ur_index[0], &ur_value[0], &rhs, u_pivot_lookup.size(),
+               std::min({u_pivot_index.size(), u_pivot_value.size(),
+                         ur_start.size(), ur_lastp.size()}),
+               ur_index.size());
     factor_timer.stop(FactorBtranUpperHyper, factor_timer_clock_pointer);
   }
 

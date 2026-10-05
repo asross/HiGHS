@@ -496,6 +496,7 @@ if(DEBUGSOL)
 endif()
 
 option(HIGHSINT64 "Use 64 bit integers indexing" OFF)
+option(HIGHS_RUST "Use the kernels ported to Rust (needs cargo)" OFF)
 
 if(NOT(${HIGHSINT64} STREQUAL "OFF"))
   message(STATUS "HIGHSINT64: " ${HIGHSINT64})
