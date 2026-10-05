@@ -205,7 +205,7 @@ fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
 }
 
 /// printf's %g
-pub(super) fn g(v: f64) -> String {
+pub(crate) fn g(v: f64) -> String {
     if v.is_nan() {
         return "nan".into();
     }

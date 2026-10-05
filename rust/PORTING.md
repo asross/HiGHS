@@ -19,6 +19,10 @@ file readers in parallel. IPX, PDLP and QP last.
   interleaves by 4 runs its main part unfused and its remainder loop fused
   (see `HVec::norm2`, `compute_dual_for_tableau_column`), and the same
   source inlined elsewhere may be compiled differently (`norm2_fused`).
+  Also, the loop vectorizer of the LTO build splits the fused multiply-add
+  again in in-order reductions (`d += x[i]*y[i]`): the first n/block*block
+  terms are rounded products, the tail is fused (see
+  `ipx::utils::dot_blocked`); check each call site in the final library.
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`

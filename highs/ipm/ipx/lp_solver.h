@@ -1,6 +1,70 @@
 #ifndef IPX_LP_SOLVER_H_
 #define IPX_LP_SOLVER_H_
 
+#include "ipm/ipx/ipx_internal.h"
+#include "lp_data/HighsCallback.h"
+
+#ifdef HIGHS_RUST
+// IPX is ported to Rust (rust/src/ipx). LpSolver is a thin wrapper around
+// the Rust solver (lp_solver_rs.cc); see the documentation of the methods
+// below.
+#include <string>
+
+namespace ipx {
+
+class LpSolver {
+public:
+    LpSolver();
+    ~LpSolver();
+    LpSolver(const LpSolver&) = delete;
+    LpSolver& operator=(const LpSolver&) = delete;
+
+    Int LoadModel(Int num_var, const double offset,
+                  const double* obj, const double* lb,
+                  const double* ub, Int num_constr, const Int* Ap,
+                  const Int* Ai, const double* Ax, const double* rhs,
+                  const char* constr_type);
+    Int LoadIPMStartingPoint(const double* x, const double* xl,
+                             const double* xu, const double* slack,
+                             const double* y, const double* zl,
+                             const double* zu);
+    Int Solve();
+    Info GetInfo() const;
+    Int GetInteriorSolution(double* x, double* xl, double* xu, double* slack,
+                            double* y, double* zl, double* zu) const;
+    Int GetBasicSolution(double* x, double* slack, double* y, double* z,
+                         Int* cbasis, Int* vbasis) const;
+    Parameters GetParameters() const;
+    void SetParameters(Parameters new_parameters);
+    void SetCallback(HighsCallback* callback);
+    void ClearModel();
+    void ClearIPMStartingPoint();
+    Int CrossoverFromStartingPoint(const double* x_start,
+                                   const double* slack_start,
+                                   const double* y_start,
+                                   const double* z_start);
+    Int GetIterate(double* x, double* y, double* zl, double* zu, double* xl,
+                   double* xu);
+    Int GetBasis(Int* cbasis, Int* vbasis);
+    Int GetKKTMatrix(Int* AIp, Int* AIi, double* AIx, double* g);
+    Int SymbolicInvert(Int* rowcounts, Int* colcounts);
+    void setTimerOffset(const double offset);
+
+    // State for the hooks called from Rust (lp_solver_rs.cc).
+    HighsCallback* callback_ = nullptr;
+
+private:
+    // Rethrows HighsTask::Interrupt if the task was cancelled during the
+    // last call into Rust.
+    void RethrowInterrupt();
+
+    void* rs_;                  // the Rust LpSolver
+};
+
+}  // namespace ipx
+
+#else  // HIGHS_RUST
+
 #include <memory>
 #include "ipm/ipx/basis.h"
 #include "ipm/ipx/control.h"
@@ -200,5 +264,7 @@ private:
 };
 
 }  // namespace ipx
+
+#endif  // HIGHS_RUST
 
 #endif  // IPX_LP_SOLVER_H_
