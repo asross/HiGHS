@@ -349,9 +349,9 @@ pub fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: u8, upper: bool,
     if trans == b't' || trans == b'T' {
         if upper {
             // transposed solve with upper triangular matrix
-            for i in 0..ncol {
-                let begin = ap[i] as usize;
-                let end = ap[i + 1] as usize - usize::from(!unitdiag);
+            for (i, c) in ap[..ncol + 1].windows(2).enumerate() {
+                let begin = c[0] as usize;
+                let end = c[1] as usize - usize::from(!unitdiag);
                 let mut d = 0.0f64;
                 for (&i, &v) in ai[begin..end].iter().zip(&ax[begin..end]) {
                     d = x[i as usize].mul_add(v, d);
@@ -401,9 +401,9 @@ pub fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: u8, upper: bool,
         }
     } else {
         // forward solve with lower triangular matrix
-        for j in 0..ncol {
-            let begin = ap[j] as usize + usize::from(!unitdiag);
-            let end = ap[j + 1] as usize;
+        for (j, c) in ap[..ncol + 1].windows(2).enumerate() {
+            let begin = c[0] as usize + usize::from(!unitdiag);
+            let end = c[1] as usize;
             if !unitdiag {
                 x[j] /= ax[begin - 1];
             }
