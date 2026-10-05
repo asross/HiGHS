@@ -1,7 +1,8 @@
 //! Rust ports of HiGHS kernels, called from C++ through `extern "C"` shims.
 //! Ported so far: the LU factor HFactor (factor.rs), the double-precision
 //! PRICE kernels of HighsSparseMatrix, the dual simplex CHUZC HEkkDualRow
-//! (simplex/dual_row.rs), the MPS and LP readers, and the utilities
+//! (simplex/dual_row.rs), BASICLU and the interior point solver IPX
+//! (basiclu/, ipx/), the MPS and LP readers, and the utilities
 //! (hashing, random numbers, double-double arithmetic).
 
 pub mod io;

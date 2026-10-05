@@ -397,19 +397,21 @@ impl Basis {
             let atx = &ait.values;
             row.set_to_zero();
             let mut nz = 0;
-            for k in 0..btran.nnz() as usize {
-                let i = btran.pattern[k] as usize;
-                let temp = btran[i];
-                for p in ait.begin(i)..ait.end(i) {
-                    let j = ati[p] as usize;
-                    if map2basis[j] == -1 || (map2basis[j] == -2 && !ignore_fixed) {
-                        map2basis[j] -= 2; // mark column
+            for &i in &btran.pattern[..btran.nnz() as usize] {
+                let i = i as usize;
+                let temp = btran.elements[i];
+                let (b, e) = (ait.begin(i), ait.end(i));
+                for (&j, &v) in ati[b..e].iter().zip(&atx[b..e]) {
+                    let j = j as usize;
+                    let mb = &mut map2basis[j];
+                    if *mb == -1 || (*mb == -2 && !ignore_fixed) {
+                        *mb -= 2; // mark column
                         row.pattern[nz] = j as Int;
                         nz += 1;
                     }
-                    if map2basis[j] < -2 {
+                    if *mb < -2 {
                         // marked column
-                        row[j] = temp.mul_add(atx[p], row[j]);
+                        row.elements[j] = temp.mul_add(v, row.elements[j]);
                     }
                 }
             }
@@ -422,14 +424,17 @@ impl Basis {
             // dense vector * sparse matrix: accesses A columnwise
             let ai = model.ai();
             let (aidx, ax) = (&ai.rowidx, &ai.values);
-            for j in 0..n + m {
+            let btr = &btran.elements[..m];
+            let cols = ai.colptr[..n + m + 1].windows(2);
+            for ((c, &mb), r) in cols.zip(&map2basis[..n + m]).zip(&mut row.elements[..n + m]) {
                 let mut result = 0.0f64;
-                if map2basis[j] == -1 || (map2basis[j] == -2 && !ignore_fixed) {
-                    for p in ai.begin(j)..ai.end(j) {
-                        result = ax[p].mul_add(btran[aidx[p] as usize], result);
+                if mb == -1 || (mb == -2 && !ignore_fixed) {
+                    let (b, e) = (c[0] as usize, c[1] as usize);
+                    for (&i, &v) in aidx[b..e].iter().zip(&ax[b..e]) {
+                        result = v.mul_add(btr[i as usize], result);
                     }
                 }
-                row[j] = result;
+                *r = result;
             }
             row.invalidate_pattern();
         }

@@ -272,11 +272,22 @@ impl<'a> Crossover<'a> {
             }
             // Update solution.
             if step != 0.0 {
-                ftran.for_each_nonzero(|p, pivot| {
-                    xbasic[p] = step.mul_add(pivot, xbasic[p]);
-                    xbasic[p] = cmax(xbasic[p], lbbasic[p]);
-                    xbasic[p] = cmin(xbasic[p], ubbasic[p]);
-                });
+                let update = |x: &mut f64, pivot: f64, lb: f64, ub: f64| {
+                    *x = cmin(cmax(step.mul_add(pivot, *x), lb), ub);
+                };
+                if ftran.sparse() {
+                    for &p in &ftran.pattern[..ftran.nnz() as usize] {
+                        let p = p as usize;
+                        update(&mut xbasic[p], ftran[p], lbbasic[p], ubbasic[p]);
+                    }
+                } else {
+                    // zipped so that the dense loop vectorizes
+                    for (((x, &pivot), &lb), &ub) in
+                        xbasic.iter_mut().zip(&ftran.elements).zip(&lbbasic).zip(&ubbasic)
+                    {
+                        update(x, pivot, lb, ub);
+                    }
+                }
                 x[jn] -= step;
             }
             if pblock >= 0 {
@@ -400,15 +411,25 @@ impl<'a> Crossover<'a> {
                 btran.for_each_nonzero(|i, x| {
                     y[i] = step.mul_add(x, y[i]);
                 });
-                row.for_each_nonzero(|j, pivot| {
-                    z[j] = (-step).mul_add(pivot, z[j]);
-                    if sign_restrict[j] & 1 != 0 {
-                        z[j] = cmax(z[j], 0.0);
+                let update = |zj: &mut f64, pivot: f64, sr: i32| {
+                    *zj = (-step).mul_add(pivot, *zj);
+                    if sr & 1 != 0 {
+                        *zj = cmax(*zj, 0.0);
                     }
-                    if sign_restrict[j] & 2 != 0 {
-                        z[j] = cmin(z[j], 0.0);
+                    if sr & 2 != 0 {
+                        *zj = cmin(*zj, 0.0);
                     }
-                });
+                };
+                if row.sparse() {
+                    for &j in &row.pattern[..row.nnz() as usize] {
+                        let j = j as usize;
+                        update(&mut z[j], row.elements[j], sign_restrict[j]);
+                    }
+                } else {
+                    for ((zj, &pivot), &sr) in z.iter_mut().zip(&row.elements).zip(sign_restrict) {
+                        update(zj, pivot, sr);
+                    }
+                }
                 z[jb] -= step;
             }
             if jn >= 0 {
@@ -496,20 +517,36 @@ fn primal_ratio_test(
     (pblock, block_at_lb)
 }
 
+/// for_each_nonzero over row, passing z[j] and sign_restrict[j] along (the
+/// dense case zipped, without bounds checks per entry)
+#[inline(always)]
+fn for_each_in_row(row: &IndexedVector, z: &[f64], sign_restrict: &[i32], mut f: impl FnMut(usize, f64, f64, i32)) {
+    if row.sparse() {
+        for &j in &row.pattern[..row.nnz() as usize] {
+            let j = j as usize;
+            f(j, row.elements[j], z[j], sign_restrict[j]);
+        }
+    } else {
+        for (j, ((&pivot, &zj), &sr)) in row.elements.iter().zip(z).zip(sign_restrict).enumerate() {
+            f(j, pivot, zj, sr);
+        }
+    }
+}
+
 /// Dual ratio test: the blocking nonbasic variable (-1 if none), in two
 /// passes as the primal ratio test.
 fn dual_ratio_test(z: &[f64], row: &IndexedVector, sign_restrict: &[i32], mut step: f64, feastol: f64) -> Int {
     let mut jblock: Int = -1;
 
     // First pass: determine maximum step size exploiting feasibility tol.
-    row.for_each_nonzero(|j, pivot| {
+    for_each_in_row(row, z, sign_restrict, |j, pivot, zj, sr| {
         if pivot.abs() > PIVOT_ZERO_TOL {
-            if (sign_restrict[j] & 1) != 0 && (-step).mul_add(pivot, z[j]) < -feastol {
-                step = (z[j] + feastol) / pivot;
+            if (sr & 1) != 0 && (-step).mul_add(pivot, zj) < -feastol {
+                step = (zj + feastol) / pivot;
                 jblock = j as Int;
             }
-            if (sign_restrict[j] & 2) != 0 && (-step).mul_add(pivot, z[j]) > feastol {
-                step = (z[j] - feastol) / pivot;
+            if (sr & 2) != 0 && (-step).mul_add(pivot, zj) > feastol {
+                step = (zj - feastol) / pivot;
                 jblock = j as Int;
             }
         }
@@ -523,13 +560,13 @@ fn dual_ratio_test(z: &[f64], row: &IndexedVector, sign_restrict: &[i32], mut st
     // Second pass: choose maximum pivot among all that block within step.
     jblock = -1;
     let mut max_pivot = PIVOT_ZERO_TOL;
-    row.for_each_nonzero(|j, pivot| {
-        if pivot.abs() > max_pivot && (z[j] / pivot).abs() <= step.abs() {
-            if (sign_restrict[j] & 1) != 0 && step * pivot > 0.0 {
+    for_each_in_row(row, z, sign_restrict, |j, pivot, zj, sr| {
+        if pivot.abs() > max_pivot && (zj / pivot).abs() <= step.abs() {
+            if (sr & 1) != 0 && step * pivot > 0.0 {
                 jblock = j as Int;
                 max_pivot = pivot.abs();
             }
-            if (sign_restrict[j] & 2) != 0 && step * pivot < 0.0 {
+            if (sr & 2) != 0 && step * pivot < 0.0 {
                 jblock = j as Int;
                 max_pivot = pivot.abs();
             }

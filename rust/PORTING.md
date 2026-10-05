@@ -14,7 +14,12 @@ file readers in parallel. IPX, PDLP and QP last.
   same order, so solves are bit-identical: same nodes and LP iterations as C++
   (bench: `cyc.py` compares). Clang contracts `a -= b * c` into a fused
   multiply-add on arm64; use `mul_add` there. Check the C++ disassembly
-  (`objdump -d build/lib/libhighs.dylib`) when unsure.
+  (`objdump -d build/lib/libhighs.dylib`) when unsure. The loop vectorizer
+  (and interleaver) of the LTO build splits that fused multiply-add again in
+  in-order reductions (`d += x[i]*y[i]` over contiguous or even gathered
+  data): the first n/block*block terms are rounded products, the tail is
+  fused (see `ipx::utils::dot_blocked`); check each call site in the final
+  library, inlined copies differ.
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`

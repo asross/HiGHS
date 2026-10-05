@@ -291,7 +291,7 @@ pub fn remove_diagonal(a: &mut SparseMatrix, mut diag: Option<&mut [f64]>) -> In
 }
 
 /// Returns dot(A[:,j], rhs).
-#[inline]
+#[inline(always)]
 pub fn dot_column(a: &SparseMatrix, j: usize, rhs: &[f64]) -> f64 {
     let (b, e) = (a.begin(j), a.end(j));
     let mut d = 0.0f64;
@@ -302,7 +302,7 @@ pub fn dot_column(a: &SparseMatrix, j: usize, rhs: &[f64]) -> f64 {
 }
 
 /// lhs := lhs + alpha * A[:,j].
-#[inline]
+#[inline(always)]
 pub fn scatter_column(a: &SparseMatrix, j: usize, alpha: f64, lhs: &mut [f64]) {
     let (b, e) = (a.begin(j), a.end(j));
     for (&i, &v) in a.rowidx[b..e].iter().zip(&a.values[b..e]) {

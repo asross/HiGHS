@@ -45,39 +45,43 @@ impl LinearOperator for NormalMatrix<'_> {
 
         let rhs = &rhs[..m];
         let lhs = &mut lhs[..m];
-        // lhs += d * AI[:,j] with d = (AI[:,j]'*rhs) * w
-        let col = |j: usize, w: Option<f64>, lhs: &mut [f64]| {
-            let (begin, end) = (ap[j] as usize, ap[j + 1] as usize);
-            let (idx, val) = (&aidx[begin..end], &ax[begin..end]);
-            let mut d = 0.0f64;
-            for (&i, &v) in idx.iter().zip(val) {
-                d = rhs[i as usize].mul_add(v, d);
+        match self.w {
+            Some(w) => {
+                for ((l, r), wi) in lhs.iter_mut().zip(rhs).zip(&w[n..n + m]) {
+                    *l = r * wi;
+                }
+                for (j, c) in ap[..n + 1].windows(2).enumerate() {
+                    normal_column(&aidx[c[0] as usize..c[1] as usize], &ax[c[0] as usize..c[1] as usize], Some(w[j]), rhs, lhs);
+                }
             }
-            if let Some(w) = w {
-                d *= w;
-            }
-            for (&i, &v) in idx.iter().zip(val) {
-                let i = i as usize;
-                lhs[i] = d.mul_add(v, lhs[i]);
-            }
-        };
-        if let Some(w) = self.w {
-            for ((l, r), wi) in lhs.iter_mut().zip(rhs).zip(&w[n..n + m]) {
-                *l = r * wi;
-            }
-            for j in 0..n {
-                col(j, Some(w[j]), lhs);
-            }
-        } else {
-            lhs.fill(0.0);
-            for j in 0..n {
-                col(j, None, lhs);
+            None => {
+                lhs.fill(0.0);
+                for c in ap[..n + 1].windows(2) {
+                    normal_column(&aidx[c[0] as usize..c[1] as usize], &ax[c[0] as usize..c[1] as usize], None, rhs, lhs);
+                }
             }
         }
         if let Some(r) = rhs_dot_lhs {
             *r = dot(rhs, lhs);
         }
         self.time += timer.elapsed().as_secs_f64();
+    }
+}
+
+/// lhs += d * a with d = (a'*rhs) * w, a a column of AI given by (idx,
+/// val)
+#[inline(always)]
+fn normal_column(idx: &[Int], val: &[f64], w: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
+    let mut d = 0.0f64;
+    for (&i, &v) in idx.iter().zip(val) {
+        d = rhs[i as usize].mul_add(v, d);
+    }
+    if let Some(w) = w {
+        d *= w;
+    }
+    for (&i, &v) in idx.iter().zip(val) {
+        let i = i as usize;
+        lhs[i] = d.mul_add(v, lhs[i]);
     }
 }
 
