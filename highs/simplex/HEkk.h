@@ -116,7 +116,7 @@ class HEkk {
   bool proofOfPrimalInfeasibility(HVector& row_ep, const HighsInt move_out,
                                   const HighsInt row_out);
 
-  double getValueScale(const HighsInt count, const vector<double>& value) const;
+  double getValueScale(const HighsInt count, const double* value) const;
   double getMaxAbsRowValue(HighsInt row);
 
   void unitBtranIterativeRefinement(const HighsInt row_out, HVector& row_ep);

@@ -1628,7 +1628,7 @@ void HEkkDual::chooseColumn(HVector* row_ep) {
   // Pack row_ep into the packIndex/Value of HEkkDualRow
   dualRow.chooseMakepack(row_ep, solver_num_col);
   const double row_ep_scale =
-      ekk_instance_.getValueScale(dualRow.packCount, dualRow.packValue);
+      ekk_instance_.getValueScale(dualRow.packCount, &dualRow.packValue[0]);
   analysis->simplexTimerStop(Chuzc1Clock);
   // Loop until an acceptable pivot is found. Each pass either finds a
   // pivot, identifies possible unboundedness, or reduced the number
@@ -1651,11 +1651,13 @@ void HEkkDual::chooseColumn(HVector* row_ep) {
             "Negative step or no candidates after %2d CHUZC passes\n",
             (int)chuzc_pass);
       }
+#ifndef HIGHS_RUST
       if (debug_rows_report) {
         ekk_instance_.simplex_nla_.reportVector(
             "dualRow.packValue/Index", dualRow.packCount, dualRow.packValue,
             dualRow.packIndex, true);
       }
+#endif
       rebuild_reason = kRebuildReasonPossiblyDualUnbounded;
       return;
     }

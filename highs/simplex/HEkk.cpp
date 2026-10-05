@@ -4430,7 +4430,7 @@ bool HEkk::proofOfPrimalInfeasibility(HVector& row_ep, const HighsInt move_out,
 }
 
 double HEkk::getValueScale(const HighsInt count,
-                           const vector<double>& value) const {
+                           const double* value) const {
   if (count <= 0) return 1;
   double max_abs_value = 0;
   for (HighsInt iX = 0; iX < count; iX++)

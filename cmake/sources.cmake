@@ -339,6 +339,8 @@ set(hipo_util_headers
 
 # redefinition of 'kHighsInf'
 set_source_files_properties (io/filereaderlp/reader.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# includes zlib.h (and so pthread.h) inside namespace HighsExtras
+set_source_files_properties (HighsExternalDeps.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 set(highs_sources
     interfaces/highs_c_api.cpp
@@ -431,6 +433,7 @@ set(highs_sources
     simplex/HEkkDualMulti.cpp
     simplex/HEkkDualRHS.cpp
     simplex/HEkkDualRow.cpp
+    simplex/HEkkDualRowRust.cpp
     simplex/HEkkInterface.cpp
     simplex/HEkkPrimal.cpp
     simplex/HighsSimplexAnalysis.cpp

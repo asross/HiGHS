@@ -24,6 +24,12 @@ using std::min;
 using std::pair;
 using std::set;
 
+void HEkkDualRow::clear() {
+  packCount = 0;
+  workCount = 0;
+}
+
+#ifndef HIGHS_RUST
 void HEkkDualRow::setupSlice(HighsInt size) {
   workSize = size;
   workMove = ekk_instance_.basis_.nonbasicMove_.data();
@@ -53,11 +59,6 @@ void HEkkDualRow::setup() {
   // Phase 2. Hence freeList is not initialised when freeList.empty()
   // is used in deleteFreelist(), clear freeList now.
   freeList.clear();
-}
-
-void HEkkDualRow::clear() {
-  packCount = 0;
-  workCount = 0;
 }
 
 void HEkkDualRow::chooseMakepack(const HVector* row, const HighsInt offset) {
@@ -630,6 +631,7 @@ void HEkkDualRow::computeDevexWeight(const HighsInt slice) {
              slice, computed_edge_weight);
   }
 }
+#endif  // HIGHS_RUST
 
 HighsInt HEkkDualRow::debugFindInWorkData(
     const HighsInt iCol, const HighsInt count,

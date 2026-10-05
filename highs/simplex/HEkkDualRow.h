@@ -81,6 +81,7 @@ class HEkkDualRow {
    */
   HighsInt chooseFinal();
 
+#ifndef HIGHS_RUST
   /**
    * @brief Identifies the groups of degenerate nodes in BFRT after a
    * heap sort of ratios
@@ -99,6 +100,7 @@ class HEkkDualRow {
       const std::vector<std::pair<HighsInt, double>>& reportWorkData,
       const std::vector<HighsInt>& reportWorkGroup);
   bool compareWorkDataAndGroup();
+#endif
 
   /**
    * @brief Update bounds when flips have occurred, and accumulate the
@@ -166,13 +168,21 @@ class HEkkDualRow {
       nullptr;  //!< Pointer to
                 //!< ekk_instance_.info_.devex_index_;
 
+#ifndef HIGHS_RUST
   // Freelist:
   std::set<HighsInt> freeList;  //!< Freelist itself
+#endif
 
   // packed data:
-  HighsInt packCount = 0;           //!< number of packed indices/values
+  HighsInt packCount = 0;  //!< number of packed indices/values
+#ifndef HIGHS_RUST
   std::vector<HighsInt> packIndex;  //!< Packed indices
   std::vector<double> packValue;    //!< Packed values
+#else
+  // Owned by Rust (rust/src/simplex/dual_row.rs), set up by setupSlice
+  HighsInt* packIndex = nullptr;
+  double* packValue = nullptr;
+#endif
 
   // (Local) value of computed weight
   double computed_edge_weight = 0.;
@@ -184,6 +194,7 @@ class HEkkDualRow {
   HighsInt workPivot = 0;  //!< Index of the column entering the basis
   HighsInt workCount = 0;  //!< Number of BFRT flips
 
+#ifndef HIGHS_RUST
   std::vector<std::pair<HighsInt, double>>
       workData;  //!< Index-Value pairs for ratio test
   std::vector<HighsInt>
@@ -194,6 +205,19 @@ class HEkkDualRow {
   std::vector<std::pair<HighsInt, double>> original_workData;
   std::vector<std::pair<HighsInt, double>> sorted_workData;
   std::vector<HighsInt> alt_workGroup;
+#else
+  std::pair<HighsInt, double>* workData = nullptr;  //!< Owned by Rust
+
+  // The packed row, ratio test data and free list, owned by Rust
+  struct RustDualRow {
+    void* p;
+    RustDualRow();
+    RustDualRow(RustDualRow&& other) noexcept;
+    RustDualRow& operator=(RustDualRow&& other) noexcept;
+    ~RustDualRow();
+  };
+  RustDualRow rs_;
+#endif
 
   HighsSimplexAnalysis* analysis = nullptr;
 };
