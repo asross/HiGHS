@@ -430,6 +430,7 @@ set(highs_sources
     simplex/HEkkDual.cpp
     simplex/HEkkDualMulti.cpp
     simplex/HEkkDualRHS.cpp
+    simplex/HEkkDualRHSRust.cpp
     simplex/HEkkDualRow.cpp
     simplex/HEkkInterface.cpp
     simplex/HEkkPrimal.cpp

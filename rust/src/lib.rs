@@ -5,6 +5,7 @@
 
 pub mod io;
 pub mod matrix;
+pub mod simplex;
 pub mod util;
 
 pub mod factor;

@@ -1443,7 +1443,7 @@ void HEkkDual::chooseRow() {
   if (rebuild_reason) return;
   //  if (solve_phase == kSolvePhase2) dualRHS.assessOptimality();
   // Zero the infeasibility of any taboo rows
-  ekk_instance_.applyTabooRowOut(dualRHS.work_infeasibility, 0);
+  ekk_instance_.applyTabooRowOut(dualRHS.work_infeasibility.data(), 0);
   // Choose candidates repeatedly until candidate is OK or optimality is
   // detected
   if (edge_weight_mode == EdgeWeightMode::kSteepestEdge) {
@@ -1506,7 +1506,7 @@ void HEkkDual::chooseRow() {
     }
   }
   // Recover the infeasibility of any taboo rows
-  ekk_instance_.unapplyTabooRowOut(dualRHS.work_infeasibility);
+  ekk_instance_.unapplyTabooRowOut(dualRHS.work_infeasibility.data());
 
   // Index of row to leave the basis has been found
   //
