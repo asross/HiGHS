@@ -3,6 +3,7 @@
 //! and the double-precision PRICE kernels of HighsSparseMatrix.
 
 pub mod matrix;
+pub mod util;
 
 const K_HIGHS_TINY: f64 = 1e-14;
 
