@@ -219,7 +219,7 @@ HighsStatus HEkkPrimal::solveRust(const bool force_phase2) {
       case Op::kBasisChanged:
         // The C++ parts of HEkk::updatePivots and HEkk::updateFactor
         ekk.dual_values_valid_ = false;
-        ekk.visited_basis_.insert(ekk.basis_.hash);
+        highs_rs_visited_basis_insert(ekk.basis_records_.p, ekk.basis_.hash);
         assert(!ekk.simplex_nla_.update_.valid_);
         ekk.simplex_nla_.factor_.refactor_info_.clear();
         return 0;
