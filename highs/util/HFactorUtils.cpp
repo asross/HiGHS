@@ -12,7 +12,7 @@
 
 void HFactor::invalidAMatrixAction() {
   this->a_matrix_valid = false;
-  refactor_info_.clear();
+  clearRefactorInfo();
 }
 
 #ifndef HIGHS_RUST

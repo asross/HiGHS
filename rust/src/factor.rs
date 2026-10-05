@@ -262,11 +262,16 @@ pub struct HFactor {
     pub row_with_no_pivot: Vec<i32>,
     pub col_with_no_pivot: Vec<i32>,
     pub var_with_no_pivot: Vec<i32>,
-    // Refactorization information recorded by a build from scratch
+    // Refactorization information (RefactorInfo, owned here): recorded by
+    // a build from scratch, used by a build if refactor_use
+    pub refactor_use: bool,
     pub refactor_pivot_row: Vec<i32>,
     pub refactor_pivot_var: Vec<i32>,
     pub refactor_pivot_type: Vec<i8>,
     pub refactor_build_synthetic_tick: f64,
+    /// The saved INVERT of HSimplexNla::putInvert: the integer and double
+    /// vectors of InvertibleRepresentation
+    pub saved_invert: (Vec<Vec<i32>>, Vec<Vec<f64>>),
 
     // Working buffer
     nwork: i32,
@@ -523,6 +528,51 @@ impl HFactor {
                 &self.ur_index[self.ur_start[i] as usize..self.ur_lastp[i] as usize]
             ));
         }
+    }
+
+    /// RefactorInfo::clear: after an update, the information no longer
+    /// corresponds to the basis
+    pub fn refactor_info_clear(&mut self) {
+        self.refactor_use = false;
+        self.refactor_clear();
+    }
+
+    /// HFactor::build with the refactorization information held here
+    /// (used if refactor_use)
+    pub fn build_with_refactor_info(
+        &mut self,
+        pivot_threshold: f64,
+        pivot_tolerance: f64,
+        time_limit: f64,
+        a: &AMatrix,
+        basic_index: &mut [i32],
+    ) -> i32 {
+        let mut refactored = false;
+        if !self.refactor_use {
+            return self.build(pivot_threshold, pivot_tolerance, time_limit, a, basic_index, None, &mut refactored);
+        }
+        let row = std::mem::take(&mut self.refactor_pivot_row);
+        let var = std::mem::take(&mut self.refactor_pivot_var);
+        let typ = std::mem::take(&mut self.refactor_pivot_type);
+        let n = row.len().min(var.len()).min(typ.len());
+        let info = RefactorIn {
+            pivot_row: &row[..n],
+            pivot_var: &var[..n],
+            pivot_type: &typ[..n],
+            build_synthetic_tick: self.refactor_build_synthetic_tick,
+        };
+        let r = self.build(pivot_threshold, pivot_tolerance, time_limit, a, basic_index, Some(&info), &mut refactored);
+        if refactored {
+            // The information used is kept
+            self.refactor_pivot_row = row;
+            self.refactor_pivot_var = var;
+            self.refactor_pivot_type = typ;
+        } else {
+            // Built from just the list of basic variables, recording the
+            // refactorization information
+            self.refactor_use = false;
+        }
+        r
     }
 
     fn refactor_clear(&mut self) {

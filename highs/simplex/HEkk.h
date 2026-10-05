@@ -22,7 +22,8 @@ class HighsLpSolverObject;
 #ifdef HIGHS_RUST
 namespace highs_rs {
 struct Ekk;
-}
+struct Hekk;
+}  // namespace highs_rs
 #endif
 
 class HEkk {
@@ -181,6 +182,13 @@ class HEkk {
 #ifdef HIGHS_RUST
   // The view of the data for the Rust kernels (simplex/HEkkRust.cpp)
   highs_rs::Ekk rustView();
+  // HEkk::solve in Rust (rust/src/simplex/hekk.rs), used when no simplex
+  // analysis, timing or debugging is asked for and the strategy is serial:
+  // its set-up and wrap-up, and the C++ it calls, are in HEkkRustSolve.cpp
+  bool rustSolveEligible() const;
+  HighsStatus solveRust(const bool force_phase2);
+  highs_rs::Hekk rustHekk(void* host_ctx, const bool draw_random_vectors);
+  struct RustHost;
 #endif
 
   // Data members

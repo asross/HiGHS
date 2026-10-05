@@ -45,14 +45,6 @@ struct RsAMatrix {
   const double* value;
 };
 
-struct RsRefactor {
-  const int* pivot_row;
-  const int* pivot_var;
-  const int8_t* pivot_type;
-  int num;
-  double build_synthetic_tick;
-};
-
 struct RsInfo {
   double build_synthetic_tick;
   double refactor_build_synthetic_tick;
@@ -108,8 +100,15 @@ void highs_rs_factor_setup(void* p, int num_col, int num_row, int num_basic,
                            const int* a_start, int update_method);
 int highs_rs_factor_build(void* p, double pivot_threshold,
                           double pivot_tolerance, double time_limit,
-                          const RsAMatrix* a, int* basic_index, int n_basic,
-                          const RsRefactor* refactor, int* refactored);
+                          const RsAMatrix* a, int* basic_index, int n_basic);
+void highs_rs_factor_refactor_clear(void* p);
+void highs_rs_factor_put_invert(void* p);
+void highs_rs_factor_get_invert(void* p);
+bool highs_rs_factor_refactor_use(const void* p);
+void highs_rs_factor_refactor_set(void* p, bool use, const int* pivot_row,
+                                  const int* pivot_var,
+                                  const int8_t* pivot_type, int n,
+                                  double build_synthetic_tick);
 void highs_rs_factor_ftran(const void* p, RsHVec* v, double expected_density);
 void highs_rs_factor_btran(const void* p, RsHVec* v, double expected_density);
 void highs_rs_factor_update(void* p, const RsHVec* aq, const RsHVec* ep, int n,
@@ -198,24 +197,21 @@ HighsInt HFactor::build(HighsTimerClock* /*factor_timer_clock_pointer*/) {
   // Ensure that the A matrix is valid for factorization
   assert(this->a_matrix_valid);
   const RsAMatrix a{num_col, a_start, a_index, a_value};
-  RsRefactor refactor;
-  const RsRefactor* use_refactor = nullptr;
-  // Possibly use the refactorization information!
-  if (refactor_info_.use) {
-    refactor = {refactor_info_.pivot_row.data(),
-                refactor_info_.pivot_var.data(),
-                refactor_info_.pivot_type.data(),
-                (int)std::min({refactor_info_.pivot_row.size(),
-                               refactor_info_.pivot_var.size(),
-                               refactor_info_.pivot_type.size()}),
-                refactor_info_.build_synthetic_tick};
-    use_refactor = &refactor;
-  }
-  int refactored = 0;
-  const HighsInt build_return = highs_rs_factor_build(
-      rs_.p, pivot_threshold, pivot_tolerance, time_limit_, &a, basic_index,
-      num_basic, use_refactor, &refactored);
-  // Mirror the results that are used outside HFactor
+  // The refactorization information is held by the Rust factor
+  const HighsInt build_return =
+      highs_rs_factor_build(rs_.p, pivot_threshold, pivot_tolerance,
+                            time_limit_, &a, basic_index, num_basic);
+  pullRustBuildInfo();
+  if (build_return == kBuildKernelReturnTimeout) return build_return;
+  if (rank_deficiency && num_basic == num_row)
+    highsLogDev(log_options, HighsLogType::kWarning,
+                "Rank deficiency of %" HIGHSINT_FORMAT
+                " identified in basis matrix\n",
+                rank_deficiency);
+  return build_return;
+}
+
+void HFactor::pullRustBuildInfo() {
   RsInfo info;
   highs_rs_factor_info(rs_.p, &info);
   build_synthetic_tick = info.build_synthetic_tick;
@@ -227,25 +223,37 @@ HighsInt HFactor::build(HighsTimerClock* /*factor_timer_clock_pointer*/) {
   row_with_no_pivot = getIvec(rs_.p, kRowWithNoPivot);
   col_with_no_pivot = getIvec(rs_.p, kColWithNoPivot);
   var_with_no_pivot = getIvec(rs_.p, kVarWithNoPivot);
-  if (!refactored) {
-    // Refactored from just the list of basic variables, recording the
-    // refactorization information
-    refactor_info_.use = false;
-    refactor_info_.pivot_row = getIvec(rs_.p, kRefactorPivotRow);
-    refactor_info_.pivot_var = getIvec(rs_.p, kRefactorPivotVar);
-    int len;
-    const int8_t* type = highs_rs_factor_refactor_type(rs_.p, &len);
-    refactor_info_.pivot_type.assign(type, type + len);
-    refactor_info_.build_synthetic_tick = info.refactor_build_synthetic_tick;
-  }
-  if (build_return == kBuildKernelReturnTimeout) return build_return;
-  if (rank_deficiency && num_basic == num_row)
-    highsLogDev(log_options, HighsLogType::kWarning,
-                "Rank deficiency of %" HIGHSINT_FORMAT
-                " identified in basis matrix\n",
-                rank_deficiency);
-  return build_return;
 }
+
+RefactorInfo HFactor::getRefactorInfo() const {
+  RefactorInfo refactor_info;
+  refactor_info.use = highs_rs_factor_refactor_use(rs_.p);
+  refactor_info.pivot_row = getIvec(rs_.p, kRefactorPivotRow);
+  refactor_info.pivot_var = getIvec(rs_.p, kRefactorPivotVar);
+  int len;
+  const int8_t* type = highs_rs_factor_refactor_type(rs_.p, &len);
+  refactor_info.pivot_type.assign(type, type + len);
+  RsInfo info;
+  highs_rs_factor_info(rs_.p, &info);
+  refactor_info.build_synthetic_tick = info.refactor_build_synthetic_tick;
+  return refactor_info;
+}
+
+void HFactor::setRefactorInfo(const RefactorInfo& refactor_info) {
+  const int n = std::min({refactor_info.pivot_row.size(),
+                          refactor_info.pivot_var.size(),
+                          refactor_info.pivot_type.size()});
+  highs_rs_factor_refactor_set(
+      rs_.p, refactor_info.use, refactor_info.pivot_row.data(),
+      refactor_info.pivot_var.data(), refactor_info.pivot_type.data(), n,
+      refactor_info.build_synthetic_tick);
+}
+
+void HFactor::clearRefactorInfo() { highs_rs_factor_refactor_clear(rs_.p); }
+
+void HFactor::saveInvert() { highs_rs_factor_put_invert(rs_.p); }
+
+void HFactor::restoreInvert() { highs_rs_factor_get_invert(rs_.p); }
 
 void HFactor::ftranCall(HVector& vector, const double expected_density,
                         HighsTimerClock* /*factor_timer_clock_pointer*/) const {
@@ -265,7 +273,7 @@ void HFactor::update(HVector* aq, HVector* ep, HighsInt* iRow, HighsInt* hint) {
   // Updating implies a change of basis. Since the refactorizaion info
   // no longer corresponds to the current basis, it must be
   // invalidated
-  this->refactor_info_.clear();
+  clearRefactorInfo();
   // Only APF uses the A matrix
   const RsAMatrix a{num_col, a_start, a_index, a_value};
   const RsAMatrix* use_a = update_method == kUpdateMethodApf ? &a : nullptr;

@@ -6,6 +6,7 @@ pub mod hash;
 pub mod hash_table;
 pub mod hash_tree;
 pub mod hset;
+pub mod printf;
 pub mod random;
 pub mod sparse_vector_sum;
 

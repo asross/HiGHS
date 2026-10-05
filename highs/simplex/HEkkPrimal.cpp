@@ -18,10 +18,6 @@
 using std::min;
 
 HighsStatus HEkkPrimal::solve(const bool pass_force_phase2) {
-#ifdef HIGHS_RUST
-  if (useRust()) return solveRust(pass_force_phase2);
-  initialiseInstance();
-#endif
   ekk_instance_.clearFreshValues();
   // Initialise control data for a particular solve
   initialiseSolve();

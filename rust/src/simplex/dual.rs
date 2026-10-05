@@ -2,43 +2,28 @@
 //! serial strategy (simplex_strategy 1): solve(), the phase loops, rebuild,
 //! and the iteration (CHUZR, PRICE + CHUZC, the FTRANs, the updates).
 //!
-//! The data is HEkk's, reached through an `EkkView` (ekk.rs) plus a
-//! `CDualEkk` of pointers to the HEkk scalars that only the driver uses;
-//! HEkkDual's HVectors come as `CHVec`s, viewed for the whole solve.
-//! What stays in C++ is called through the function pointers of
-//! `DualCallbacks`, filled by highs/simplex/HEkkDualRust.cpp:
-//! - per solve or rebuild: the INVERT with backtracking
-//!   (getNonsingularInverse), the factor's solution error, the backtracking
-//!   basis, restoring saved edge weights, (re)sizing HEkk's vectors, the
-//!   primal simplex clean-up, the proof of primal infeasibility and the
-//!   dual ray, returnFromSolve;
-//! - rarely in an iteration: iterative refinement of the pivotal row
-//!   (improveChooseColumnRow), raising the pivot threshold, clearing the
-//!   factor's refactorization info after the first update of an INVERT;
-//! - logging and reporting, when it is due (dev logs only when highsLogDev
-//!   can print; iteration reports only at their log level);
-//! - the run clock, read once per solve when there is a time limit (then
-//!   advanced by a Rust clock); the user interrupt callback, only when
-//!   one is set.
+//! The data is HEkk's, reached through an `EkkView` (ekk.rs) and the
+//! `CHekk` of hekk.rs, whose HEkk methods (the INVERT with backtracking,
+//! the proof of primal infeasibility, returnFromSolve, ...) it calls
+//! directly, as it does the primal simplex (primal.rs) for clean-up.
+//! HEkkDual's HVectors are owned here. What still reaches C++ goes
+//! through hekk.rs's `Host`: logging (when it can print), the analysis
+//! reports, the run clock and a user interrupt callback.
 //!
-//! After a callback that may change HEkk's data, the view is refreshed.
 //! The analysis records that only HighsSimplexAnalysis::summaryReport
-//! reads are not kept: HEkkDual::solve uses this driver only when
-//! simplex analysis, timing and debugging are off (see
-//! HEkkDual::rustEligible).
-
-use std::ffi::c_void;
+//! reads are not kept: HEkk::solve runs in Rust only when simplex
+//! analysis, timing and debugging are off.
 
 use super::basis_records::{BasisRecords, REASON_CYCLING, REASON_FAILED_INFEASIBILITY_PROOF};
-use super::dual_row::{AMatrix as RowMatrix, ChooseFail, DualRow, WorkPair};
+use super::dual_row::{AMatrix as RowMatrix, ChooseFail, DualRow};
 use super::dual_rhs::{DualRhs, Primal};
 use super::ekk::{
-    reinvert_on_numerical_trouble, sparse_loop_style, update_operation_result_density, CEkk,
-    CostPerturbationReport, EkkView, Infeasibility,
+    reinvert_on_numerical_trouble, sparse_loop_style, update_operation_result_density, EkkView, Infeasibility,
 };
-use crate::ffi::{sl, sl_mut, CHVec};
+use super::hekk::{self, get_value_scale, Bailout, CHekk, LOG_DETAILED, LOG_ERROR, LOG_INFO, LOG_VERBOSE, LOG_WARNING};
 use crate::hvector::{HVec, OwnedHVec};
 use crate::matrix;
+use crate::sprintf;
 use crate::util::cdouble::CDouble;
 use crate::util::random::HighsRandom;
 
@@ -66,11 +51,8 @@ const PHASE_TABOO_BASIS: i32 = 5;
 const RR_CLEANUP: i32 = -1;
 const RR_NO: i32 = 0;
 const RR_POSSIBLY_OPTIMAL: i32 = 3;
-const RR_POSSIBLY_PHASE1_FEASIBLE: i32 = 4;
-const RR_POSSIBLY_PRIMAL_UNBOUNDED: i32 = 5;
 const RR_POSSIBLY_DUAL_UNBOUNDED: i32 = 6;
 const RR_POSSIBLY_SINGULAR_BASIS: i32 = 7;
-const RR_PRIMAL_INFEASIBLE_IN_PRIMAL_SIMPLEX: i32 = 8;
 const RR_CHOOSE_COLUMN_FAIL: i32 = 9;
 const RR_EXCESSIVE_PRIMAL_VALUE: i32 = 11;
 
@@ -81,8 +63,6 @@ const MS_OPTIMAL: i32 = 7;
 const MS_INFEASIBLE: i32 = 8;
 const MS_UNBOUNDED_OR_INFEASIBLE: i32 = 9;
 const MS_OBJECTIVE_BOUND: i32 = 11;
-const MS_TIME_LIMIT: i32 = 13;
-const MS_ITERATION_LIMIT: i32 = 14;
 const MS_UNKNOWN: i32 = 15;
 
 // HighsStatus
@@ -96,8 +76,8 @@ const K_NUMERICAL_TROUBLE_TOLERANCE: f64 = 1e-7;
 const K_RUNNING_AVERAGE_MULTIPLIER: f64 = 0.05;
 const K_ILLEGAL_INFEASIBILITY_COUNT: i32 = -1;
 
-/// The messages logged through `DualCallbacks::log`: highs/simplex/
-/// HEkkDualRust.cpp has their text, with ints and reals as listed
+/// The messages logged by the driver, with ints and reals as listed: their
+/// text is in Dual::message
 pub mod msg {
     pub const NEAR_OPTIMAL: i32 = 0; // [num pr inf] [max, sum]
     pub const NEAR_OPTIMAL_NO_PERTURBATION: i32 = 1;
@@ -143,107 +123,6 @@ pub mod msg {
     pub const OBJECTIVE_BOUND_EXCEEDED: i32 = 41; // [] [objective, bound]
     pub const DUAL_UB_BAILOUT: i32 = 42; // [have, iteration, frequency] [density, perturbed, exact]
     pub const BAD_BASIS_CHANGE: i32 = 43; // [variable out, variable in]
-}
-
-/// A pointer to an HEkk scalar, valid for the solve, which C++ may also
-/// write during callbacks: read and written by value
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct Shared<T>(*mut T);
-
-impl<T: Copy> Shared<T> {
-    #[inline]
-    fn get(self) -> T {
-        // SAFETY: C++ passes a pointer into HEkk, live for the solve, that
-        // is not otherwise borrowed by Rust
-        unsafe { self.0.read() }
-    }
-    #[inline]
-    fn set(self, value: T) {
-        // SAFETY: as for get
-        unsafe { self.0.write(value) }
-    }
-}
-
-/// The HEkk data used by the driver beyond the EkkView: filled by
-/// HEkkDual::solveRust() and mirrored by highs_rs::DualEkk, in
-/// highs/simplex/HEkkDualRust.cpp
-#[repr(C)]
-pub struct CDualEkk {
-    // HEkk
-    pub iteration_count: Shared<i32>,
-    pub model_status: Shared<i32>,
-    pub solve_bailout: Shared<bool>,
-    pub called_return_from_solve: Shared<bool>,
-    pub dual_values_valid: Shared<bool>,
-    pub fresh_unperturbed_dual: Shared<bool>,
-    pub fresh_dual: Shared<bool>,
-    pub fresh_primal: Shared<bool>,
-    pub edge_weight_error: Shared<f64>,
-    pub dual_simplex_cleanup_level: Shared<i32>,
-    pub dual_simplex_phase1_cleanup_level: Shared<i32>,
-    pub previous_iteration_cycling_detected: Shared<i32>,
-    pub random: Shared<u64>,
-    pub basis_records: *mut BasisRecords,
-    pub nla_build_synthetic_tick: Shared<f64>,
-    // status_
-    pub has_invert: Shared<bool>,
-    pub has_fresh_invert: Shared<bool>,
-    pub has_fresh_rebuild: Shared<bool>,
-    pub has_dual_objective_value: Shared<bool>,
-    pub has_primal_objective_value: Shared<bool>,
-    pub has_dual_steepest_edge_weights: Shared<bool>,
-    pub has_ar_matrix: Shared<bool>,
-    // info_
-    pub dual_phase1_iteration_count: Shared<i32>,
-    pub dual_phase2_iteration_count: Shared<i32>,
-    pub allow_cost_shifting: Shared<bool>,
-    pub allow_cost_perturbation: Shared<bool>,
-    pub backtracking: Shared<bool>,
-    pub valid_backtracking_basis: Shared<bool>,
-    pub store_squared_primal_infeasibility: Shared<bool>,
-    pub factor_pivot_threshold: Shared<f64>,
-    pub col_bfrt_density: Shared<f64>,
-    pub costly_dse_measure: Shared<f64>,
-    pub costly_dse_frequency: Shared<f64>,
-    pub num_costly_dse_iteration: Shared<i32>,
-    pub average_log_low_dse_weight_error: Shared<f64>,
-    pub average_log_high_dse_weight_error: Shared<f64>,
-    // info_ values, constant during the solve
-    pub control_iteration_count0: i32,
-    pub allow_dual_steepest_edge_to_devex_switch: bool,
-    pub dual_steepest_edge_weight_log_error_threshold: f64,
-    pub dual_edge_weight_strategy: i32,
-    pub run_quiet: bool,
-    // options_
-    pub objective_bound: f64,
-    pub time_limit: f64,
-    pub simplex_iteration_limit: i32,
-    pub max_dual_simplex_cleanup_level: i32,
-    pub max_dual_simplex_phase1_cleanup_level: i32,
-    pub dual_simplex_pivot_growth_tolerance: f64,
-    pub simplex_dse_exact_init_max_rows: i32,
-    pub small_matrix_value: f64,
-    pub dual_steepest_edge_weight_error_tolerance: f64,
-    pub no_unnecessary_rebuild_refactor: bool,
-    pub rebuild_refactor_solution_error_tolerance: f64,
-    /// Whether highsLogDev can print anything
-    pub dev_log: bool,
-    /// Whether iteration reports are logged (log_dev_level >= kVerbose)
-    pub iteration_report: bool,
-    /// Whether a user callback for simplex interrupts is active
-    pub interrupt_callback: bool,
-}
-
-/// The view refreshed after callbacks: HEkk::rustView() and the vectors of
-/// info_ that the dual uses
-#[repr(C)]
-pub struct CDualView {
-    pub ekk: CEkk,
-    pub devex_index: *mut i32,
-    pub n_devex_index: i32,
-    pub num_tot_permutation: *const i32,
-    pub n_num_tot_permutation: i32,
 }
 
 /// HEkkDual's scalars for reports (HEkkDual::iterationAnalysisData)
@@ -292,98 +171,6 @@ pub struct AnalysisData {
     pub costly_dse_measure: f64,
 }
 
-type Ctx = *mut c_void;
-
-/// The C++ called by the driver: see the module comment
-#[repr(C)]
-pub struct DualCallbacks {
-    pub ctx: Ctx,
-    pub refresh: extern "C" fn(Ctx, *mut CDualView),
-    /// The checks and settings at the start of HEkkDual::solve: 0 if OK
-    pub start: extern "C" fn(Ctx) -> i32,
-    pub return_from_solve: extern "C" fn(Ctx, i32) -> i32,
-    pub log: extern "C" fn(Ctx, i32, *const i32, *const f64),
-    pub log_cost_perturbation: extern "C" fn(Ctx, *const CostPerturbationReport),
-    pub set_lp_dual_infeasibility: extern "C" fn(Ctx, *const Infeasibility),
-    pub report_rebuild: extern "C" fn(Ctx, *const DualState, i32),
-    pub iteration_report: extern "C" fn(Ctx, *const DualState),
-    pub apply_analysis_data: extern "C" fn(Ctx, *const AnalysisData),
-    pub chuzc_fail: extern "C" fn(Ctx, i32, i32, *const WorkPair, f64, f64),
-    pub timer_read: extern "C" fn(Ctx) -> f64,
-    pub interrupt: extern "C" fn(Ctx) -> bool,
-    pub factor_solve_error: extern "C" fn(Ctx) -> f64,
-    pub get_nonsingular_inverse: extern "C" fn(Ctx, i32) -> bool,
-    pub initialise_partitioned_rowwise_matrix: extern "C" fn(Ctx),
-    pub put_backtracking_basis: extern "C" fn(Ctx),
-    pub restore_dual_edge_weights: extern "C" fn(Ctx, bool) -> bool,
-    /// Size dual_edge_weight_ (assigning unit weights if asked),
-    /// scattered_dual_edge_weight_, the backtracking weights and devex_index_
-    pub edge_weight_vectors: extern "C" fn(Ctx, bool),
-    pub clear_refactor_info: extern "C" fn(Ctx),
-    pub set_pivot_threshold: extern "C" fn(Ctx, f64),
-    pub improve_choose_column_row: extern "C" fn(Ctx, i32),
-    pub proof_of_primal_infeasibility: extern "C" fn(Ctx, i32, i32) -> bool,
-    pub save_dual_ray: extern "C" fn(Ctx, i32, i32),
-    pub primal_cleanup: extern "C" fn(Ctx) -> i32,
-    pub record_dual_values: extern "C" fn(Ctx),
-}
-
-/// HEkkDual's HVectors, as CHVecs that C++ syncs with the HVectors in
-/// callbacks
-#[repr(C)]
-pub struct CDualVectors {
-    pub row_ep: *mut CHVec,
-    pub row_ap: *mut CHVec,
-    pub col_aq: *mut CHVec,
-    pub col_bfrt: *mut CHVec,
-}
-
-/// nearestPowerOfTwoScale (util/HighsUtils.cpp): 2^-e where value = x*2^e
-/// with x in (0.5, 1], so that value*scale is in (0.5, 1]
-fn nearest_power_of_two_scale(value: f64) -> f64 {
-    if value == 0.0 || !value.is_finite() {
-        return 1.0;
-    }
-    // frexp
-    let mut v = value.abs();
-    let mut e_adjust = 0;
-    if v < f64::MIN_POSITIVE {
-        v *= 2f64.powi(54);
-        e_adjust = -54;
-    }
-    let bits = v.to_bits();
-    let biased = ((bits >> 52) & 0x7ff) as i32;
-    let mut exp = biased - 1022 + e_adjust;
-    let mantissa_zero = bits & ((1u64 << 52) - 1) == 0;
-    // |x| == 0.5: value is a power of two
-    if mantissa_zero {
-        exp -= 1;
-    }
-    let n = -exp;
-    if (-1022..=1023).contains(&n) {
-        f64::from_bits(((n + 1023) as u64) << 52)
-    } else {
-        2f64.powi(n)
-    }
-}
-
-/// HEkk::getValueScale
-fn get_value_scale(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 1.0;
-    }
-    let mut max_abs_value = 0.0;
-    for &v in values {
-        // std::max(fabs(value), max_abs_value)
-        let a = v.abs();
-        if a < max_abs_value {
-        } else {
-            max_abs_value = a;
-        }
-    }
-    nearest_power_of_two_scale(max_abs_value)
-}
-
 /// std::max(a, b)
 #[inline]
 fn std_max(a: f64, b: f64) -> f64 {
@@ -404,32 +191,49 @@ fn std_min(a: f64, b: f64) -> f64 {
     }
 }
 
-/// Run `f` on a view of a CHVec, then copy its scalars back
-///
-/// # Safety
-/// `c` valid, its arrays not otherwise borrowed
-unsafe fn with_vec<R>(c: *mut CHVec, f: impl FnOnce(&mut HVec) -> R) -> R {
-    let mut v = (*c).view();
-    let r = f(&mut v);
-    (*c).store(&v);
-    r
+/// Whether a message goes to highsLogUser (else highsLogDev), and its
+/// HighsLogType
+fn msg_kind(id: i32) -> (bool, i32) {
+    use msg::*;
+    match id {
+        RATIO_TEST_FAILED | EXCESSIVE_PRIMAL_VALUES => (true, LOG_ERROR),
+        NEAR_OPTIMAL | NEAR_OPTIMAL_NO_PERTURBATION | NEAR_OPTIMAL_USE_DEVEX | COMPUTE_DSE_WEIGHTS | PHASE1_START
+        | PHASE1_OPTIMAL | PHASE2_START | PHASE2_FOUND_FREE | PHASE2_OPTIMAL | PROBLEM_OPTIMAL | CLEANUP_SHIFT
+        | FLIPS | SHIFTS | REPERTURBING | FREE_SHIFTS | OBJECTIVE_BOUND_EXCEEDED => (false, LOG_DETAILED),
+        SHIFT | FREE_SHIFT => (false, LOG_VERBOSE),
+        CANNOT_CLEANUP | CLEANING_UP_PHASE1 | PHASE2_NO_PERTURBATION | EXACT_COL_RESIDUAL | EXACT_ROW_RESIDUAL
+        | EXACT_RELATIVE_DELTA | BAD_BASIS_CHANGE => (false, LOG_WARNING),
+        CLEANUP_LEVEL_EXCEEDED => (false, LOG_ERROR),
+        _ => (false, LOG_INFO),
+    }
+}
+
+/// Run `f` on a view of an HVector
+#[inline]
+fn with_vec<R>(c: &mut OwnedHVec, f: impl FnOnce(&mut HVec) -> R) -> R {
+    c.with(f)
+}
+
+/// HEkkDual's HVectors
+struct DualVectors {
+    row_ep: OwnedHVec,
+    row_ap: OwnedHVec,
+    col_aq: OwnedHVec,
+    col_bfrt: OwnedHVec,
 }
 
 pub struct Dual<'a> {
     e: EkkView<'a>,
-    x: &'a CDualEkk,
-    cb: &'a DualCallbacks,
-    cview: CDualView,
+    x: &'a CHekk,
     devex_index: &'a mut [i32],
     num_tot_permutation: &'a [i32],
-    v: &'a CDualVectors,
+    v: DualVectors,
     row: DualRow,
     rhs: DualRhs,
     work_col: OwnedHVec,
     work_row: OwnedHVec,
     refactor_info_dirty: bool,
-    /// The run clock and the Rust instant when it was read
-    clock: Option<(f64, std::time::Instant)>,
+    bailout: Bailout,
     num_row: usize,
     num_col: usize,
     num_tot: usize,
@@ -471,15 +275,15 @@ pub struct Dual<'a> {
 }
 
 impl<'a> Dual<'a> {
+    /// HEkkDual::HEkkDual
+    ///
     /// # Safety
-    /// The pointers in `x`, `v` and those filled by `cb.refresh` must be
-    /// valid for the solve
-    unsafe fn new(x: &'a CDualEkk, cb: &'a DualCallbacks, v: &'a CDualVectors) -> Self {
-        let mut cview: CDualView = std::mem::zeroed();
-        (cb.refresh)(cb.ctx, &mut cview);
-        let e = cview.ekk.view();
-        let devex_index = sl_mut(cview.devex_index, cview.n_devex_index);
-        let num_tot_permutation = sl(cview.num_tot_permutation, cview.n_num_tot_permutation);
+    /// As for CHekk::view: `x` filled for the solve, and no other view of
+    /// HEkk's data used while this solver runs
+    pub unsafe fn new(x: &'a CHekk) -> Self {
+        let e = x.view();
+        let devex_index = x.devex_index.get_mut();
+        let num_tot_permutation = x.num_tot_permutation.get();
         let (num_row, num_col) = (e.num_row, e.num_col);
         let num_tot = num_row + num_col;
         let mut row = DualRow::default();
@@ -489,17 +293,20 @@ impl<'a> Dual<'a> {
         Dual {
             e,
             x,
-            cb,
-            cview,
             devex_index,
             num_tot_permutation,
-            v,
+            v: DualVectors {
+                row_ep: OwnedHVec::new(num_row as i32),
+                row_ap: OwnedHVec::new(num_col as i32),
+                col_aq: OwnedHVec::new(num_row as i32),
+                col_bfrt: OwnedHVec::new(num_row as i32),
+            },
             row,
             rhs,
             work_col: OwnedHVec::new(num_row as i32),
             work_row: OwnedHVec::new(num_col as i32),
             refactor_info_dirty: true,
-            clock: None,
+            bailout: Bailout::new(),
             num_row,
             num_col,
             num_tot,
@@ -538,32 +345,23 @@ impl<'a> Dual<'a> {
         }
     }
 
-    /// Rebuild the view after C++ may have changed HEkk's data
-    fn refresh(&mut self) {
-        (self.cb.refresh)(self.cb.ctx, &mut self.cview);
-        // SAFETY: C++ has just filled the view with HEkk's current vectors
-        unsafe {
-            self.e = self.cview.ekk.view();
-            self.devex_index = sl_mut(self.cview.devex_index, self.cview.n_devex_index);
-            self.num_tot_permutation = sl(self.cview.num_tot_permutation, self.cview.n_num_tot_permutation);
-        }
-    }
-
     fn records(&mut self) -> &mut BasisRecords {
-        // SAFETY: HEkk's records, live for the solve; C++ touches them
-        // only in callbacks, when this borrow has ended
-        unsafe { &mut *self.x.basis_records }
+        self.x.records()
     }
 
+    /// Log a message
     fn log(&self, id: i32, ints: &[i32], reals: &[f64]) {
-        (self.cb.log)(self.cb.ctx, id, ints.as_ptr(), reals.as_ptr());
+        let (user, log_type) = msg_kind(id);
+        if user {
+            self.x.user(log_type, &self.message(id, ints, reals));
+        } else {
+            self.x.dev(log_type, || self.message(id, ints, reals));
+        }
     }
 
-    /// A highsLogDev message: only crosses to C++ if it can be printed
+    /// A highsLogDev message
     fn dev(&self, id: i32, ints: &[i32], reals: &[f64]) {
-        if self.x.dev_log {
-            self.log(id, ints, reals);
-        }
+        self.log(id, ints, reals);
     }
 
     fn state(&self) -> DualState {
@@ -586,14 +384,14 @@ impl<'a> Dual<'a> {
 
     fn return_from_solve(&mut self, status: i32) -> i32 {
         self.flush_analysis_data();
-        (self.cb.return_from_solve)(self.cb.ctx, status)
+        hekk::return_from_solve(&mut self.e, self.x, status)
     }
 
     /// Give HEkk::analysis_ the data of the last iteration, if a report
     /// has not done so since
     fn flush_analysis_data(&mut self) {
         if self.analysis_data_pending {
-            (self.cb.apply_analysis_data)(self.cb.ctx, &self.analysis_data);
+            (self.x.host.dual_report)(self.x.host.ctx, 0, &self.analysis_data, 0);
             self.analysis_data_pending = false;
         }
     }
@@ -634,7 +432,7 @@ impl<'a> Dual<'a> {
         self.analysis_data_pending = true;
     }
 
-    fn primal(e: &mut EkkView<'a>, x: &CDualEkk) -> Primal<'static> {
+    fn primal(e: &mut EkkView<'a>, x: &CHekk) -> Primal<'static> {
         // SAFETY: the base arrays are HEkk's, live for the solve; the
         // Primal is used within a statement while `e` is not otherwise
         // accessed for them
@@ -653,9 +451,7 @@ impl<'a> Dual<'a> {
     // ---- HEkk methods with side effects beyond the kernels ----
 
     fn clear_fresh_values(&self) {
-        self.x.fresh_unperturbed_dual.set(false);
-        self.x.fresh_dual.set(false);
-        self.x.fresh_primal.set(false);
+        self.x.clear_fresh_values();
     }
 
     /// HEkk::computeDual
@@ -683,11 +479,7 @@ impl<'a> Dual<'a> {
 
     /// HEkk::initialiseCost for the dual simplex
     fn initialise_cost(&mut self, perturb: bool) {
-        let mut report = CostPerturbationReport::default();
-        self.e.initialise_cost(ALGORITHM_DUAL, perturb, &mut report);
-        if report.perturbed && self.x.dev_log {
-            (self.cb.log_cost_perturbation)(self.cb.ctx, &report);
-        }
+        hekk::initialise_cost(&mut self.e, self.x, ALGORITHM_DUAL, perturb);
     }
 
     /// HEkk::initialiseBound and HEkk::initialiseNonbasicValueAndMove
@@ -699,70 +491,21 @@ impl<'a> Dual<'a> {
     /// HEkk::computeSimplexLpDualInfeasible
     fn compute_simplex_lp_dual_infeasible(&mut self) {
         self.lp_dual_infeasibility = self.e.compute_simplex_lp_dual_infeasible();
-        (self.cb.set_lp_dual_infeasibility)(self.cb.ctx, &self.lp_dual_infeasibility);
     }
 
     /// HEkk::resetSyntheticClock
     fn reset_synthetic_clock(&mut self) {
-        *self.e.build_synthetic_tick = self.x.nla_build_synthetic_tick.get();
-        *self.e.total_synthetic_tick = 0.0;
+        hekk::reset_synthetic_clock(&mut self.e, self.x);
     }
 
     /// HEkk::rebuildRefactor
     fn rebuild_refactor(&mut self, rebuild_reason: i32) -> bool {
-        if *self.e.update_count == 0 {
-            return false;
-        }
-        let mut refactor = true;
-        if self.x.no_unnecessary_rebuild_refactor
-            && matches!(
-                rebuild_reason,
-                RR_NO
-                    | RR_POSSIBLY_OPTIMAL
-                    | RR_POSSIBLY_PHASE1_FEASIBLE
-                    | RR_POSSIBLY_PRIMAL_UNBOUNDED
-                    | RR_POSSIBLY_DUAL_UNBOUNDED
-                    | RR_PRIMAL_INFEASIBLE_IN_PRIMAL_SIMPLEX
-            )
-        {
-            refactor = false;
-            let error_tolerance = self.x.rebuild_refactor_solution_error_tolerance;
-            if error_tolerance > 0.0 {
-                let solution_error = (self.cb.factor_solve_error)(self.cb.ctx);
-                self.refresh();
-                refactor = solution_error > error_tolerance;
-            }
-        }
-        refactor
-    }
-
-    /// HEkk::timer_->read(): read from C++ once, then advanced by a Rust
-    /// monotonic clock, so that iterations need not call C++ for it
-    fn timer_read(&mut self) -> f64 {
-        match self.clock {
-            Some((time0, instant0)) => time0 + instant0.elapsed().as_secs_f64(),
-            None => {
-                let time0 = (self.cb.timer_read)(self.cb.ctx);
-                self.clock = Some((time0, std::time::Instant::now()));
-                time0
-            }
-        }
+        hekk::rebuild_refactor(&mut self.e, self.x, rebuild_reason)
     }
 
     /// HEkk::bailout
     fn bailout(&mut self) -> bool {
-        let x = self.x;
-        if x.solve_bailout.get() {
-        } else if x.time_limit < INF && self.timer_read() > x.time_limit {
-            x.solve_bailout.set(true);
-            x.model_status.set(MS_TIME_LIMIT);
-        } else if x.iteration_count.get() >= x.simplex_iteration_limit {
-            x.solve_bailout.set(true);
-            x.model_status.set(MS_ITERATION_LIMIT);
-        } else if x.interrupt_callback && (self.cb.interrupt)(self.cb.ctx) {
-            // The callback sets solve_bailout_ and model_status_
-        }
-        x.solve_bailout.get()
+        self.bailout.check(self.x)
     }
 
     // ---- HEkkDual ----
@@ -770,7 +513,7 @@ impl<'a> Dual<'a> {
     pub fn solve(&mut self, pass_force_phase2: bool) -> i32 {
         let x = self.x;
         self.initialise_solve();
-        if (self.cb.start)(self.cb.ctx) != 0 {
+        if !self.start() {
             return self.return_from_solve(STATUS_ERROR);
         }
         // Determine the duals without cost perturbation: unless just
@@ -812,19 +555,15 @@ impl<'a> Dual<'a> {
         }
         // Consider initialising edge weights
         let has_weights = x.has_dual_steepest_edge_weights.get();
-        (self.cb.edge_weight_vectors)(self.cb.ctx, !has_weights);
-        self.refresh();
         if !has_weights {
+            // Assign unit weights: the vectors are sized by C++
+            hekk::assign_unit_dual_edge_weights(&mut self.e);
             // Unit weights are assigned: correct for steepest edge when
             // B=I
             if self.edge_weight_mode == EW_DSE {
                 if self.logical_basis() {
                     x.has_dual_steepest_edge_weights.set(true);
-                } else if {
-                    let restored = (self.cb.restore_dual_edge_weights)(self.cb.ctx, near_optimal);
-                    self.refresh();
-                    restored
-                } {
+                } else if hekk::restore_dual_edge_weights(&mut self.e, x, near_optimal) {
                     x.has_dual_steepest_edge_weights.set(true);
                 } else if near_optimal {
                     // Use Devex rather than compute steepest edge weights
@@ -872,10 +611,10 @@ impl<'a> Dual<'a> {
                 self.compute_dual_infeasibilities_with_fixed_variable_flips();
                 self.dual_infeas_count = *self.e.num_dual_infeasibilities;
                 self.solve_phase = if self.dual_infeas_count > 0 { PHASE_1 } else { PHASE_2 };
-                if x.backtracking.get() {
+                if *self.e.backtracking {
                     // Backtracking, so set the bounds and primal values
                     self.initialise_bound_and_values(self.solve_phase);
-                    x.backtracking.set(false);
+                    *self.e.backtracking = false;
                 }
             }
             if self.solve_phase == PHASE_1 {
@@ -918,8 +657,7 @@ impl<'a> Dual<'a> {
                 x.model_status.set(if self.solve_phase == PHASE_OPTIMAL_CLEANUP { MS_OPTIMAL } else { MS_INFEASIBLE });
             } else {
                 self.flush_analysis_data();
-                let return_status = (self.cb.primal_cleanup)(self.cb.ctx);
-                self.refresh();
+                let return_status = self.primal_cleanup();
                 self.refactor_info_dirty = true;
                 if return_status != STATUS_OK {
                     return self.return_from_solve(return_status);
@@ -933,7 +671,7 @@ impl<'a> Dual<'a> {
             && !*self.e.costs_perturbed
             && !*self.e.costs_shifted
         {
-            (self.cb.record_dual_values)(self.cb.ctx);
+            hekk::record_dual_values(&self.e, self.x);
         }
         self.return_from_solve(STATUS_OK)
     }
@@ -944,7 +682,228 @@ impl<'a> Dual<'a> {
         self.x.model_status.set(MS_NOTSET);
         self.x.solve_bailout.set(false);
         self.x.called_return_from_solve.set(false);
+        self.x.exit_algorithm.set(ALGORITHM_DUAL);
         self.rebuild_reason = RR_NO;
+    }
+
+    /// The checks and settings at the start of HEkkDual::solve: false on
+    /// error
+    fn start(&mut self) -> bool {
+        // Assumes that the LP has a positive number of rows
+        if hekk::is_unconstrained_lp(&self.e, self.x) {
+            return false;
+        }
+        // Possibly use Li dual steepest edge weights by not storing
+        // squared primal infeasibilities
+        hekk::possibly_use_li_dual_steepest_edge(&self.e, self.x);
+        if !self.e.status.has_invert {
+            self.x.dev(LOG_ERROR, || sprintf!("HDual:: Should enter solve with INVERT\n"));
+            return false;
+        }
+        true
+    }
+
+    /// Clean up dual infeasibilities with the primal simplex: returns the
+    /// status of the call
+    fn primal_cleanup(&mut self) -> i32 {
+        let x = self.x;
+        let e = &self.e;
+        x.dev(LOG_INFO, || {
+            sprintf!(
+                "HEkkDual:: Using primal simplex to try to clean up num / max / sum = %d / %g / %g dual infeasibilities\n",
+                *e.num_dual_infeasibilities,
+                *e.max_dual_infeasibility,
+                *e.sum_dual_infeasibilities
+            )
+        });
+        // Switch off any bound perturbation
+        let save_primal_simplex_bound_perturbation_multiplier = *self.e.primal_simplex_bound_perturbation_multiplier;
+        *self.e.primal_simplex_bound_perturbation_multiplier = 0.0;
+        let call_status = hekk::primal_solve(x, true);
+        // Restore any bound perturbation
+        *self.e.primal_simplex_bound_perturbation_multiplier = save_primal_simplex_bound_perturbation_multiplier;
+        let return_status = hekk::interpret_call_status(x, call_status, STATUS_OK, "HEkkPrimal::solve");
+        // Reset called_return_from_solve_ to be false, since it's called
+        // for this solve
+        x.called_return_from_solve.set(false);
+        if return_status != STATUS_OK {
+            return return_status;
+        }
+        let e = &self.e;
+        if x.model_status.get() == MS_OPTIMAL && *e.num_primal_infeasibilities + *e.num_dual_infeasibilities != 0 {
+            x.dev(LOG_WARNING, || {
+                sprintf!(
+                    "HEkkDual:: Primal simplex clean up yields optimality, but with %d (max %g) primal infeasibilities and %d (max %g) dual infeasibilities\n",
+                    *e.num_primal_infeasibilities,
+                    *e.max_primal_infeasibility,
+                    *e.num_dual_infeasibilities,
+                    *e.max_dual_infeasibility
+                )
+            });
+        }
+        STATUS_OK
+    }
+
+    /// The text of a message
+    fn message(&self, id: i32, i: &[i32], r: &[f64]) -> String {
+        use msg::*;
+        match id {
+            NEAR_OPTIMAL => sprintf!(
+                "Dual feasible with unperturbed costs and num / max / sum primal infeasibilities of %d / %g / %g, so near-optimal\n",
+                i[0],
+                r[0],
+                r[1]
+            ),
+            NEAR_OPTIMAL_NO_PERTURBATION => "Near-optimal, so don't use cost perturbation\n".into(),
+            NEAR_OPTIMAL_USE_DEVEX => {
+                "Basis is not logical, but near-optimal, so use Devex rather than compute steepest edge weights\n"
+                    .into()
+            }
+            COMPUTE_DSE_WEIGHTS => "Basis is not logical, so compute steepest edge weights\n".into(),
+            CANNOT_CLEANUP => sprintf!(
+                "HEkkDual:: Cannot use level %d primal simplex cleanup for %d dual infeasibilities\n",
+                i[0],
+                i[1]
+            ),
+            PHASE1_START => "dual-phase-1-start\n".into(),
+            PHASE1_OPTIMAL => "dual-phase-1-optimal\n".into(),
+            RATIO_TEST_FAILED => "Dual simplex ratio test failed due to excessive dual values: consider scaling down the LP objective coefficients\n".into(),
+            EXCESSIVE_PRIMAL_VALUES => {
+                "Dual simplex detected excessive primal values: consider scaling down the LP bounds\n".into()
+            }
+            PHASE1_NOT_SOLVED => "dual-phase-1-not-solved\n".into(),
+            PHASE1_UNBOUNDED => "dual-phase-1-unbounded\n".into(),
+            CLEANING_UP_PHASE1 => "Cleaning up cost perturbation when unbounded in phase 1\n".into(),
+            PHASE1_BAD_PHASE => sprintf!(
+                "HEkkDual::solvePhase1 solve_phase == %d (solve call %d; iter %d)\n",
+                i[0],
+                self.x.debug_solve_call_num,
+                self.x.iteration_count.get()
+            ),
+            PHASE2_NO_PERTURBATION => "Moving to phase 2, but not allowing cost perturbation\n".into(),
+            PHASE2_START => "dual-phase-2-start\n".into(),
+            PHASE2_FOUND_FREE => "dual-phase-2-found-free\n".into(),
+            PHASE2_OPTIMAL => "dual-phase-2-optimal\n".into(),
+            PROBLEM_OPTIMAL => "problem-optimal\n".into(),
+            PHASE2_NOT_SOLVED => "dual-phase-2-not-solved\n".into(),
+            PROBLEM_PRIMAL_INFEASIBLE => "problem-primal-infeasible\n".into(),
+            CLEANUP_LEVEL_EXCEEDED => sprintf!("Dual simplex cleanup level has exceeded limit of %d\n", i[0]),
+            CLEANUP_SHIFT => "dual-cleanup-shift\n".into(),
+            DSE_WEIGHT_ERROR => sprintf!("Dual steepest edge weight error is %g\n", r[0]),
+            SWITCH_DEVEX_COST => sprintf!(
+                "Switch from DSE to Devex after %d costly DSE iterations of %d with densities C_Aq = %11.4g; R_Ep = %11.4g; R_Ap = %11.4g; DSE = %11.4g\n",
+                i[0],
+                i[1],
+                r[0],
+                r[1],
+                r[2],
+                r[3]
+            ),
+            SWITCH_DEVEX_ERROR => sprintf!(
+                "Switch from DSE to Devex with log error measure of %g > %g = threshold\n",
+                r[0],
+                r[1]
+            ),
+            FLIPS => sprintf!(
+                "Performed num / max / sum = %d / %g / %g flip(s) for num / min / max / sum dual infeasibility of %d / %g / %g / %g; objective change = %g\n",
+                i[0],
+                r[0],
+                r[1],
+                i[1],
+                r[2],
+                r[3],
+                r[4],
+                r[5]
+            ),
+            SHIFTS => sprintf!(
+                "Performed num / max / sum = %d / %g / %g shift(s) for num / max / sum dual infeasibility of %d / %g / %g; objective change = %g\n",
+                i[0],
+                r[0],
+                r[1],
+                i[1],
+                r[2],
+                r[3],
+                r[4]
+            ),
+            SHIFT => sprintf!(
+                "Move %s: cost shift = %g; objective change = %g\n",
+                if i[0] != 0 { "  up" } else { "down" },
+                r[0],
+                r[1]
+            ),
+            PHASE1_OPTIMAL_NOT_PHASE2 => sprintf!(
+                "Optimal in phase 1 but not jumping to phase 2 since dual objective is %10.4g: Costs perturbed = %d\n",
+                r[0],
+                i[0]
+            ),
+            PHASE1_GO_PHASE2 => {
+                "LP is dual feasible wrt Phase 2 bounds after removing cost perturbations so go to phase 2\n".into()
+            }
+            PHASE1_FEASIBLE_WRT_PHASE1 => sprintf!(
+                "LP is dual feasible wrt Phase 1 bounds after removing cost perturbations: dual objective is %10.4g\n",
+                r[0]
+            ),
+            PHASE1_RETURN => sprintf!(
+                "LP has %d dual feasibilities wrt Phase 1 bounds after removing cost perturbations so return to phase 1\n",
+                i[0]
+            ),
+            ALREADY_PERTURBED => "Costs are already perturbed in exitPhase1ResetDuals\n".into(),
+            REPERTURBING => "Re-perturbing costs when optimal in phase 1\n".into(),
+            FREE_SHIFT => sprintf!("Variable %d is free: shift cost to zero dual of %g\n", i[0], r[0]),
+            FREE_SHIFTS => sprintf!(
+                "Performed %d cost shift(s) for free variables to zero dual values: total = %g\n",
+                i[0],
+                r[0]
+            ),
+            POSSIBLE_LP_DUAL_INFEASIBILITY => sprintf!(
+                "LP is dual %s with dual phase 1 objective %10.4g and num / max / sum dual infeasibilities = %d / %9.4g / %9.4g\n",
+                if i[0] != 0 { "infeasible" } else { "feasible" },
+                r[0],
+                i[0],
+                r[1],
+                r[2]
+            ),
+            EXACT_DUAL_INFEASIBILITIES => sprintf!(
+                "When computing exact dual objective, the unperturbed costs yield num / max / sum dual infeasibilities = %d / %g / %g\n",
+                i[0],
+                r[0],
+                r[1]
+            ),
+            EXACT_COL_RESIDUAL => sprintf!(
+                "Col %4d: ExactDual = %11.4g; WorkDual = %11.4g; Residual = %11.4g\n",
+                i[0],
+                r[0],
+                r[1],
+                r[2]
+            ),
+            EXACT_ROW_RESIDUAL => sprintf!(
+                "Row %4d: ExactDual = %11.4g; WorkDual = %11.4g; Residual = %11.4g\n",
+                i[0],
+                r[0],
+                r[1],
+                r[2]
+            ),
+            EXACT_RELATIVE_DELTA => sprintf!(
+                "||exact dual vector|| = %g; ||delta dual vector|| = %g: ratio = %g\n",
+                r[0],
+                r[1],
+                r[2]
+            ),
+            OBJECTIVE_BOUND_EXCEEDED => {
+                sprintf!("HEkkDual::solvePhase2: %12g = Objective > ObjectiveUB = %12g\n", r[0], r[1])
+            }
+            DUAL_UB_BAILOUT => sprintf!(
+                "%s on iteration %d: Density %11.4g; Frequency %d: Residual(Perturbed = %g; Exact = %g)\n",
+                if i[0] != 0 { "Have DualUB bailout" } else { "No   DualUB bailout" },
+                i[1],
+                r[0],
+                i[2],
+                r[1],
+                r[2]
+            ),
+            BAD_BASIS_CHANGE => sprintf!(" basis change (%d out; %d in) is bad\n", i[0], i[1]),
+            _ => String::new(),
+        }
     }
 
     fn interpret_dual_edge_weight_strategy(&mut self, strategy: i32) {
@@ -975,8 +934,7 @@ impl<'a> Dual<'a> {
         // If there's no backtracking basis, save the initial basis in case
         // of backtracking
         if !x.valid_backtracking_basis.get() {
-            (self.cb.put_backtracking_basis)(self.cb.ctx);
-            self.refresh();
+            hekk::put_backtracking_basis(&mut self.e, x);
         }
         loop {
             self.rebuild();
@@ -1092,8 +1050,7 @@ impl<'a> Dual<'a> {
         // If there's no backtracking basis, save the initial basis in
         // case of backtracking
         if !x.valid_backtracking_basis.get() {
-            (self.cb.put_backtracking_basis)(self.cb.ctx);
-            self.refresh();
+            hekk::put_backtracking_basis(&mut self.e, x);
         }
         loop {
             // Rebuild all values, reinverting B if updates have been
@@ -1188,8 +1145,7 @@ impl<'a> Dual<'a> {
         self.rebuild_reason = RR_NO;
         if refactor_basis_matrix {
             // Get a nonsingular inverse if possible
-            let ok = (self.cb.get_nonsingular_inverse)(self.cb.ctx, self.solve_phase);
-            self.refresh();
+            let ok = hekk::get_nonsingular_inverse(&mut self.e, x, self.solve_phase);
             self.refactor_info_dirty = true;
             if !ok {
                 self.solve_phase = PHASE_ERROR;
@@ -1200,8 +1156,7 @@ impl<'a> Dual<'a> {
         if !x.has_ar_matrix.get() {
             // Don't have the row-wise matrix, so reinitialise it: should
             // only happen when backtracking
-            (self.cb.initialise_partitioned_rowwise_matrix)(self.cb.ctx);
-            self.refresh();
+            hekk::initialise_partitioned_rowwise_matrix(&mut self.e, x);
         }
         // Record whether the update objective value should be tested
         let check_updated_objective_value = x.has_dual_objective_value.get();
@@ -1217,7 +1172,7 @@ impl<'a> Dual<'a> {
             self.compute_dual();
         }
         self.clear_fresh_values();
-        if x.backtracking.get() {
+        if *self.e.backtracking {
             // If backtracking, may change phase, so drop out
             self.solve_phase = PHASE_UNKNOWN;
             return;
@@ -1276,8 +1231,8 @@ impl<'a> Dual<'a> {
     }
 
     fn report_rebuild(&mut self, reason: i32) {
-        let state = self.state();
-        (self.cb.report_rebuild)(self.cb.ctx, &state, reason);
+        self.record_analysis_data();
+        (self.x.host.dual_report)(self.x.host.ctx, 2, &self.analysis_data, reason);
         self.analysis_data_pending = false;
     }
 
@@ -1347,8 +1302,8 @@ impl<'a> Dual<'a> {
 
     fn iteration_analysis(&mut self) {
         if self.x.iteration_report {
-            let state = self.state();
-            (self.cb.iteration_report)(self.cb.ctx, &state);
+            self.record_analysis_data();
+            (self.x.host.dual_report)(self.x.host.ctx, 1, &self.analysis_data, 0);
             self.analysis_data_pending = false;
         } else {
             self.record_analysis_data();
@@ -1440,9 +1395,8 @@ impl<'a> Dual<'a> {
             }
             let row_out = self.row_out as usize;
             // Compute pi_p = B^{-T}e_p in row_ep
-            // SAFETY: HEkkDual's row_ep, viewed only here
-            let (updated_edge_weight, computed) = unsafe {
-                with_vec(self.v.row_ep, |row_ep| {
+            let (updated_edge_weight, computed) = {
+                with_vec(&mut self.v.row_ep, |row_ep| {
                     row_ep.clear();
                     row_ep.count = 1;
                     row_ep.index[0] = row_out as i32;
@@ -1488,8 +1442,7 @@ impl<'a> Dual<'a> {
         self.delta_primal = if value < lower { value - lower } else { value - upper };
         self.move_out = if self.delta_primal < 0.0 { -1 } else { 1 };
         // Update the record of average row_ep (pi_p) density
-        // SAFETY: HEkkDual's row_ep
-        let count = unsafe { (*self.v.row_ep).view().count };
+        let count = self.v.row_ep.count;
         let local_row_ep_density = count as f64 * self.inv_num_row;
         update_operation_result_density(local_row_ep_density, self.e.row_ep_density);
     }
@@ -1557,9 +1510,8 @@ impl<'a> Dual<'a> {
         self.work_delta = self.delta_primal;
         let a = self.row_matrix();
         let (row, e, num_row) = (&self.row, &mut self.e, self.num_row);
-        // SAFETY: HEkkDual's row_ep
-        unsafe {
-            with_vec(self.v.row_ep, |row_ep| {
+        {
+            with_vec(&mut self.v.row_ep, |row_ep| {
                 row.create_freemove(*e.update_count, self.work_delta, &a, &row_ep.array[..num_row], e.nonbasic_move)
             })
         };
@@ -1569,12 +1521,11 @@ impl<'a> Dual<'a> {
     fn row_makepack(&mut self) {
         let row = &mut self.row;
         let num_col = self.num_col as i32;
-        // SAFETY: HEkkDual's row_ap and row_ep, distinct
-        self.pack_count = unsafe {
-            let pc = with_vec(self.v.row_ap, |ap| {
+        self.pack_count = {
+            let pc = with_vec(&mut self.v.row_ap, |ap| {
                 row.choose_makepack(0, &ap.index[..ap.count as usize], ap.array, 0)
             });
-            with_vec(self.v.row_ep, |ep| {
+            with_vec(&mut self.v.row_ep, |ep| {
                 row.choose_makepack(pc, &ep.index[..ep.count as usize], ep.array, num_col)
             })
         };
@@ -1587,8 +1538,7 @@ impl<'a> Dual<'a> {
         }
         // PRICE
         let e = &mut self.e;
-        // SAFETY: HEkkDual's row_ep and row_ap, distinct
-        unsafe { with_vec(self.v.row_ep, |ep| with_vec(self.v.row_ap, |ap| e.tableau_row_price(ep, ap))) };
+        with_vec(&mut self.v.row_ep, |ep| with_vec(&mut self.v.row_ap, |ap| e.tableau_row_price(ep, ap)));
         // CHUZC
         // Section 0: Clear data and call createFreemove to set a value of
         // nonbasicMove for all free columns to prevent their dual values
@@ -1707,8 +1657,8 @@ impl<'a> Dual<'a> {
                 };
                 self.work_count = work_count;
                 if self.x.dev_log {
-                    (self.cb.chuzc_fail)(
-                        self.cb.ctx,
+                    (self.x.host.chuzc_fail)(
+                        self.x.host.ctx,
                         kind,
                         work_count as i32,
                         self.row.work_data.as_ptr(),
@@ -1723,8 +1673,13 @@ impl<'a> Dual<'a> {
 
     fn improve_choose_column_row(&mut self) {
         self.row.delete_freemove(self.e.nonbasic_move);
-        (self.cb.improve_choose_column_row)(self.cb.ctx, self.row_out);
-        self.refresh();
+        // Refine row_ep, and compute row_ap in quad precision
+        let (e, row_out) = (&mut self.e, self.row_out as usize);
+        let (row_ep, row_ap) = (&mut self.v.row_ep, &mut self.v.row_ap);
+        row_ep.with(|ep| {
+            hekk::unit_btran_iterative_refinement(e, row_out, ep);
+            row_ap.with(|ap| hekk::tableau_row_price_quad(e, ep, ap));
+        });
         self.row_clear_and_create_freemove();
         self.row_makepack();
     }
@@ -1768,9 +1723,8 @@ impl<'a> Dual<'a> {
             return;
         }
         let (e, variable_in, row_out, inv) = (&mut self.e, self.variable_in as usize, self.row_out as usize, self.inv_num_row);
-        // SAFETY: HEkkDual's col_aq
-        self.alpha_col = unsafe {
-            with_vec(self.v.col_aq, |col_aq| {
+        self.alpha_col = {
+            with_vec(&mut self.v.col_aq, |col_aq| {
                 // Clear the pivotal column and indicate that its values
                 // should be packed
                 col_aq.clear();
@@ -1790,9 +1744,8 @@ impl<'a> Dual<'a> {
         }
         let a = self.row_matrix();
         let (row, e, x, work_count, inv) = (&self.row, &mut self.e, self.x, self.work_count, self.inv_num_row);
-        // SAFETY: HEkkDual's col_BFRT
-        unsafe {
-            with_vec(self.v.col_bfrt, |col| {
+        {
+            with_vec(&mut self.v.col_bfrt, |col| {
                 col.clear();
                 let mut count = col.count as usize;
                 let n = e.num_row + e.num_col;
@@ -1827,9 +1780,8 @@ impl<'a> Dual<'a> {
             return;
         }
         let (e, inv) = (&mut self.e, self.inv_num_row);
-        // SAFETY: HEkkDual's row_ep
-        unsafe {
-            with_vec(self.v.row_ep, |v| {
+        {
+            with_vec(&mut self.v.row_ep, |v| {
                 // Apply R^{-1}: HSimplexNla::unapplyBasisMatrixRowScale
                 if let Some((_, row_scale)) = e.scale {
                     let (use_row_indices, to_entry) = sparse_loop_style(v.count, e.num_row);
@@ -1859,8 +1811,7 @@ impl<'a> Dual<'a> {
         );
         self.numerical_trouble = trouble.measure;
         if trouble.new_pivot_threshold != 0.0 {
-            (self.cb.set_pivot_threshold)(self.cb.ctx, trouble.new_pivot_threshold);
-            self.refresh();
+            hekk::set_pivot_threshold(self.x, trouble.new_pivot_threshold);
         }
         if trouble.reinvert {
             self.rebuild_reason = RR_POSSIBLY_SINGULAR_BASIS;
@@ -1946,16 +1897,14 @@ impl<'a> Dual<'a> {
         let num_row = self.num_row as i32;
         let mut primal = Self::primal(&mut self.e, x);
         let rhs = &mut self.rhs;
-        // SAFETY: HEkkDual's col_BFRT
-        unsafe {
-            with_vec(self.v.col_bfrt, |col| {
+        {
+            with_vec(&mut self.v.col_bfrt, |col| {
                 rhs.update_primal(col.count, col.index, col.array, 1.0, &mut primal, num_row);
             })
         };
         let edge_weight = &*self.e.dual_edge_weight;
-        // SAFETY: HEkkDual's col_BFRT
-        unsafe {
-            with_vec(self.v.col_bfrt, |col| {
+        {
+            with_vec(&mut self.v.col_bfrt, |col| {
                 rhs.update_infeas_list(&col.index[..col.count.max(0) as usize], edge_weight)
             })
         };
@@ -1966,9 +1915,8 @@ impl<'a> Dual<'a> {
         let theta_primal = self.theta_primal;
         let mut primal = Self::primal(&mut self.e, x);
         let rhs = &mut self.rhs;
-        // SAFETY: HEkkDual's col_aq
-        let ok_update_primal = unsafe {
-            with_vec(self.v.col_aq, |col| {
+        let ok_update_primal = {
+            with_vec(&mut self.v.col_aq, |col| {
                 rhs.update_primal(col.count, col.index, col.array, theta_primal, &mut primal, num_row)
             })
         };
@@ -1980,15 +1928,14 @@ impl<'a> Dual<'a> {
         // SAFETY: as for records(); HEkkDual's col_aq
         unsafe {
             let records = &mut *self.x.basis_records;
-            with_vec(self.v.col_aq, |col| records.update_bad_basis_change(col.array, theta_primal, tp));
+            with_vec(&mut self.v.col_aq, |col| records.update_bad_basis_change(col.array, theta_primal, tp));
         }
         let variable_in = self.variable_in as usize;
         if self.edge_weight_mode == EW_DSE {
             let e = &mut self.e;
-            // SAFETY: HEkkDual's col_aq and row_ep, distinct
-            let new_pivotal_edge_weight = unsafe {
-                with_vec(self.v.col_aq, |col_aq| {
-                    with_vec(self.v.row_ep, |row_ep| {
+            let new_pivotal_edge_weight = {
+                with_vec(&mut self.v.col_aq, |col_aq| {
+                    with_vec(&mut self.v.row_ep, |row_ep| {
                         // HSimplexNla::pivotInScaledSpace
                         let pivot_in_scaled_space = col_aq.array[row_out] * e.variable_scale_factor(variable_in)
                             / e.variable_scale_factor(e.basic_index[row_out] as usize);
@@ -2015,20 +1962,18 @@ impl<'a> Dual<'a> {
             let alpha_col = self.alpha_col;
             let e = &mut self.e;
             let new_pivotal_edge_weight = std_max(1.0, e.dual_edge_weight[row_out] / (alpha_col * alpha_col));
-            // SAFETY: HEkkDual's col_aq
-            unsafe { with_vec(self.v.col_aq, |col_aq| e.update_dual_devex_weights(col_aq, new_pivotal_edge_weight)) };
+            with_vec(&mut self.v.col_aq, |col_aq| e.update_dual_devex_weights(col_aq, new_pivotal_edge_weight));
             self.e.dual_edge_weight[row_out] = new_pivotal_edge_weight;
             self.num_devex_iterations += 1;
         }
         let edge_weight = &*self.e.dual_edge_weight;
         let rhs = &mut self.rhs;
-        // SAFETY: HEkkDual's col_aq and row_ep
-        let ticks = unsafe {
-            let aq_tick = with_vec(self.v.col_aq, |col| {
+        let ticks = {
+            let aq_tick = with_vec(&mut self.v.col_aq, |col| {
                 rhs.update_infeas_list(&col.index[..col.count.max(0) as usize], edge_weight);
                 col.synthetic_tick
             });
-            (aq_tick, (*self.v.row_ep).view().synthetic_tick)
+            (aq_tick, self.v.row_ep.synthetic_tick)
         };
         // Add in the synthetic ticks of col_aq and of row_ep, which
         // contains the contribution from forming row_ep = B^{-T}e_p
@@ -2046,10 +1991,9 @@ impl<'a> Dual<'a> {
         // Transform the vectors used in updateFactor if the simplex NLA
         // involves scaling
         if e.scale.is_some() {
-            // SAFETY: HEkkDual's col_aq and row_ep, distinct
-            unsafe {
-                with_vec(self.v.col_aq, |aq| {
-                    with_vec(self.v.row_ep, |ep| e.transform_for_update(aq, ep, variable_in, row_out))
+            {
+                with_vec(&mut self.v.col_aq, |aq| {
+                    with_vec(&mut self.v.row_ep, |ep| e.transform_for_update(aq, ep, variable_in, row_out))
                 })
             };
         }
@@ -2065,14 +2009,13 @@ impl<'a> Dual<'a> {
         // HEkk::updateFactor: the update invalidates the refactorization
         // information of the INVERT
         if self.refactor_info_dirty {
-            (self.cb.clear_refactor_info)(self.cb.ctx);
+            self.e.factor.refactor_info_clear();
             self.refactor_info_dirty = false;
         }
         let (e, rebuild_reason) = (&mut self.e, &mut self.rebuild_reason);
-        // SAFETY: HEkkDual's col_aq and row_ep, distinct
-        unsafe {
-            with_vec(self.v.col_aq, |aq| {
-                with_vec(self.v.row_ep, |ep| e.update_factor(aq, ep, row_out as i32, rebuild_reason))
+        {
+            with_vec(&mut self.v.col_aq, |aq| {
+                with_vec(&mut self.v.row_ep, |ep| e.update_factor(aq, ep, row_out as i32, rebuild_reason))
             })
         };
         x.has_invert.set(true);
@@ -2094,12 +2037,7 @@ impl<'a> Dual<'a> {
             *d = 1 - (f as i32) * (f as i32);
         }
         // Set all initial weights to 1
-        if self.e.dual_edge_weight.len() == self.num_row {
-            self.e.dual_edge_weight.fill(1.0);
-        } else {
-            (self.cb.edge_weight_vectors)(self.cb.ctx, true);
-            self.refresh();
-        }
+        hekk::assign_unit_dual_edge_weights(&mut self.e);
         self.num_devex_iterations = 0;
         self.new_devex_framework = false;
     }
@@ -2531,14 +2469,14 @@ impl<'a> Dual<'a> {
         // Appears to be dual unbounded in phase 2 after fresh rebuild.
         // Normally this implies primal infeasibility, but only allow this
         // to be claimed if the proof of primal infeasibility is true
+        let (e, x, move_out) = (&mut self.e, self.x, self.move_out);
         let proof_of_infeasibility =
-            (self.cb.proof_of_primal_infeasibility)(self.cb.ctx, self.move_out, self.row_out);
-        self.refresh();
+            self.v.row_ep.with(|row_ep| hekk::proof_of_primal_infeasibility(e, x, row_ep, move_out));
         if proof_of_infeasibility {
             // There is a proof of primal infeasibility
             self.solve_phase = PHASE_EXIT;
             // Save dual ray information
-            (self.cb.save_dual_ray)(self.cb.ctx, self.row_out, self.move_out);
+            hekk::save_dual_ray(self.x, self.row_out, self.move_out);
             self.x.model_status.set(MS_INFEASIBLE);
         } else {
             // No proof of primal infeasibility, so assume dual unbounded
@@ -2578,29 +2516,10 @@ fn row_ep_2norm_in_scaled_space(e: &EkkView, i_row: usize, row_ep: &HVec) -> f64
     row_ep_2norm
 }
 
-mod ffi {
-    use super::*;
-
-    /// HEkkDual::solve for simplex_strategy 1; returns the HighsStatus
-    ///
-    /// # Safety
-    /// The pointers must be valid for the solve, as described for
-    /// CDualEkk, DualCallbacks and CDualVectors
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_dual_solve(
-        x: *const CDualEkk,
-        cb: *const DualCallbacks,
-        v: *const CDualVectors,
-        force_phase2: bool,
-    ) -> i32 {
-        let mut dual = Dual::new(&*x, &*cb, &*v);
-        dual.solve(force_phase2)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simplex::hekk::nearest_power_of_two_scale;
 
     #[test]
     fn power_of_two_scale() {

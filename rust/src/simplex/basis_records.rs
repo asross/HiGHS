@@ -45,6 +45,29 @@ pub struct BadBasisChange {
 pub struct BasisRecords {
     pub visited: HashSet<u64, BuildHasherDefault<U64Hasher>>,
     pub bad: Vec<BadBasisChange>,
+    /// Results of a solve in Rust that C++ takes when it returns
+    pub out: SolveOut,
+}
+
+/// What a solve in Rust (hekk.rs) leaves for HEkk's C++-owned vectors,
+/// taken by HEkk::solve when the Rust returns
+#[derive(Default)]
+pub struct SolveOut {
+    /// HEkk::hot_start_ as at the last INVERT: the refactorization
+    /// information (use, pivot rows, variables and types, synthetic tick)
+    /// and nonbasicMove
+    pub hot_start: Option<HotStart>,
+    /// HEkk::primal_phase1_dual_, if set
+    pub primal_phase1_dual: Option<Vec<f64>>,
+}
+
+pub struct HotStart {
+    pub refactor_use: bool,
+    pub pivot_row: Vec<i32>,
+    pub pivot_var: Vec<i32>,
+    pub pivot_type: Vec<i8>,
+    pub build_synthetic_tick: f64,
+    pub nonbasic_move: Vec<i8>,
 }
 
 impl BasisRecords {
