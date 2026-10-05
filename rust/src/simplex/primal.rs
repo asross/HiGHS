@@ -262,6 +262,9 @@ pub struct Primal {
     any_taboo: bool,
     /// Whether the analysis data have been set by a rebuild report
     reported: bool,
+    /// solve_phase at the last iteration or rebuild, which the C++ leaves
+    /// in the analysis data
+    analysed_phase: i32,
 }
 
 const MAX_NUM_HYPER_CHUZC_CANDIDATES: i32 = 50;
@@ -609,8 +612,9 @@ impl Primal {
     }
 
     fn report(&self, kind: i32, reason_for_rebuild: i32) {
+        let solve_phase = if kind == REPORT_ANALYSIS_DATA { self.analysed_phase } else { self.solve_phase };
         let r = PrimalReport {
-            solve_phase: self.solve_phase,
+            solve_phase,
             edge_weight_mode: self.edge_weight_mode,
             num_devex_iterations: self.num_devex_iterations,
             row_out: self.row_out,
@@ -628,6 +632,7 @@ impl Primal {
     }
 
     fn report_rebuild(&mut self, reason_for_rebuild: i32) {
+        self.analysed_phase = self.solve_phase;
         self.report(REPORT_REBUILD, reason_for_rebuild);
         self.reported = true;
     }
@@ -712,6 +717,7 @@ impl Primal {
             debug_max_relative_primal_steepest_edge_weight_error: 0.0,
             any_taboo: false,
             reported: false,
+            analysed_phase: 0,
         };
         let (lower, upper) = (&p.ekk.work_lower[..num_tot], &p.ekk.work_upper[..num_tot]);
         p.num_free_col = (0..num_tot).filter(|&i| lower[i] == -K_HIGHS_INF && upper[i] == K_HIGHS_INF).count() as i32;
@@ -1890,7 +1896,8 @@ impl Primal {
     }
 
     /// HEkkPrimal::iterationAnalysis, when the iteration is reported
-    fn iteration_analysis(&self) {
+    fn iteration_analysis(&mut self) {
+        self.analysed_phase = self.solve_phase;
         if self.ekk.iteration_report {
             self.report(REPORT_ITERATION, 0);
         }
