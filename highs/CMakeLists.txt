@@ -491,7 +491,7 @@ if(HIGHS_RUST)
   find_program(CARGO cargo REQUIRED HINTS $ENV{HOME}/.cargo/bin)
   set(HIGHS_RUST_DIR ${PROJECT_SOURCE_DIR}/rust)
   set(HIGHS_RUST_LIB ${CMAKE_BINARY_DIR}/rust/release/${CMAKE_STATIC_LIBRARY_PREFIX}highs_rs${CMAKE_STATIC_LIBRARY_SUFFIX})
-  file(GLOB_RECURSE highs_rust_sources ${HIGHS_RUST_DIR}/src/*.rs)
+  file(GLOB_RECURSE highs_rust_sources CONFIGURE_DEPENDS ${HIGHS_RUST_DIR}/src/*.rs)
   add_custom_command(
     OUTPUT ${HIGHS_RUST_LIB}
     COMMAND ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
