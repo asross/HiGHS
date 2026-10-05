@@ -28,6 +28,14 @@ void RefactorInfo::clear() {
 }
 
 #ifndef HIGHS_RUST
+RefactorInfo HFactor::getRefactorInfo() const { return refactor_info_; }
+
+void HFactor::setRefactorInfo(const RefactorInfo& refactor_info) {
+  refactor_info_ = refactor_info;
+}
+
+void HFactor::clearRefactorInfo() { refactor_info_.clear(); }
+
 HighsInt HFactor::rebuild(HighsTimerClock* factor_timer_clock_pointer) {
   const bool report_lu = false;
   // Check that the refactorization information should be used

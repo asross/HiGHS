@@ -89,9 +89,9 @@ highs_rs::Ekk HEkk::rustView() {
   v.bounds_perturbed = &info_.bounds_perturbed;
   v.price_strategy = info_.price_strategy;
   v.dual_simplex_cost_perturbation_multiplier =
-      info_.dual_simplex_cost_perturbation_multiplier;
+      &info_.dual_simplex_cost_perturbation_multiplier;
   v.primal_simplex_bound_perturbation_multiplier =
-      info_.primal_simplex_bound_perturbation_multiplier;
+      &info_.primal_simplex_bound_perturbation_multiplier;
   v.primal_feasibility_tolerance = options_->primal_feasibility_tolerance;
   v.dual_feasibility_tolerance = options_->dual_feasibility_tolerance;
   v.cost_scale_factor = options_->cost_scale_factor;
@@ -100,7 +100,7 @@ highs_rs::Ekk HEkk::rustView() {
   v.cost_perturbation_base = &cost_perturbation_base_;
   v.cost_perturbation_max_abs_cost = &cost_perturbation_max_abs_cost_;
   v.simplex_in_scaled_space = simplex_in_scaled_space_;
-  v.update_limit = info_.update_limit;
+  v.update_limit = &info_.update_limit;
   v.build_synthetic_tick = &build_synthetic_tick_;
   v.total_synthetic_tick = &total_synthetic_tick_;
   const HFactor& factor = simplex_nla_.factor_;

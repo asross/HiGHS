@@ -26,12 +26,7 @@ const SimplexAlgorithm algorithm = SimplexAlgorithm::kPrimal;
 
 class HEkkPrimal {
  public:
-#ifdef HIGHS_RUST
-  // The instance is initialised by solve(), which may use the Rust port
-  HEkkPrimal(HEkk& simplex) : ekk_instance_(simplex) {}
-#else
   HEkkPrimal(HEkk& simplex) : ekk_instance_(simplex) { initialiseInstance(); }
-#endif
   /**
    * @brief Solve a model instance
    */
@@ -49,12 +44,6 @@ class HEkkPrimal {
   // Clean up primal infeasibilities after phase 2 with the dual simplex
   // solver: returns the status of the solve
   HighsStatus cleanupWithDual();
-#ifdef HIGHS_RUST
-  // The Rust port (rust/src/simplex/primal.rs, wired in
-  // HEkkPrimalRust.cpp) runs unless debugging or analysing
-  bool useRust() const;
-  HighsStatus solveRust(const bool force_phase2);
-#endif
   void solvePhase1();
   void solvePhase2();
   void cleanup();

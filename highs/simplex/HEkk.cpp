@@ -404,8 +404,9 @@ void HEkk::setNlaPointersForTrans(const HighsLp& lp) {
 }
 
 void HEkk::setNlaRefactorInfo() {
-  simplex_nla_.factor_.refactor_info_ = this->hot_start_.refactor_info;
-  simplex_nla_.factor_.refactor_info_.use = true;
+  RefactorInfo refactor_info = this->hot_start_.refactor_info;
+  refactor_info.use = true;
+  simplex_nla_.factor_.setRefactorInfo(refactor_info);
 }
 
 void HEkk::btran(HVector& rhs, const double expected_density) {
@@ -1028,6 +1029,9 @@ HighsStatus HEkk::solve(const bool force_phase2) {
 
   initialiseAnalysis();
   initialiseControl();
+#ifdef HIGHS_RUST
+  if (rustSolveEligible()) return solveRust(force_phase2);
+#endif
 
   if (analysis_.analyse_simplex_time)
     analysis_.simplexTimerStart(SimplexTotalClock);
@@ -2121,7 +2125,7 @@ HighsInt HEkk::computeFactor() {
   analysis_.simplexTimerStop(InvertClock);
   //
   // Set up hot start information
-  hot_start_.refactor_info = simplex_nla_.factor_.refactor_info_;
+  hot_start_.refactor_info = simplex_nla_.factor_.getRefactorInfo();
   hot_start_.nonbasicMove = basis_.nonbasicMove_;
   hot_start_.valid = true;
 
@@ -3503,7 +3507,7 @@ void HEkk::updateFactor(HVector* column, HVector* row_ep, HighsInt* iRow,
   analysis_.simplexTimerStart(UpdateFactorClock);
 #ifdef HIGHS_RUST
   if (!simplex_nla_.update_.valid_ && !column->next) {
-    simplex_nla_.factor_.refactor_info_.clear();
+    simplex_nla_.factor_.clearRefactorInfo();
     {
       const highs_rs::Ekk view = rustView();
       highs_rs::HVecCall aq(*column);

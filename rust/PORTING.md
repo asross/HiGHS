@@ -42,14 +42,21 @@ file readers in parallel. IPX, PDLP and QP last.
 Build: `cmake -B build-rust -DCMAKE_BUILD_TYPE=Release -DHIGHS_RUST=ON &&
 cmake --build build-rust -j8`.
 
-## The dual simplex driver
+## The simplex solve
 
-HEkkDual::solve for the serial strategy runs in Rust (simplex/dual.rs)
-when no simplex analysis, timing or debugging is asked for
-(HEkkDual::rustEligible); SIP and PAMI stay C++. What it still calls in
-C++ is listed in the `DualCallbacks` of dual.rs: INVERT with backtracking,
-the primal clean-up, the infeasibility proof and dual ray, the quad
-precision refinement of a pivotal row, and logging/reports. In the common
-case an iteration makes no call into C++. HEkkDual.cpp is compiled in a
-unity build, so clang inlines e.g. HVector::norm2 into chooseRow
-contracted: check each compiled copy.
+HEkk::solve runs in Rust from initialiseForSolve down (simplex/hekk.rs,
+dual.rs, primal.rs) when no simplex analysis, timing or debugging is
+asked for and the strategy is serial dual or primal
+(HEkk::rustSolveEligible); SIP and PAMI stay C++. HEkk's data stays
+C++-owned: HEkk::solveRust (highs/simplex/HEkkRustSolve.cpp) sizes every
+vector the solve could resize, fills a `CHekk` of views and pointers,
+calls `highs_rs_ekk_solve`, then takes what Rust left for C++ vectors
+(hot start record, primal phase 1 duals, ray values to clear) and does
+returnFromEkkSolve. Rust calls C++ only through `Host`: log messages
+(formatted in Rust with util/printf.rs, which matches C's printf), the
+analysis iteration/rebuild reports, the run clock (once per solver with a
+time limit), a user interrupt callback, and the rare rank deficient
+initial basis. The factor's refactorization information and the saved
+INVERT of putIterate/getIterate are held by the Rust factor.
+HEkkDual.cpp is compiled in a unity build, so clang inlines e.g.
+HVector::norm2 into chooseRow contracted: check each compiled copy.

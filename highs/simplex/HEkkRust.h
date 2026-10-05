@@ -17,6 +17,7 @@
 #ifdef HIGHS_RUST
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "util/HVector.h"
@@ -190,8 +191,8 @@ struct Ekk {
   bool* bounds_shifted;
   bool* bounds_perturbed;
   int price_strategy;
-  double dual_simplex_cost_perturbation_multiplier;
-  double primal_simplex_bound_perturbation_multiplier;
+  double* dual_simplex_cost_perturbation_multiplier;
+  double* primal_simplex_bound_perturbation_multiplier;
   // options_
   double primal_feasibility_tolerance;
   double dual_feasibility_tolerance;
@@ -202,7 +203,7 @@ struct Ekk {
   double* cost_perturbation_base;
   double* cost_perturbation_max_abs_cost;
   bool simplex_in_scaled_space;
-  int update_limit;
+  HighsInt* update_limit;
   double* build_synthetic_tick;
   double* total_synthetic_tick;
   void* factor;
@@ -260,9 +261,171 @@ struct CostPerturbationReport {
   bool perturbed;
 };
 
+struct AnalysisData;
+struct PrimalReport;
+
+// Mirror of Host in rust/src/simplex/hekk.rs
+struct Host {
+  void* ctx;
+  void (*log)(void*, int channel, int type, const char* msg);
+  double (*timer_read)(void*);
+  bool (*interrupt)(void*);
+  void (*user_invert_report)(void*);
+  void (*dual_report)(void*, int kind, const AnalysisData*, int reason);
+  void (*primal_report)(void*, int kind, const PrimalReport*);
+  void (*chuzc_fail)(void*, int kind, int work_count,
+                     const std::pair<HighsInt, double>* work_data,
+                     double select_theta, double remain_theta);
+  void (*initial_rank_deficiency)(void*, Slice<double>* saved);
+  void (*debug_check_invert)(void*);
+};
+
+// Mirror of CHekk in rust/src/simplex/hekk.rs: filled by HEkk::rustHekk()
+struct Hekk {
+  Ekk ekk;
+  Host host;
+  // HEkk
+  HighsInt* iteration_count;
+  int* model_status;
+  bool* solve_bailout;
+  bool* called_return_from_solve;
+  int* exit_algorithm;
+  HighsInt* return_primal_solution_status;
+  HighsInt* return_dual_solution_status;
+  bool* dual_values_valid;
+  bool* dual_values_scaled;
+  uint64_t* dual_values_basis_hash;
+  uint64_t* dual_values_cost_hash;
+  bool* fresh_unperturbed_dual;
+  bool* fresh_dual;
+  bool* fresh_primal;
+  double* edge_weight_error;
+  HighsInt* dual_simplex_cleanup_level;
+  HighsInt* dual_simplex_phase1_cleanup_level;
+  HighsInt* previous_iteration_cycling_detected;
+  uint64_t* random;
+  void* basis_records;
+  double* nla_build_synthetic_tick;
+  HighsInt* num_invert;
+  int debug_solve_call_num;
+  bool* ar_matrix_is_scaled;
+  bool* random_vectors_drawn;
+  bool draw_random_vectors;
+  // lp_
+  bool lp_is_scaled;
+  bool lp_has_scaling;
+  Slice<double> lp_col_scale;
+  Slice<double> lp_row_scale;
+  Slice<char> model_name;
+  Slice<double> saved_dual_edge_weight;
+  bool saved_dual_edge_weight_taken;
+  HighsInt* dual_ray_index;
+  HighsInt* dual_ray_sign;
+  HighsInt* primal_ray_index;
+  HighsInt* primal_ray_sign;
+  int ray_value_clear;
+  // basis_
+  HighsInt* basis_debug_id;
+  HighsInt* basis_debug_update_count;
+  // status_
+  bool* has_invert;
+  bool* has_fresh_invert;
+  bool* has_fresh_rebuild;
+  bool* has_dual_objective_value;
+  bool* has_primal_objective_value;
+  bool* has_dual_steepest_edge_weights;
+  bool* has_ar_matrix;
+  // info_: the backtracking basis
+  bool* valid_backtracking_basis;
+  Slice<HighsInt> bt_basic_index;
+  Slice<int8_t> bt_nonbasic_flag;
+  Slice<int8_t> bt_nonbasic_move;
+  uint64_t* bt_hash;
+  HighsInt* bt_debug_id;
+  HighsInt* bt_debug_update_count;
+  HighsInt* bt_costs_shifted;
+  HighsInt* bt_costs_perturbed;
+  HighsInt* bt_bounds_shifted;
+  HighsInt* bt_bounds_perturbed;
+  Slice<double> bt_work_shift;
+  Slice<double> bt_edge_weight;
+  // info_
+  Slice<HighsInt> devex_index;
+  Slice<HighsInt> num_tot_permutation;
+  Slice<HighsInt> num_col_permutation;
+  HighsInt* dual_phase1_iteration_count;
+  HighsInt* dual_phase2_iteration_count;
+  bool* allow_cost_shifting;
+  bool* allow_cost_perturbation;
+  bool* store_squared_primal_infeasibility;
+  double* factor_pivot_threshold;
+  double* col_bfrt_density;
+  double* costly_dse_measure;
+  double* costly_dse_frequency;
+  HighsInt* num_costly_dse_iteration;
+  double* average_log_low_dse_weight_error;
+  double* average_log_high_dse_weight_error;
+  HighsInt* simplex_strategy;
+  HighsInt* min_concurrency;
+  HighsInt* max_concurrency;
+  HighsInt* num_concurrency;
+  HighsInt* iteration_count0;
+  HighsInt* dual_phase1_iteration_count0;
+  HighsInt* dual_phase2_iteration_count0;
+  HighsInt* primal_phase1_iteration_count0;
+  HighsInt* primal_phase2_iteration_count0;
+  HighsInt* primal_bound_swap0;
+  // info_ values
+  HighsInt control_iteration_count0;
+  bool allow_dual_steepest_edge_to_devex_switch;
+  double dual_steepest_edge_weight_log_error_threshold;
+  HighsInt dual_edge_weight_strategy;
+  bool run_quiet;
+  // simplex_nla_.factor_
+  double* hfactor_pivot_threshold;
+  double hfactor_pivot_tolerance;
+  double hfactor_time_limit;
+  // options_
+  double objective_bound;
+  double time_limit;
+  HighsInt simplex_iteration_limit;
+  HighsInt simplex_update_limit;
+  HighsInt max_dual_simplex_cleanup_level;
+  HighsInt max_dual_simplex_phase1_cleanup_level;
+  double dual_simplex_pivot_growth_tolerance;
+  HighsInt simplex_dse_exact_init_max_rows;
+  double small_matrix_value;
+  double dual_steepest_edge_weight_error_tolerance;
+  bool no_unnecessary_rebuild_refactor;
+  double rebuild_refactor_solution_error_tolerance;
+  HighsInt option_simplex_strategy;
+  HighsInt simplex_min_concurrency;
+  HighsInt simplex_max_concurrency;
+  bool allow_unbounded_or_infeasible;
+  bool less_infeasible_dse_check;
+  bool less_infeasible_dse_choose_row;
+  HighsInt num_threads;
+  HighsInt dev_level;
+  bool output_flag;
+  HighsInt log_dev_level;
+  HighsInt factor_dev_level;
+  bool dev_log;
+  bool iteration_report;
+  bool interrupt_callback;
+};
+
 }  // namespace highs_rs
 
 extern "C" {
+int highs_rs_ekk_solve(const highs_rs::Hekk* x, bool force_phase2);
+bool highs_rs_ekk_hot_start(void* p, bool* refactor_use,
+                            const HighsInt** pivot_row,
+                            const HighsInt** pivot_var,
+                            const int8_t** pivot_type, int* num_pivot,
+                            double* build_synthetic_tick,
+                            const int8_t** nonbasic_move, int* num_tot);
+bool highs_rs_ekk_primal_phase1_dual(void* p, const double** values, int* n);
+void highs_rs_ekk_clear_out(void* p);
 void highs_rs_ekk_compute_primal(const highs_rs::Ekk* ekk,
                                  highs_rs::HVec* primal_col);
 void highs_rs_ekk_compute_dual(const highs_rs::Ekk* ekk,

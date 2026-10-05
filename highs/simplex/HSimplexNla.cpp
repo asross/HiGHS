@@ -123,7 +123,7 @@ void HSimplexNla::update(HVector* aq, HVector* ep, HighsInt* iRow,
                          HighsInt* hint) {
   reportPackValue("  pack: aq Bf ", aq);
   reportPackValue("  pack: ep Bf ", ep);
-  factor_.refactor_info_.clear();
+  factor_.clearRefactorInfo();
   if (!update_.valid_) {
     factor_.update(aq, ep, iRow, hint);
   } else {

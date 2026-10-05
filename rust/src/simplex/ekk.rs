@@ -13,31 +13,24 @@
 //! simplex_nla_.factor_. [`CEkk::view`] turns it into an [`EkkView`] of
 //! slices and `&mut` scalars, which the kernels take as `&mut self`.
 //! Building a view costs some tens of loads and stores, so it is done per
-//! C++ call; a Rust caller (HEkkPrimal in primal.rs, a later port of
-//! HEkkDual) builds one per solve, refreshing it after calling back into
-//! C++, and calls the methods directly.
+//! C++ call; the Rust solve (hekk.rs) builds one per solver from the
+//! `CHekk` that C++ fills, with the vectors sized for the whole solve.
 //!
 //! Rules for extending it:
 //! - Add a field to `CEkk` here and to `highs_rs::Ekk` in
 //!   highs/simplex/HEkkRust.h in the same position, filled in
 //!   `HEkk::rustView()`; give every vector its length (`CSlice`).
-//! - The view never resizes a vector: C++ sizes them (e.g. nonbasicMove_
-//!   in setNonbasicMove, the work vectors via HEkk::workVector) before
-//!   calling. Vectors that change size during a solve: nonbasicMove_
-//!   (setNonbasicMove), the info_ work/base arrays
-//!   (allocateWorkAndBaseArrays), dual_edge_weight_ and
-//!   scattered_dual_edge_weight_ (resized by HEkkDual set-up and LP
-//!   changes), ar_matrix_ (rebuilt by initialisePartitionedRowwiseMatrix).
-//!   So a view must be rebuilt after anything that may resize them.
+//! - The view never resizes a vector: C++ sizes them before calling (for a
+//!   whole solve, HEkk::solveRust does: see hekk.rs).
 //! - Scalars that a kernel writes, or that change between kernel calls of
 //!   one solve, are pointers (`&mut`); options are values.
-//! - visited_basis_ and bad_basis_change_ are Rust-owned
-//!   (basis_records.rs). Still C++-owned and touched only on the C++ side
-//!   of each call:
-//!   status_ flags, analysis_ (timers, operation records), logging, and the
-//!   ProductFormUpdate of simplex_nla_ (so updateFactor stays C++).
+//! - visited_basis_, bad_basis_change_, the factor's refactorization
+//!   information and its saved INVERT are Rust-owned. status_ is shared;
+//!   analysis_ (timers, operation records) and logging stay on the C++
+//!   side (hekk.rs's Host). The ProductFormUpdate of simplex_nla_ is never
+//!   set up in this version of HiGHS, so is not ported.
 //!   HVectors other than HEkk's arrays come per call as `CHVec`s, sized by
-//!   C++.
+//!   C++, or are owned by the Rust solvers.
 
 use crate::factor::{AMatrix, HFactor};
 use crate::ffi::{sl, sl_mut, CHVec};
@@ -242,20 +235,21 @@ pub struct CostPerturbationReport {
 
 /// A pointer and length, as std::vector's data() and size()
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CSlice<T> {
-    p: *mut T,
-    n: i32,
+    pub(crate) p: *mut T,
+    pub(crate) n: i32,
 }
 
 impl<T> CSlice<T> {
     /// # Safety
     /// `p` valid for `n` reads
-    unsafe fn get<'a>(&self) -> &'a [T] {
+    pub(crate) unsafe fn get<'a>(&self) -> &'a [T] {
         sl(self.p, self.n)
     }
     /// # Safety
     /// `p` valid for `n` reads and writes, unaliased
-    unsafe fn get_mut<'a>(&self) -> &'a mut [T] {
+    pub(crate) unsafe fn get_mut<'a>(&self) -> &'a mut [T] {
         sl_mut(self.p, self.n)
     }
 }
@@ -330,8 +324,8 @@ pub struct CEkk {
     bounds_shifted: *mut bool,
     bounds_perturbed: *mut bool,
     price_strategy: i32,
-    dual_simplex_cost_perturbation_multiplier: f64,
-    primal_simplex_bound_perturbation_multiplier: f64,
+    dual_simplex_cost_perturbation_multiplier: *mut f64,
+    primal_simplex_bound_perturbation_multiplier: *mut f64,
     // options_
     primal_feasibility_tolerance: f64,
     dual_feasibility_tolerance: f64,
@@ -342,7 +336,7 @@ pub struct CEkk {
     cost_perturbation_base: *mut f64,
     cost_perturbation_max_abs_cost: *mut f64,
     simplex_in_scaled_space: bool,
-    update_limit: i32,
+    update_limit: *mut i32,
     build_synthetic_tick: *mut f64,
     total_synthetic_tick: *mut f64,
     factor: *mut HFactor,
@@ -422,7 +416,7 @@ pub struct EkkView<'a> {
     /// (col, row) scale factors of the basis matrix
     pub scale: Option<(&'a [f64], &'a [f64])>,
     // ar_matrix_ (row-wise, partitioned by nonbasicFlag)
-    pub ar_start: &'a [i32],
+    pub ar_start: &'a mut [i32],
     pub ar_p_end: &'a mut [i32],
     pub ar_index: &'a mut [i32],
     pub ar_value: &'a mut [f64],
@@ -469,8 +463,8 @@ pub struct EkkView<'a> {
     pub bounds_shifted: &'a mut bool,
     pub bounds_perturbed: &'a mut bool,
     pub price_strategy: i32,
-    pub dual_simplex_cost_perturbation_multiplier: f64,
-    pub primal_simplex_bound_perturbation_multiplier: f64,
+    pub dual_simplex_cost_perturbation_multiplier: &'a mut f64,
+    pub primal_simplex_bound_perturbation_multiplier: &'a mut f64,
     // options_
     pub primal_feasibility_tolerance: f64,
     pub dual_feasibility_tolerance: f64,
@@ -481,7 +475,7 @@ pub struct EkkView<'a> {
     pub cost_perturbation_base: &'a mut f64,
     pub cost_perturbation_max_abs_cost: &'a mut f64,
     pub simplex_in_scaled_space: bool,
-    pub update_limit: i32,
+    pub update_limit: &'a mut i32,
     pub build_synthetic_tick: &'a mut f64,
     pub total_synthetic_tick: &'a mut f64,
     pub factor: &'a mut HFactor,
@@ -527,6 +521,14 @@ pub struct SimplexStatus {
 }
 
 impl CEkk {
+    /// info_.numTotRandomValue_, to be written
+    ///
+    /// # Safety
+    /// As for view; no view may be in use
+    pub(crate) unsafe fn num_tot_random_value_mut<'a>(&self) -> &'a mut [f64] {
+        self.num_tot_random_value.get_mut()
+    }
+
     /// # Safety
     /// The pointers must be valid for their lengths (scalars: non-null),
     /// unaliased while the view lives
@@ -551,7 +553,7 @@ impl CEkk {
             } else {
                 None
             },
-            ar_start: self.ar_start.get(),
+            ar_start: self.ar_start.get_mut(),
             ar_p_end: self.ar_p_end.get_mut(),
             ar_index: self.ar_index.get_mut(),
             ar_value: self.ar_value.get_mut(),
@@ -596,9 +598,9 @@ impl CEkk {
             bounds_shifted: &mut *self.bounds_shifted,
             bounds_perturbed: &mut *self.bounds_perturbed,
             price_strategy: self.price_strategy,
-            dual_simplex_cost_perturbation_multiplier: self
+            dual_simplex_cost_perturbation_multiplier: &mut *self
                 .dual_simplex_cost_perturbation_multiplier,
-            primal_simplex_bound_perturbation_multiplier: self
+            primal_simplex_bound_perturbation_multiplier: &mut *self
                 .primal_simplex_bound_perturbation_multiplier,
             primal_feasibility_tolerance: self.primal_feasibility_tolerance,
             dual_feasibility_tolerance: self.dual_feasibility_tolerance,
@@ -608,7 +610,7 @@ impl CEkk {
             cost_perturbation_base: &mut *self.cost_perturbation_base,
             cost_perturbation_max_abs_cost: &mut *self.cost_perturbation_max_abs_cost,
             simplex_in_scaled_space: self.simplex_in_scaled_space,
-            update_limit: self.update_limit,
+            update_limit: &mut *self.update_limit,
             build_synthetic_tick: &mut *self.build_synthetic_tick,
             total_synthetic_tick: &mut *self.total_synthetic_tick,
             factor: &mut *self.factor,
@@ -1106,7 +1108,7 @@ impl EkkView<'_> {
             Some(&self.factor_a),
             self.basic_index,
         );
-        if *self.update_count >= self.update_limit {
+        if *self.update_count >= *self.update_limit {
             *hint = K_REBUILD_REASON_UPDATE_LIMIT_REACHED;
         }
         // Determine whether to reinvert based on the synthetic clock
@@ -1283,7 +1285,7 @@ impl EkkView<'_> {
             return;
         }
         // Dual simplex costs are either from the LP or perturbed
-        if !perturb || self.dual_simplex_cost_perturbation_multiplier == 0.0 {
+        if !perturb || *self.dual_simplex_cost_perturbation_multiplier == 0.0 {
             return;
         }
         // Perturb the original costs, scale down if is too big
@@ -1339,7 +1341,7 @@ impl EkkView<'_> {
         }
         // Determine the perturbation base
         *self.cost_perturbation_max_abs_cost = max_abs_cost;
-        let base = self.dual_simplex_cost_perturbation_multiplier * 5e-7 * max_abs_cost;
+        let base = *self.dual_simplex_cost_perturbation_multiplier * 5e-7 * max_abs_cost;
         *self.cost_perturbation_base = base;
         // Now do the perturbation
         for i in 0..num_col {
@@ -1361,7 +1363,7 @@ impl EkkView<'_> {
             }
             // Fixed - no perturb
         }
-        let row_cost_perturbation_base = self.dual_simplex_cost_perturbation_multiplier * 1e-12;
+        let row_cost_perturbation_base = *self.dual_simplex_cost_perturbation_multiplier * 1e-12;
         report.row_cost_perturbation_base = row_cost_perturbation_base;
         for i in num_col..num_tot {
             let perturbation2 = (0.5 - self.num_tot_random_value[i]) * row_cost_perturbation_base;
@@ -1380,11 +1382,11 @@ impl EkkView<'_> {
         let num_tot = self.num_tot();
         // Primal simplex bounds are either from the LP or perturbed
         if algorithm == ALGORITHM_PRIMAL {
-            if !perturb || self.primal_simplex_bound_perturbation_multiplier == 0.0 {
+            if !perturb || *self.primal_simplex_bound_perturbation_multiplier == 0.0 {
                 return;
             }
             // Perturb the bounds
-            let base = self.primal_simplex_bound_perturbation_multiplier * 5e-7;
+            let base = *self.primal_simplex_bound_perturbation_multiplier * 5e-7;
             for i_var in 0..num_tot {
                 let mut lower = self.work_lower[i_var];
                 let mut upper = self.work_upper[i_var];

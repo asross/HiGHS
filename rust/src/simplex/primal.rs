@@ -1,32 +1,25 @@
 //! The primal simplex solver HEkkPrimal (highs/simplex/HEkkPrimal.cpp).
 //!
-//! The solver works on HEkk's data through an [`EkkView`], refreshed from
-//! C++ after every call that may change or resize it. What is still C++
-//! is reached through [`PrimalCallbacks`] (wired in
-//! highs/simplex/HEkkPrimalRust.cpp):
-//! - `op`: HEkk methods whose state is C++-owned or which carry C++-side
-//!   bookkeeping (factorization and backtracking, cost and bound set-up,
-//!   computing primal and dual values from scratch, visited_basis_ and the
-//!   bad basis changes, model status, returnFromSolve, the time limit and
-//!   user interrupt, and the dual simplex clean-up);
-//! - `report`: HighsSimplexAnalysis iteration and rebuild reports;
-//! - `log`: the solver's log messages, formatted in C++.
-//!
-//! In an iteration the only crossings are `isBadBasisChange` and the
-//! visited-basis record after the basis change (plus an iteration report
-//! when the log level asks for it).
+//! The solver works on HEkk's data through an [`EkkView`] and the
+//! [`CHekk`] of hekk.rs, whose HEkk methods it calls directly (through
+//! [`Primal::op3`], named after the HEkk methods), as it does the dual
+//! simplex (dual.rs) for clean-up. What still reaches C++ goes through
+//! hekk.rs's `Host`: the log messages (formatted here), the
+//! HighsSimplexAnalysis iteration and rebuild reports, the run clock and
+//! a user interrupt callback.
 //!
 //! C++ keeps its own HEkkPrimal for the debug levels and simplex analysis
 //! (timers, operation records), which this port does not support.
 
-use std::ffi::c_void;
-use std::mem::MaybeUninit;
-
 use crate::hvector::{HVec, OwnedHVec};
 use crate::simplex::ekk::{
     choose_price_technique, compute_dual_for_tableau_column, interleaved_part, sparse_loop_style,
-    update_operation_result_density, CEkk, EkkView,
+    update_operation_result_density, EkkView,
 };
+use crate::simplex::hekk::{
+    self, Bailout, CHekk, ALGORITHM_PRIMAL, LOG_DETAILED, LOG_ERROR, LOG_INFO, LOG_WARNING, MS_NOTSET,
+};
+use crate::sprintf;
 use crate::util::hset::HSet;
 use crate::util::random::HighsRandom;
 
@@ -83,8 +76,7 @@ const BAD_DEVEX_WEIGHT_FACTOR: f64 = 3.0;
 const HIGHS_DEBUG_LEVEL_COSTLY: i32 = 2;
 const HIGHS_DEBUG_LEVEL_EXPENSIVE: i32 = 3;
 
-/// The C++ operations of [`PrimalCallbacks::op`]: mirrored by
-/// highs/simplex/HEkkPrimalRust.cpp
+/// The HEkk operations of the solver: see [`Primal::op3`]
 #[repr(i32)]
 #[derive(Clone, Copy)]
 pub enum Op {
@@ -135,16 +127,6 @@ pub enum Op {
     DualCleanup,
 }
 
-/// The C++ side of the solver: see the module comment
-#[repr(C)]
-pub struct PrimalCallbacks {
-    pub ctx: *mut c_void,
-    pub view: unsafe extern "C" fn(*mut c_void, *mut CEkk),
-    pub op: unsafe extern "C" fn(*mut c_void, i32, i32, i32, i32) -> i32,
-    pub report: unsafe extern "C" fn(*mut c_void, i32, *const PrimalReport),
-    pub log: unsafe extern "C" fn(*mut c_void, i32, *const i32, *const f64),
-}
-
 // Kinds of report
 const REPORT_ITERATION: i32 = 0;
 const REPORT_REBUILD: i32 = 1;
@@ -169,7 +151,7 @@ pub struct PrimalReport {
     pub numerical_trouble: f64,
 }
 
-/// Log messages, formatted by C++
+/// Log messages: see [`Primal::message`]
 #[repr(i32)]
 #[derive(Clone, Copy)]
 enum Log {
@@ -215,8 +197,9 @@ enum Log {
 
 /// HEkkPrimal
 pub struct Primal {
-    cb: *const PrimalCallbacks,
+    x: &'static CHekk,
     ekk: EkkView<'static>,
+    bailout_state: Bailout,
 
     num_col: usize,
     num_row: usize,
@@ -398,26 +381,70 @@ fn bound_violated(value: f64, lower: f64, upper: f64, tolerance: f64) -> i32 {
 impl Primal {
     // ---- The C++ side ----
 
-    /// A fresh view of HEkk's data
-    unsafe fn fetch_view(cb: *const PrimalCallbacks) -> EkkView<'static> {
-        let mut c = MaybeUninit::<CEkk>::uninit();
-        ((*cb).view)((*cb).ctx, c.as_mut_ptr());
-        c.assume_init_ref().view()
-    }
-
-    fn refresh(&mut self) {
-        // SAFETY: the callbacks are valid for the solve, and C++ fills the
-        // view with HEkk's current data, which nothing else touches until
-        // the next call back into C++ (after which the view is refreshed
-        // before it is used again)
-        self.ekk = unsafe { Self::fetch_view(self.cb) };
-    }
-
-    /// A C++ operation that may change HEkk's data: the view is refreshed
+    /// An HEkk operation
     fn op3(&mut self, op: Op, a: i32, b: i32, c: i32) -> i32 {
-        let r = self.op_keep(op, a, b, c);
-        self.refresh();
-        r
+        let x = self.x;
+        let e = &mut self.ekk;
+        match op {
+            Op::ClearFreshValues => x.clear_fresh_values(),
+            Op::IsUnconstrainedLp => return hekk::is_unconstrained_lp(e, x) as i32,
+            Op::InitialiseSolve => {
+                e.status.has_primal_objective_value = false;
+                e.status.has_dual_objective_value = false;
+                x.model_status.set(MS_NOTSET);
+                x.solve_bailout.set(false);
+                x.called_return_from_solve.set(false);
+                x.exit_algorithm.set(ALGORITHM_PRIMAL);
+                if !e.status.has_dual_steepest_edge_weights {
+                    // No dual weights to maintain, so ensure that the
+                    // vectors are assigned since they are used around
+                    // factorization and when setting up the backtracking
+                    // information (C++ has sized them)
+                    hekk::assign_unit_dual_edge_weights(e);
+                }
+            }
+            Op::Bailout => return self.bailout_state.check(x) as i32,
+            Op::SolveBailout => return x.solve_bailout.get() as i32,
+            Op::ReturnFromSolve => return hekk::return_from_solve(e, x, a),
+            Op::InitialiseBound => e.initialise_bound(ALGORITHM_PRIMAL, a, b != 0),
+            Op::InitialiseCost => hekk::initialise_cost(e, x, ALGORITHM_PRIMAL, false),
+            Op::InitialiseNonbasicValueAndMove => e.initialise_nonbasic_value_and_move(),
+            Op::ComputePrimal => hekk::compute_primal(e),
+            Op::ComputeDual => hekk::compute_dual(e, x),
+            Op::ComputeSimplexPrimalInfeasible => e.compute_simplex_primal_infeasible(),
+            Op::ComputeSimplexDualInfeasible => e.compute_simplex_dual_infeasible(),
+            Op::ComputePrimalObjectiveValue => hekk::compute_primal_objective_value(e),
+            Op::ComputeDualObjectiveValue => hekk::compute_dual_objective_value(e, 2),
+            // Sized by C++
+            Op::ResizeBacktrackingEdgeWeight => {}
+            Op::PutBacktrackingBasisIfInvalid => {
+                if !x.valid_backtracking_basis.get() {
+                    hekk::put_backtracking_basis(e, x);
+                }
+            }
+            Op::RebuildRefactor => return hekk::rebuild_refactor(e, x, a) as i32,
+            Op::GetNonsingularInverse => return hekk::get_nonsingular_inverse(e, x, a) as i32,
+            Op::ResetSyntheticClock => hekk::reset_synthetic_clock(e, x),
+            Op::InitialisePartitionedRowwiseMatrix => hekk::initialise_partitioned_rowwise_matrix(e, x),
+            Op::ClearBadBasisChangeTabooFlag => x.records().clear_taboo_flag(),
+            Op::TabooBadBasisChange => return x.records().taboo() as i32,
+            Op::ApplyTabooVariableIn => x.records().apply_taboo(e.work_dual, 0.0, 1),
+            Op::UnapplyTabooVariableIn => x.records().unapply_taboo(e.work_dual, 1),
+            Op::IsBadBasisChange => return hekk::is_bad_basis_change(e, x, a, b, c) as i32,
+            Op::BasisChanged => {
+                // The parts of HEkk::updatePivots and HEkk::updateFactor
+                // beyond the kernels
+                x.dual_values_valid.set(false);
+                x.records().visited.insert(*e.basis_hash);
+                e.factor.refactor_info_clear();
+            }
+            Op::SetModelStatus => x.model_status.set(a),
+            Op::GetModelStatus => return x.model_status.get(),
+            Op::SavePrimalPhase1Dual => x.records().out.primal_phase1_dual = Some(e.work_dual.to_vec()),
+            Op::SavePrimalRay => hekk::save_primal_ray(x, a, b),
+            Op::DualCleanup => return self.cleanup_with_dual(),
+        }
+        0
     }
 
     fn op(&mut self, op: Op) -> i32 {
@@ -428,16 +455,157 @@ impl Primal {
         self.op3(op, a, 0, 0)
     }
 
-    /// A C++ operation that leaves the data of the view alone
-    fn op_keep(&self, op: Op, a: i32, b: i32, c: i32) -> i32 {
-        // SAFETY: valid callbacks
-        unsafe { ((*self.cb).op)((*self.cb).ctx, op as i32, a, b, c) }
+    fn op_keep(&mut self, op: Op, a: i32, b: i32, c: i32) -> i32 {
+        self.op3(op, a, b, c)
+    }
+
+    /// HEkkPrimal::cleanupWithDual
+    fn cleanup_with_dual(&mut self) -> i32 {
+        let x = self.x;
+        let e = &mut self.ekk;
+        x.dev(LOG_INFO, || {
+            sprintf!(
+                "HEkkPrimal:: Using dual simplex to try to clean up num / max / sum = %d / %g / %g primal infeasibilities\n",
+                *e.num_primal_infeasibilities,
+                *e.max_primal_infeasibility,
+                *e.sum_primal_infeasibilities
+            )
+        });
+        hekk::compute_primal_objective_value(e);
+        // Switch off any bound perturbation
+        let save_dual_simplex_cost_perturbation_multiplier = *e.dual_simplex_cost_perturbation_multiplier;
+        *e.dual_simplex_cost_perturbation_multiplier = 0.0;
+        let simplex_strategy = x.simplex_strategy.get();
+        x.simplex_strategy.set(1);
+        let call_status = hekk::dual_solve(x, true);
+        // Restore any bound perturbation
+        let e = &mut self.ekk;
+        *e.dual_simplex_cost_perturbation_multiplier = save_dual_simplex_cost_perturbation_multiplier;
+        x.simplex_strategy.set(simplex_strategy);
+        let return_status = hekk::interpret_call_status(x, call_status, STATUS_OK, "HEkkDual::solve");
+        // Reset called_return_from_solve_ to be false, since it's called
+        // for this solve
+        x.called_return_from_solve.set(false);
+        if return_status != STATUS_OK {
+            return return_status;
+        }
+        if x.model_status.get() == MODEL_STATUS_OPTIMAL
+            && *e.num_primal_infeasibilities + *e.num_dual_infeasibilities != 0
+        {
+            x.dev(LOG_WARNING, || {
+                sprintf!(
+                    "HEkkPrimal:: Dual simplex clean up yields  optimality, but with %d (max %g) primal infeasibilities and %d (max %g) dual infeasibilities\n",
+                    *e.num_primal_infeasibilities,
+                    *e.max_primal_infeasibility,
+                    *e.num_dual_infeasibilities,
+                    *e.max_dual_infeasibility
+                )
+            });
+        }
+        STATUS_OK
     }
 
     fn log(&self, id: Log, i: &[i32], d: &[f64]) {
-        // SAFETY: valid callbacks; C++ reads as many values as the message
-        // takes
-        unsafe { ((*self.cb).log)((*self.cb).ctx, id as i32, i.as_ptr(), d.as_ptr()) }
+        use Log::*;
+        let x = self.x;
+        let t = match id {
+            NearOptimal | NoBoundPerturbation | Phase1Start | Phase2Start | ReturnPhase1 | Phase2Optimal
+            | ProblemOptimal | CleanupShift => LOG_DETAILED,
+            Phase2NoPerturbation | RebuildPhase1 => LOG_WARNING,
+            ChooseRowFailed | RemoveFreeFailed | MissedBoundShifts | WithoutInvert => LOG_ERROR,
+            PseWeightError | LeavingDualInfeasibility | Phase2RowOut => {
+                x.printf(&self.message(id, i, d));
+                return;
+            }
+            _ => LOG_INFO,
+        };
+        x.dev(t, || self.message(id, i, d));
+    }
+
+    /// The text of a message
+    fn message(&self, id: Log, i: &[i32], d: &[f64]) -> String {
+        use Log::*;
+        match id {
+            NearOptimal => sprintf!(
+                "Primal feasible and num / max / sum dual infeasibilities of %d / %g / %g, so near-optimal\n",
+                i[0],
+                d[0],
+                d[1]
+            ),
+            NoBoundPerturbation => "Near-optimal, so don't use bound perturbation\n".into(),
+            OnlyTaboo => "HEkkPrimal::solve Only basis change is taboo\n".into(),
+            FreeColumns => sprintf!("HEkkPrimal:: LP has %d free columns\n", i[0]),
+            Phase1Start => "primal-phase1-start\n".into(),
+            Phase2NoPerturbation => "Moving to phase 2, but not allowing bound perturbation\n".into(),
+            Phase2Start => "primal-phase2-start\n".into(),
+            ReturnPhase1 => "primal-return-phase1\n".into(),
+            Phase2Optimal => "primal-phase-2-optimal\n".into(),
+            ProblemOptimal => "problem-optimal\n".into(),
+            Phase2Unbounded => "primal-phase-2-unbounded\n".into(),
+            ProblemUnbounded => "problem-primal-unbounded\n".into(),
+            CleanupShift => "primal-cleanup-shift\n".into(),
+            RebuildPhase1 => "HEkkPrimal::rebuild switching back to phase 1 from phase 2\n".into(),
+            ChooseRowFailed => "Primal phase 1 choose row failed\n".into(),
+            DontUseVariableIn => sprintf!(
+                "Chosen entering variable %d (Iter = %d; Update = %d) has computed (updated) dual of %10.4g (%10.4g) so don't use it%s%s\n",
+                i[0],
+                i[1],
+                i[2],
+                d[0],
+                d[1],
+                if i[3] != 0 { "; too small" } else { "" },
+                if i[4] != 0 { "; sign error" } else { "" }
+            ),
+            RemoveFreeFailed => {
+                sprintf!("HEkkPrimal::phase1update failed to remove nonbasic free column %d\n", i[0])
+            }
+            MissedBoundShifts => sprintf!("correctPrimal: Missed %d bound shifts\n", i[0]),
+            PrimalCorrections => sprintf!(
+                "phase2CorrectPrimal: num / max / sum primal corrections = %d / %g / %g\n",
+                i[0],
+                d[0],
+                d[1]
+            ),
+            NumericalCheck => sprintf!(
+                "Numerical check: Iter %4d: alpha_col = %12g, (From %3s alpha_row = %12g), aDiff = %12g: measure = %12g\n",
+                i[0],
+                d[0],
+                if i[1] != 0 { "Row" } else { "Col" },
+                d[1],
+                d[2],
+                d[3]
+            ),
+            ShiftBound => sprintf!(
+                "HEkkPrimal::shiftBound Value(%4d) = %10.4g exceeds %s: random_value = %g; value = %g; feasibility = %g; infeasibility = %g; shift = %g; bound = %g; new_infeasibility = %g with error %g\n",
+                i[0],
+                d[0],
+                if i[1] != 0 { "lower" } else { "upper" },
+                d[1],
+                d[2],
+                d[0],
+                d[3],
+                d[4],
+                d[5],
+                d[6],
+                d[7],
+                d[8]
+            ),
+            PseWeightError => sprintf!(
+                "HEkk::debugPrimalSteepestEdgeWeights Iteration %5d: Checked %2d weights: error = %10.4g; norm = %10.4g; relative error = %10.4g\n",
+                i[0],
+                i[1],
+                d[0],
+                d[1],
+                d[2]
+            ),
+            WithoutInvert => "HEkkPrimal::solve called without INVERT\n".into(),
+            LeavingDualInfeasibility => sprintf!("Dual infeasibility %g for leaving column!\n", d[0]),
+            Phase2RowOut => sprintf!(
+                "HEkkPrimal::solvePhase2 row_out = %d solve %d\n",
+                i[0],
+                self.x.debug_solve_call_num
+            ),
+        }
     }
 
     fn report(&self, kind: i32, reason_for_rebuild: i32) {
@@ -456,8 +624,7 @@ impl Primal {
             alpha_row: self.alpha_row,
             numerical_trouble: self.numerical_trouble,
         };
-        // SAFETY: valid callbacks
-        unsafe { ((*self.cb).report)((*self.cb).ctx, kind, &r) }
+        (self.x.host.primal_report)(self.x.host.ctx, kind, &r);
     }
 
     fn report_rebuild(&mut self, reason_for_rebuild: i32) {
@@ -474,13 +641,9 @@ impl Primal {
         self.op_keep(Op::ReturnFromSolve, status, 0, 0)
     }
 
-    /// HEkk::bailout: the iteration limit is checked here unless there is
-    /// more to check
-    fn bailout(&self) -> bool {
-        if !self.ekk.bailout_in_cpp && *self.ekk.iteration_count < self.ekk.simplex_iteration_limit {
-            return false;
-        }
-        self.op_keep(Op::Bailout, 0, 0, 0) != 0
+    /// HEkk::bailout
+    fn bailout(&mut self) -> bool {
+        self.bailout_state.check(self.x)
     }
 
     // ---- Set-up ----
@@ -488,15 +651,18 @@ impl Primal {
     /// HEkkPrimal::HEkkPrimal and initialiseInstance
     ///
     /// # Safety
-    /// `cb` valid for the solve
-    unsafe fn new(cb: *const PrimalCallbacks) -> Primal {
-        let ekk = Self::fetch_view(cb);
+    /// As for CHekk::view: `x` filled for the solve, and no other view of
+    /// HEkk's data used while this solver runs
+    pub unsafe fn new(x: &CHekk) -> Primal {
+        let x: &'static CHekk = &*(x as *const CHekk);
+        let ekk = x.view();
         let num_col = ekk.num_col;
         let num_row = ekk.num_row;
         let num_tot = num_col + num_row;
         let mut p = Primal {
-            cb,
+            x,
             ekk,
+            bailout_state: Bailout::new(),
             num_col,
             num_row,
             num_tot,
@@ -589,7 +755,7 @@ impl Primal {
     // ---- Solve ----
 
     /// HEkkPrimal::solve
-    fn solve(&mut self, pass_force_phase2: bool) -> i32 {
+    pub fn solve(&mut self, pass_force_phase2: bool) -> i32 {
         self.op(Op::ClearFreshValues);
         // Initialise control data for a particular solve
         self.initialise_solve();
@@ -628,7 +794,7 @@ impl Primal {
         if !perturb_bounds {
             self.log(Log::NoBoundPerturbation, &[], &[]);
         }
-        if perturb_bounds && self.ekk.primal_simplex_bound_perturbation_multiplier != 0.0 {
+        if perturb_bounds && *self.ekk.primal_simplex_bound_perturbation_multiplier != 0.0 {
             self.op3(Op::InitialiseBound, SOLVE_PHASE_UNKNOWN, perturb_bounds as i32, 0);
             self.op(Op::InitialiseNonbasicValueAndMove);
             self.op(Op::ComputePrimal);
@@ -1700,7 +1866,7 @@ impl Primal {
         }
         // Update the row-wise representation of the nonbasic columns
         self.ekk.update_matrix(variable_in, variable_out);
-        if *self.ekk.update_count >= self.ekk.update_limit {
+        if *self.ekk.update_count >= *self.ekk.update_limit {
             self.rebuild_reason = REBUILD_REASON_UPDATE_LIMIT_REACHED;
         }
 
@@ -2670,17 +2836,6 @@ fn row_ep_2norm_in_scaled_space(e: &EkkView, i_row: usize, row_ep: &HVec) -> f64
         };
     }
     row_ep_2norm
-}
-
-/// HEkkPrimal::solve: returns the HighsStatus
-///
-/// # Safety
-/// `cb` must be valid, with callbacks that implement the operations as
-/// documented, for the duration of the call
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_primal_solve(cb: *const PrimalCallbacks, force_phase2: bool) -> i32 {
-    let mut primal = Primal::new(cb);
-    primal.solve(force_phase2)
 }
 
 #[cfg(test)]

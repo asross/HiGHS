@@ -322,9 +322,23 @@ class HFactor {
     this->debug_report_ = debug_report;
   }
 
+#ifndef HIGHS_RUST
   // Information required to perform refactorization of the current
   // basis
   RefactorInfo refactor_info_;
+#endif
+  // The refactorization information: get a copy, set it, clear it
+  RefactorInfo getRefactorInfo() const;
+  void setRefactorInfo(const RefactorInfo& refactor_info);
+  void clearRefactorInfo();
+#ifdef HIGHS_RUST
+  // The build results that are used outside HFactor, after a build in
+  // Rust not called from here
+  void pullRustBuildInfo();
+  // getInvert/setInvert to and from a copy held by the Rust factor
+  void saveInvert();
+  void restoreInvert();
+#endif
 
   // Properties of data held in HFactor.h
   HighsInt basis_matrix_num_el;
@@ -461,6 +475,7 @@ class HFactor {
   };
   RustFactor rs_;
   void setupRust();
+  friend class HEkk;
 #endif
 
   HVector rhs_;

@@ -2,7 +2,7 @@
 //! HIGHS_RUST). Every pointer comes with its length, so the Rust side is
 //! bounds-checked.
 
-use crate::factor::{AMatrix, HFactor, RefactorIn};
+use crate::factor::{AMatrix, HFactor};
 use crate::hvector::HVec;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
@@ -102,15 +102,6 @@ impl CAMatrix {
 }
 
 #[repr(C)]
-pub struct CRefactor {
-    pivot_row: *const i32,
-    pivot_var: *const i32,
-    pivot_type: *const i8,
-    num: i32,
-    build_synthetic_tick: f64,
-}
-
-#[repr(C)]
 pub struct CInfo {
     build_synthetic_tick: f64,
     refactor_build_synthetic_tick: f64,
@@ -151,11 +142,12 @@ pub unsafe extern "C" fn highs_rs_factor_setup(
     (*p).setup(num_col, num_row, num_basic, a_start, update_method);
 }
 
+/// HFactor::build, with the refactorization information held by the
+/// factor (used if it is to be)
+///
 /// # Safety
-/// As for CAMatrix::view; basic_index holds n_basic entries; refactor
-/// may be null
+/// As for CAMatrix::view; basic_index holds n_basic entries
 #[no_mangle]
-#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn highs_rs_factor_build(
     p: *mut HFactor,
     pivot_threshold: f64,
@@ -164,29 +156,50 @@ pub unsafe extern "C" fn highs_rs_factor_build(
     a: *const CAMatrix,
     basic_index: *mut i32,
     n_basic: i32,
-    refactor: *const CRefactor,
-    refactored: *mut i32,
 ) -> i32 {
     let a = (*a).view();
     let basic_index = sl_mut(basic_index, n_basic);
-    let info = refactor.as_ref().map(|r| RefactorIn {
-        pivot_row: sl(r.pivot_row, r.num),
-        pivot_var: sl(r.pivot_var, r.num),
-        pivot_type: sl(r.pivot_type, r.num),
-        build_synthetic_tick: r.build_synthetic_tick,
-    });
-    let mut done = false;
-    let r = (*p).build(
-        pivot_threshold,
-        pivot_tolerance,
-        time_limit,
-        &a,
-        basic_index,
-        info.as_ref(),
-        &mut done,
-    );
-    *refactored = done as i32;
-    r
+    (*p).build_with_refactor_info(pivot_threshold, pivot_tolerance, time_limit, &a, basic_index)
+}
+
+/// RefactorInfo::clear for the factor's information
+///
+/// # Safety
+/// `p` must be a live factor
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_factor_refactor_clear(p: *mut HFactor) {
+    (*p).refactor_info_clear();
+}
+
+/// Whether the factor's refactorization information is to be used
+///
+/// # Safety
+/// `p` must be a live factor
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_factor_refactor_use(p: *const HFactor) -> bool {
+    (*p).refactor_use
+}
+
+/// Set the factor's refactorization information (RefactorInfo)
+///
+/// # Safety
+/// The arrays must hold n entries
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_factor_refactor_set(
+    p: *mut HFactor,
+    use_: bool,
+    pivot_row: *const i32,
+    pivot_var: *const i32,
+    pivot_type: *const i8,
+    n: i32,
+    build_synthetic_tick: f64,
+) {
+    let f = &mut *p;
+    f.refactor_use = use_;
+    f.refactor_pivot_row = sl(pivot_row, n).to_vec();
+    f.refactor_pivot_var = sl(pivot_var, n).to_vec();
+    f.refactor_pivot_type = sl(pivot_type, n).to_vec();
+    f.refactor_build_synthetic_tick = build_synthetic_tick;
 }
 
 /// # Safety
@@ -386,6 +399,49 @@ pub unsafe extern "C" fn highs_rs_factor_set_ivec(
     v.clear();
     v.extend_from_slice(sl(data, len));
 }
+
+/// HFactor::getInvert into the factor's own saved copy (for
+/// HSimplexNla::putInvert): the vectors that getInvert copies out
+///
+/// # Safety
+/// `p` must be a live factor
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_factor_put_invert(p: *mut HFactor) {
+    let f = &mut *p;
+    let mut saved = std::mem::take(&mut f.saved_invert);
+    saved.0.resize(INVERT_IVECS.len(), Vec::new());
+    saved.1.resize(INVERT_DVECS.len(), Vec::new());
+    for (k, &which) in INVERT_IVECS.iter().enumerate() {
+        saved.0[k].clone_from(ivec(f, which));
+    }
+    for (k, &which) in INVERT_DVECS.iter().enumerate() {
+        saved.1[k].clone_from(dvec(f, which));
+    }
+    f.saved_invert = saved;
+}
+
+/// HFactor::setInvert from the factor's saved copy (for
+/// HSimplexNla::getInvert)
+///
+/// # Safety
+/// `p` must be a live factor, with a saved copy
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_factor_get_invert(p: *mut HFactor) {
+    let f = &mut *p;
+    let saved = std::mem::take(&mut f.saved_invert);
+    for (k, &which) in INVERT_IVECS.iter().enumerate() {
+        ivec(f, which).clone_from(&saved.0[k]);
+    }
+    for (k, &which) in INVERT_DVECS.iter().enumerate() {
+        dvec(f, which).clone_from(&saved.1[k]);
+    }
+    f.saved_invert = saved;
+    f.check_indices();
+}
+
+/// The vectors of InvertibleRepresentation (see ivec and dvec)
+const INVERT_IVECS: [i32; 18] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+const INVERT_DVECS: [i32; 7] = [0, 1, 2, 3, 4, 5, 6];
 
 /// Check the row index invariant after setting vectors
 ///

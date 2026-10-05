@@ -433,13 +433,12 @@ set(highs_sources
     simplex/HEkkDualMulti.cpp
     simplex/HEkkDualRHS.cpp
     simplex/HEkkDualRHSRust.cpp
-    simplex/HEkkDualRust.cpp
     simplex/HEkkDualRow.cpp
     simplex/HEkkDualRowRust.cpp
     simplex/HEkkInterface.cpp
     simplex/HEkkPrimal.cpp
-    simplex/HEkkPrimalRust.cpp
     simplex/HEkkRust.cpp
+    simplex/HEkkRustSolve.cpp
     simplex/HighsSimplexAnalysis.cpp
     simplex/HSimplex.cpp
     simplex/HSimplexDebug.cpp
