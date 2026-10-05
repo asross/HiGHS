@@ -13,8 +13,9 @@
 //! simplex_nla_.factor_. [`CEkk::view`] turns it into an [`EkkView`] of
 //! slices and `&mut` scalars, which the kernels take as `&mut self`.
 //! Building a view costs some tens of loads and stores, so it is done per
-//! C++ call; a Rust caller (a later port of HEkkDual/HEkkPrimal) builds
-//! one per solve or rebuild and calls the methods directly.
+//! C++ call; a Rust caller (HEkkPrimal in primal.rs, a later port of
+//! HEkkDual) builds one per solve, refreshing it after calling back into
+//! C++, and calls the methods directly.
 //!
 //! Rules for extending it:
 //! - Add a field to `CEkk` here and to `highs_rs::Ekk` in

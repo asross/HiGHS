@@ -3,6 +3,7 @@
 //! PRICE kernels of HighsSparseMatrix, the dual simplex CHUZC HEkkDualRow
 //! (simplex/dual_row.rs), its CHUZR HEkkDualRHS (simplex/dual_rhs.rs), the
 //! numerical kernels of HEkk on a view of its data (simplex/ekk.rs), the
+//! primal simplex solver HEkkPrimal (simplex/primal.rs), the
 //! MPS and LP readers, and the utilities
 //! (hashing, random numbers, double-double arithmetic).
 
