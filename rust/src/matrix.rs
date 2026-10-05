@@ -122,6 +122,52 @@ pub fn index_dense_result(result: &mut [f64], result_index: &mut [i32]) -> usize
     count
 }
 
+/// HighsSparseMatrix::priceByRowWithSwitch (double precision): row-wise
+/// PRICE from `from_index` of the column's nonzeros, hyper-sparse if
+/// `hyper` until the result is too dense, then dense. `end` is p_end for a
+/// partitioned matrix. Returns the result count.
+#[allow(clippy::too_many_arguments)]
+pub fn price_by_row_with_switch(
+    start: &[i32],
+    end: &[i32],
+    index: &[i32],
+    value: &[f64],
+    num_col: usize,
+    column_index: &[i32],
+    column: &[f64],
+    hyper: bool,
+    from_index: usize,
+    switch_density: f64,
+    result_count: usize,
+    result: &mut [f64],
+    result_index: &mut [i32],
+) -> usize {
+    let mut count = result_count;
+    let mut next = from_index;
+    if hyper {
+        next = price_by_row_sparse(start, end, index, value, num_col, column_index, column, next,
+            switch_density, result, result_index, &mut count);
+    }
+    if next < column_index.len() {
+        price_by_row_dense(start, end, index, value, column_index, column, next, result);
+        count = index_dense_result(result, result_index);
+    } else {
+        // complete: remove small values (HVector::tight)
+        let mut kept = 0;
+        for i in 0..count {
+            let col = result_index[i];
+            if result[col as usize].abs() < K_HIGHS_TINY {
+                result[col as usize] = 0.0;
+            } else {
+                result_index[kept] = col;
+                kept += 1;
+            }
+        }
+        count = kept;
+    }
+    count
+}
+
 mod ffi {
     use std::slice::{from_raw_parts as s, from_raw_parts_mut as m};
 
@@ -159,33 +205,10 @@ mod ffi {
         let column_index = s(column_index, column_count as usize);
         let column = s(column, nr);
         let (result, result_index) = (m(result, nc), m(result_index, nc));
-        let mut count = result_count as usize;
-        let mut next = from_index as usize;
-        if hyper {
-            next = super::price_by_row_sparse(start, end, index, value, nc, column_index, column,
-                next, switch_density, result, result_index, &mut count);
-        }
-        if next < column_index.len() {
-            super::price_by_row_dense(start, end, index, value, column_index, column, next, result);
-            count = super::index_dense_result(result, result_index);
-        } else {
-            // complete: remove small values (HVector::tight)
-            let mut kept = 0;
-            for i in 0..count {
-                let col = result_index[i];
-                if result[col as usize].abs() < K_HIGHS_TINY {
-                    result[col as usize] = 0.0;
-                } else {
-                    result_index[kept] = col;
-                    kept += 1;
-                }
-            }
-            count = kept;
-        }
-        count as i32
+        super::price_by_row_with_switch(start, end, index, value, nc, column_index, column, hyper,
+            from_index as usize, switch_density, result_count as usize, result, result_index) as i32
     }
 
-    use super::K_HIGHS_TINY;
 }
 
 #[cfg(test)]

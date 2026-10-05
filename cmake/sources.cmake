@@ -437,6 +437,7 @@ set(highs_sources
     simplex/HEkkDualRowRust.cpp
     simplex/HEkkInterface.cpp
     simplex/HEkkPrimal.cpp
+    simplex/HEkkRust.cpp
     simplex/HighsSimplexAnalysis.cpp
     simplex/HSimplex.cpp
     simplex/HSimplexDebug.cpp
@@ -593,6 +594,7 @@ set(highs_headers
     qpsolver/steepestedgepricing.hpp
     simplex/HApp.h
     simplex/HEkk.h
+    simplex/HEkkRust.h
     simplex/HEkkDual.h
     simplex/HEkkDualRHS.h
     simplex/HEkkDualRow.h

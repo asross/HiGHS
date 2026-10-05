@@ -592,6 +592,7 @@ class HFactor {
   }
 #endif
   friend class HSimplexNla;
+  friend class HEkk;  // for the Rust factor handle (HEkk::rustView)
 };
 
 #endif /* HFACTOR_H_ */

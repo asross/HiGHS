@@ -20,6 +20,48 @@ pub struct HVec<'a> {
 }
 
 impl HVec<'_> {
+    /// HVectorBase::clear (but `next`, which stays with C++)
+    pub fn clear(&mut self) {
+        if self.count < 0 || self.count as f64 > self.size as f64 * 0.3 {
+            self.array.fill(0.0);
+        } else {
+            for &i in &self.index[..self.count as usize] {
+                self.array[i as usize] = 0.0;
+            }
+        }
+        self.pack_flag = false;
+        self.count = 0;
+        self.synthetic_tick = 0.0;
+    }
+
+    /// HVectorBase::norm2: the squared 2-norm, as compiled out of line,
+    /// where clang interleaves the loop by 4 without contracting and
+    /// contracts the remainder loop
+    pub fn norm2(&self) -> f64 {
+        self.norm2_split(true)
+    }
+
+    /// norm2 as clang compiles it inline in some callers (e.g.
+    /// HEkk::computeDualSteepestEdgeWeights): contracted throughout
+    pub fn norm2_fused(&self) -> f64 {
+        self.norm2_split(false)
+    }
+
+    fn norm2_split(&self, interleaved: bool) -> f64 {
+        let index = &self.index[..self.count.max(0) as usize];
+        let unfused = if interleaved && index.len() >= 4 { index.len() & !3 } else { 0 };
+        let mut result = 0.0;
+        for &i in &index[..unfused] {
+            let value = self.array[i as usize];
+            result += value * value;
+        }
+        for &i in &index[unfused..] {
+            let value = self.array[i as usize];
+            result = value.mul_add(value, result);
+        }
+        result
+    }
+
     /// Zero values that do not exceed kHighsTiny in magnitude, maintaining
     /// the index if it is well defined
     pub fn tight(&mut self) {
