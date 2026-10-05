@@ -65,3 +65,16 @@ cupdlp_printf. All reductions of libhighs's cuPDLP-C are blocked by 4
 (`dot_blocked`) except those of the power method, which clang leaves
 scalar and fused. The power method's logged residual stops at nrows where
 the C reads ax past its end when ncols > nrows.
+
+## The QP solver
+
+QUASS (highs/qpsolver/) runs in Rust (rust/src/qp): solveqp in
+a_quass.cpp hands the Instance to `highs_rs_qp_solve` and maps the result
+back with quass2highs. Phase 1 (computeStartingPointHighs, an LP solve by
+Highs, or the hot start check), the timer and the logging are C++
+callbacks; basis.cpp, quass.cpp, ratiotest.cpp and the unused
+perturbation.cpp and scaling.cpp are not compiled. QpVector::dot is fused
+in most compiled copies but split by 4 in SteepestEdgePricing and
+Instance::objval (dot_split4). The C++ Cholesky factor writes past the
+size of its std::vector once the null space was empty at a recompute;
+cholesky.rs models the vector's capacity to follow it.

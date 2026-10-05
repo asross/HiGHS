@@ -10,6 +10,7 @@
 #include "qpsolver/quass.hpp"
 #include "util/HighsCDouble.h"
 
+#ifndef HIGHS_RUST
 QpAsmStatus solveqp_actual(Instance& instance, Settings& settings,
                            QpHotstartInformation& startinfo, Statistics& stats,
                            QpModelStatus& status, QpSolution& solution,
@@ -33,6 +34,7 @@ QpAsmStatus solveqp_actual(Instance& instance, Settings& settings,
 
   return QpAsmStatus::kOk;
 }
+#endif
 
 std::string qpBasisStatusToString(const BasisStatus qp_basis_status) {
   switch (qp_basis_status) {
