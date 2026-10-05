@@ -114,3 +114,18 @@ which threads may call concurrently on the global domain, use a temporary
 view. Still C++: changeBound, backtrack, the domain change stack,
 objective propagation (its red-black trees), conflict propagation and
 analysis, and the clique table and implications that changeBound calls.
+
+## Postsolve
+
+The undo side of HighsPostsolveStack runs in Rust (rust/src/presolve/
+postsolve.rs): undo, undoPrimal, undoUntil, getReducedPrimalSolution,
+compressIndexMaps and DuplicateColumn::okMerge. HPresolve (C++) still
+records the reductions through the inline templates of the header, so the
+C++ class keeps owning the HighsDataStack bytes, the reduction list and the
+index maps; Rust reads them through a view (`PostsolveRsStack`) and parses
+the records with the C++ byte layout (`#[repr(C)]` copies, sizes checked by
+static_assert on both sides; HighsInt must be 32 bits). Rust only reads the
+stack, so thread_safe undoPrimal needs no copy. C++ resizes the solution
+and basis vectors to the original space; Rust does the rest. The fused
+products in plain double are `x - a*d` of ForcingRow, `x + s*y` and
+`v - s*y` of DuplicateColumn, and `x + s*y` of transformToPresolvedSpace.

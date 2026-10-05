@@ -1,0 +1,5 @@
+//! Presolve. Ported so far: the undo side of the postsolve stack
+//! (postsolve.rs); HPresolve and the recording of reductions stay C++.
+
+mod ffi;
+pub mod postsolve;

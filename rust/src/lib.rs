@@ -18,6 +18,7 @@ pub mod util;
 pub mod basiclu;
 pub mod ipx;
 pub mod pdlp;
+pub mod presolve;
 pub mod qp;
 pub mod factor;
 mod ffi;
