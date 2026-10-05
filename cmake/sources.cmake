@@ -516,6 +516,7 @@ set(highs_headers
     mip/HighsDebugSol.h
     mip/HighsDomain.h
     mip/HighsDomainChange.h
+    mip/HighsDomainRust.h
     mip/HighsDynamicRowMatrix.h
     mip/HighsGFkSolve.h
     mip/HighsImplications.h

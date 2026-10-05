@@ -14,6 +14,7 @@
 #include <set>
 #include <vector>
 
+#include "HConfig.h"
 #include "HighsPseudocost.h"
 #include "mip/HighsDomainChange.h"
 #include "mip/HighsMipSolver.h"
@@ -21,10 +22,20 @@
 #include "util/HighsRbTree.h"
 
 class HighsCutPool;
+#ifdef HIGHS_RUST
+#include "mip/HighsDomainRustView.h"
+namespace highs_rs {
+struct DomainAccess;
+}
+#endif
 class HighsConflictPool;
 class HighsObjectiveFunction;
 
 class HighsDomain {
+#ifdef HIGHS_RUST
+  friend struct highs_rs::DomainAccess;
+#endif
+
  public:
   struct Reason {
     HighsInt type;
@@ -325,6 +336,16 @@ class HighsDomain {
   Reason infeasible_reason;
   HighsInt infeasible_pos;
 
+#ifdef HIGHS_RUST
+  // the view of this domain passed to the Rust kernels
+  highs_rs::DomainCache rsView_;
+#endif
+  void invalidateRustView() {
+#ifdef HIGHS_RUST
+    rsView_.valid = false;
+#endif
+  }
+
   void updateActivityLbChange(HighsInt col, double oldbound, double newbound);
 
   void updateActivityUbChange(HighsInt col, double oldbound, double newbound);
@@ -404,6 +425,7 @@ class HighsDomain {
     conflictPoolPropagation = other.conflictPoolPropagation;
     infeasible_ = other.infeasible_;
     infeasible_reason = other.infeasible_reason;
+    invalidateRustView();
     colLowerPos_ = other.colLowerPos_;
     colUpperPos_ = other.colUpperPos_;
     branchPos_ = other.branchPos_;
@@ -532,6 +554,7 @@ class HighsDomain {
   // stop propagating the cut and conflict pools (for a domain that only
   // checks fixings against the model rows)
   void clearPoolPropagation() {
+    invalidateRustView();
     cutpoolpropagation.clear();
     conflictPoolPropagation.clear();
   }

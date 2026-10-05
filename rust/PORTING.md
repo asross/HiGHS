@@ -95,3 +95,22 @@ initial basis. The factor's refactorization information and the saved
 INVERT of putIterate/getIterate are held by the Rust factor.
 HEkkDual.cpp is compiled in a unity build, so clang inlines e.g.
 HVector::norm2 into chooseRow contracted: check each compiled copy.
+
+## The MIP domain propagation
+
+HighsDomain keeps its C++ class and data; under HIGHS_RUST its
+propagation kernels run in Rust (mip/domain.rs) on a view of that data:
+row activities with their infinity counts (HighsCDouble arrays),
+updateActivityLbChange/UbChange for model rows, cut pools and the
+watched literals of conflict pools, the capacity thresholds, markPropagate,
+computeRowActivities, computeMin/MaxActivity, propagateRowUpper/Lower and
+the row and cut batches of propagate(). The kernels never call back into
+C++ (they append to the C++ lists of rows/cuts/conflicts to propagate
+through a push function). The view is cached in HighsDomain::rsView_ and
+invalidated where a vector it points to may move (copy, assignment,
+computeRowActivities, pool changes, cutAdded, conflictAdded); debug builds
+check the cache against a fresh fill on every use. The const methods,
+which threads may call concurrently on the global domain, use a temporary
+view. Still C++: changeBound, backtrack, the domain change stack,
+objective propagation (its red-black trees), conflict propagation and
+analysis, and the clique table and implications that changeBound calls.

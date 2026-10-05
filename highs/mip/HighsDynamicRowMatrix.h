@@ -12,7 +12,14 @@
 #include <utility>
 #include <vector>
 
+#include "HConfig.h"
 #include "util/HighsInt.h"
+
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct CutProp;
+}
+#endif
 
 class HighsDynamicRowMatrix {
  private:
@@ -99,6 +106,11 @@ class HighsDynamicRowMatrix {
   const HighsInt* getARindex() const { return ARindex_.data(); }
 
   const double* getARvalue() const { return ARvalue_.data(); }
+
+#ifdef HIGHS_RUST
+  // fills the matrix part of a highs_rs::CutProp (mip/HighsDomainRust.h)
+  void rustView(highs_rs::CutProp& v) const;
+#endif
 };
 
 #endif
