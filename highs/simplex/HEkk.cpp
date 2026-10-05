@@ -3490,6 +3490,24 @@ void HEkk::flipBound(const HighsInt iCol) {
 void HEkk::updateFactor(HVector* column, HVector* row_ep, HighsInt* iRow,
                         HighsInt* hint) {
   analysis_.simplexTimerStart(UpdateFactorClock);
+#ifdef HIGHS_RUST
+  if (!simplex_nla_.update_.valid_ && !column->next) {
+    simplex_nla_.factor_.refactor_info_.clear();
+    {
+      const highs_rs::Ekk view = rustView();
+      highs_rs::HVecCall aq(*column);
+      highs_rs::HVecCall ep(*row_ep);
+      highs_rs_ekk_update_factor(&view, aq.get(), ep.get(), *iRow, hint);
+    }
+    status_.has_invert = true;
+    analysis_.simplexTimerStop(UpdateFactorClock);
+    if (debugNlaCheckInvert("HEkk::updateFactor",
+                            options_->highs_debug_level - 1) ==
+        HighsDebugStatus::kError)
+      *hint = kRebuildReasonPossiblySingularBasis;
+    return;
+  }
+#endif
   simplex_nla_.update(column, row_ep, iRow, hint);
   // Now have a representation of B^{-1}, but it is not fresh
   status_.has_invert = true;

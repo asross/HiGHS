@@ -177,7 +177,15 @@ struct Ekk {
   double* cost_perturbation_base;
   double* cost_perturbation_max_abs_cost;
   bool simplex_in_scaled_space;
+  int update_limit;
+  double* build_synthetic_tick;
+  double* total_synthetic_tick;
   void* factor;
+  // The factor's constraint matrix (HFactor::a_start, ...)
+  int factor_num_col;
+  Slice<const HighsInt> factor_a_start;
+  Slice<const HighsInt> factor_a_index;
+  Slice<const double> factor_a_value;
 };
 
 // Mirrors of the results of some kernels
@@ -240,6 +248,9 @@ void highs_rs_ekk_compute_dual_objective_value(const highs_rs::Ekk* ekk,
 void highs_rs_ekk_zero_basic_duals(const highs_rs::Ekk* ekk);
 void highs_rs_ekk_update_pivots(const highs_rs::Ekk* ekk, int variable_in,
                                 int row_out, int move_out);
+void highs_rs_ekk_update_factor(const highs_rs::Ekk* ekk,
+                                highs_rs::HVec* column, highs_rs::HVec* row_ep,
+                                int i_row, int* hint);
 void highs_rs_ekk_update_matrix(const highs_rs::Ekk* ekk, int variable_in,
                                 int variable_out);
 double highs_rs_ekk_compute_dual_steepest_edge_weight(const highs_rs::Ekk* ekk,

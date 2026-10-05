@@ -98,7 +98,17 @@ highs_rs::Ekk HEkk::rustView() {
   v.cost_perturbation_base = &cost_perturbation_base_;
   v.cost_perturbation_max_abs_cost = &cost_perturbation_max_abs_cost_;
   v.simplex_in_scaled_space = simplex_in_scaled_space_;
-  v.factor = simplex_nla_.factor_.rs_.p;
+  v.update_limit = info_.update_limit;
+  v.build_synthetic_tick = &build_synthetic_tick_;
+  v.total_synthetic_tick = &total_synthetic_tick_;
+  const HFactor& factor = simplex_nla_.factor_;
+  v.factor = factor.rs_.p;
+  v.factor_num_col = factor.num_col;
+  const bool has_a = factor.a_start != nullptr;
+  const int a_nnz = has_a ? factor.a_start[factor.num_col] : 0;
+  v.factor_a_start = {factor.a_start, has_a ? factor.num_col + 1 : 0};
+  v.factor_a_index = {factor.a_index, a_nnz};
+  v.factor_a_value = {factor.a_value, a_nnz};
   return v;
 }
 

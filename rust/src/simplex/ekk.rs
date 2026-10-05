@@ -37,7 +37,7 @@
 //!   HVectors other than HEkk's arrays come per call as `CHVec`s, sized by
 //!   C++.
 
-use crate::factor::HFactor;
+use crate::factor::{AMatrix, HFactor};
 use crate::ffi::{sl, sl_mut, CHVec};
 use crate::hvector::{HVec, K_HIGHS_TINY, K_HIGHS_ZERO};
 use crate::matrix;
@@ -53,6 +53,9 @@ const K_ILLEGAL_INFEASIBILITY_MEASURE: f64 = K_HIGHS_INF;
 const K_DEFAULT_PIVOT_THRESHOLD: f64 = 0.1;
 const K_PIVOT_THRESHOLD_CHANGE_FACTOR: f64 = 5.0;
 const K_MAX_PIVOT_THRESHOLD: f64 = 0.5;
+const K_SYNTHETIC_TICK_REINVERSION_MIN_UPDATE_COUNT: i32 = 50;
+const K_REBUILD_REASON_UPDATE_LIMIT_REACHED: i32 = 1;
+const K_REBUILD_REASON_SYNTHETIC_CLOCK_SAYS_INVERT: i32 = 2;
 
 const MOVE_UP: i8 = 1;
 const MOVE_DN: i8 = -1;
@@ -337,7 +340,15 @@ pub struct CEkk {
     cost_perturbation_base: *mut f64,
     cost_perturbation_max_abs_cost: *mut f64,
     simplex_in_scaled_space: bool,
+    update_limit: i32,
+    build_synthetic_tick: *mut f64,
+    total_synthetic_tick: *mut f64,
     factor: *mut HFactor,
+    // The factor's constraint matrix (HFactor::a_start, ...)
+    factor_num_col: i32,
+    factor_a_start: CSlice<i32>,
+    factor_a_index: CSlice<i32>,
+    factor_a_value: CSlice<f64>,
 }
 
 /// Column-wise matrix (lp_.a_matrix_)
@@ -451,7 +462,11 @@ pub struct EkkView<'a> {
     pub cost_perturbation_base: &'a mut f64,
     pub cost_perturbation_max_abs_cost: &'a mut f64,
     pub simplex_in_scaled_space: bool,
+    pub update_limit: i32,
+    pub build_synthetic_tick: &'a mut f64,
+    pub total_synthetic_tick: &'a mut f64,
     pub factor: &'a mut HFactor,
+    pub factor_a: AMatrix<'a>,
 }
 
 impl CEkk {
@@ -536,7 +551,16 @@ impl CEkk {
             cost_perturbation_base: &mut *self.cost_perturbation_base,
             cost_perturbation_max_abs_cost: &mut *self.cost_perturbation_max_abs_cost,
             simplex_in_scaled_space: self.simplex_in_scaled_space,
+            update_limit: self.update_limit,
+            build_synthetic_tick: &mut *self.build_synthetic_tick,
+            total_synthetic_tick: &mut *self.total_synthetic_tick,
             factor: &mut *self.factor,
+            factor_a: AMatrix {
+                num_col: self.factor_num_col,
+                start: self.factor_a_start.get(),
+                index: self.factor_a_index.get(),
+                value: self.factor_a_value.get(),
+            },
         }
     }
 }
@@ -993,6 +1017,29 @@ impl EkkView<'_> {
         }
         if variable_in < self.num_col {
             *self.num_basic_logicals -= 1;
+        }
+    }
+
+    /// HEkk::updateFactor for a single (aq, ep) pair, when HSimplexNla has
+    /// no ProductFormUpdate (the caller clears the factor's refactor info
+    /// and checks the INVERT when debugging)
+    pub fn update_factor(&mut self, column: &HVec, row_ep: &HVec, i_row: i32, hint: &mut i32) {
+        self.factor.update(
+            std::slice::from_ref(column),
+            std::slice::from_ref(row_ep),
+            &[i_row],
+            hint,
+            Some(&self.factor_a),
+            self.basic_index,
+        );
+        if *self.update_count >= self.update_limit {
+            *hint = K_REBUILD_REASON_UPDATE_LIMIT_REACHED;
+        }
+        // Determine whether to reinvert based on the synthetic clock
+        let reinvert_synthetic_clock = *self.total_synthetic_tick >= *self.build_synthetic_tick;
+        let performed_min_updates = *self.update_count >= K_SYNTHETIC_TICK_REINVERSION_MIN_UPDATE_COUNT;
+        if reinvert_synthetic_clock && performed_min_updates {
+            *hint = K_REBUILD_REASON_SYNTHETIC_CLOCK_SAYS_INVERT;
         }
     }
 
@@ -1522,6 +1569,17 @@ mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_ekk_update_pivots(ekk: *const CEkk, variable_in: i32, row_out: i32, move_out: i32) {
         with(ekk, |e| e.update_pivots(variable_in as usize, row_out as usize, move_out))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_ekk_update_factor(
+        ekk: *const CEkk,
+        column: *mut CHVec,
+        row_ep: *mut CHVec,
+        i_row: i32,
+        hint: *mut i32,
+    ) {
+        with(ekk, |e| hv(column, |c| hv(row_ep, |r| e.update_factor(c, r, i_row, &mut *hint))))
     }
 
     #[no_mangle]
