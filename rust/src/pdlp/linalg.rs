@@ -5,6 +5,8 @@
 //! `ipx::utils::dot_blocked`). Every copy of `dot` and `nrm2` inlined into
 //! cupdlp_solver.c, cupdlp_step.c and cupdlp_restart.c compiles this way.
 
+use crate::util::fma::ClangFma;
+
 use crate::ipx::utils::dot_blocked;
 
 /// dot() and cupdlp_dot
@@ -33,7 +35,7 @@ pub(super) fn nrminf(x: &[f64]) -> f64 {
 /// cupdlp_axpy: y += alpha * x (fused)
 pub(super) fn axpy(alpha: f64, x: &[f64], y: &mut [f64]) {
     for (yi, &xi) in y.iter_mut().zip(x) {
-        *yi = alpha.mul_add(xi, *yi);
+        *yi = alpha.mul_add_c(xi, *yi);
     }
 }
 
@@ -101,7 +103,7 @@ impl Sparse {
             let (b, e) = (self.start[j], self.start[j + 1]);
             for (&i, &v) in self.index[b..e].iter().zip(&self.value[b..e]) {
                 let t = &mut out[i as usize];
-                *t = v.mul_add(xj, *t);
+                *t = v.mul_add_c(xj, *t);
             }
         }
     }

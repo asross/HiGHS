@@ -23,6 +23,13 @@ file readers in parallel. IPX, PDLP and QP last.
   again in in-order reductions (`d += x[i]*y[i]`): the first n/block*block
   terms are rounded products, the tail is fused (see
   `ipx::utils::dot_blocked`); check each call site in the final library.
+- **x86_64.** Production runs on x86_64, where the default C++ build has no
+  FMA instructions and clang fuses nothing (and the blocked reductions are
+  then plain in-order sums). So write every mirrored FMA as
+  `x.mul_add_c(a, b)` (util/fma.rs): `mul_add` on aarch64, `x * a + b`
+  elsewhere. A test rejects raw `mul_add`. Check x86_64 paths with
+  `-DCMAKE_OSX_ARCHITECTURES=x86_64 -DHIGHS_RUST_TARGET=x86_64-apple-darwin`
+  builds under Rosetta (`rust/bench/perf.py` on both).
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`

@@ -41,7 +41,9 @@ fn random_matches_cpp() {
         h.mixd(r.real(-3.5, 1e3));
         h.mix(r.bit() as u64);
     }
-    assert_eq!(h.0, 16995212409544007823);
+    // HighsRandom::real is fused on arm64 only (see util/fma.rs)
+    let expected = if cfg!(target_arch = "aarch64") { 16995212409544007823 } else { 6400714799036924485 };
+    assert_eq!(h.0, expected);
 }
 
 #[test]
@@ -430,4 +432,26 @@ fn disjoint_sets_match_cpp() {
         h.mix(b.get_set_size(sb) as u64);
     }
     assert_eq!(h.0, 17995560140726397141);
+}
+
+#[test]
+fn no_raw_mul_add() {
+    // Mirrored FMAs must go through ClangFma::mul_add_c (util/fma.rs): a raw
+    // mul_add would be a slow software fma() on x86_64 and change the paths.
+    fn walk(dir: &std::path::Path, bad: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, bad);
+            } else if p.extension().is_some_and(|x| x == "rs") && !p.ends_with("util/fma.rs") && !p.ends_with("util/tests.rs") {
+                let s = std::fs::read_to_string(&p).unwrap();
+                if s.contains(".mul_add(") {
+                    bad.push(p.display().to_string());
+                }
+            }
+        }
+    }
+    let mut bad = Vec::new();
+    walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut bad);
+    assert!(bad.is_empty(), "raw mul_add in {bad:?}");
 }

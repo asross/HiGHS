@@ -38,6 +38,8 @@
 //! (HighsCDouble arithmetic via util::cdouble); the only contraction clang
 //! makes here is `bound +- 1000.0 * feastol` in adjustedUb/adjustedLb.
 
+use crate::util::fma::ClangFma;
+
 use crate::ffi::{sl, sl_mut};
 use crate::util::cdouble::CDouble;
 use std::ffi::c_void;
@@ -799,7 +801,7 @@ impl<'a> Dom<'a> {
             let bound = if (bv - lb).abs() <= self.epsilon { lb } else { bv };
             let accept = if ub == INF {
                 true
-            } else if 1000.0f64.mul_add(feastol, bound) < ub {
+            } else if 1000.0f64.mul_add_c(feastol, bound) < ub {
                 let mut relative_improve = ub - bound;
                 if lb != -INF {
                     relative_improve /= ub - lb;
@@ -827,7 +829,7 @@ impl<'a> Dom<'a> {
             let bound = if (ub - bv).abs() <= self.epsilon { ub } else { bv };
             let accept = if lb == -INF {
                 true
-            } else if (-1000.0f64).mul_add(feastol, bound) > lb {
+            } else if (-1000.0f64).mul_add_c(feastol, bound) > lb {
                 let mut relative_improve = bound - lb;
                 if ub != INF {
                     relative_improve /= ub - lb;

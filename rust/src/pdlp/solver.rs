@@ -8,6 +8,8 @@
 //! fused where clang contracts the C expression (`a*b + c` with the left
 //! operand preferred), see each `mul_add`.
 
+use crate::util::fma::ClangFma;
+
 use super::linalg::*;
 use super::scaling::Scaling;
 use super::{e, g, plus, Log, Params};
@@ -238,7 +240,7 @@ fn primal_feasibility(
     x: &[f64],
     r: &mut [f64],
 ) -> (f64, f64) {
-    let obj = dot(x, &p.cost).mul_add(p.sense, p.offset);
+    let obj = dot(x, &p.cost).mul_add_c(p.sense, p.offset);
     for ((ri, &a), &b) in r.iter_mut().zip(ax).zip(&p.rhs) {
         *ri = a - b;
     }
@@ -276,7 +278,7 @@ fn dual_feasibility(
     scale(-1.0, sn);
     edot(sn, &p.has_upper);
     obj -= dot(sn, upper_filtered);
-    let obj = obj.mul_add(p.sense, p.offset);
+    let obj = obj.mul_add_c(p.sense, p.offset);
     for ((ri, &a), &b) in r.iter_mut().zip(sp.iter()).zip(sn.iter()) {
         *ri = *ri - a + b;
     }
@@ -361,9 +363,9 @@ fn dual_infeasibility(
 
 /// PDHG_Restart_Score_GPU (contracted twice)
 fn restart_score(w2: f64, primal_feas: f64, dual_feas: f64, gap: f64) -> f64 {
-    gap.mul_add(
+    gap.mul_add_c(
         gap,
-        (w2 * primal_feas).mul_add(primal_feas, dual_feas * dual_feas / w2),
+        (w2 * primal_feas).mul_add_c(primal_feas, dual_feas * dual_feas / w2),
     )
     .sqrt()
 }
@@ -371,7 +373,7 @@ fn restart_score(w2: f64, primal_feas: f64, dual_feas: f64, gap: f64) -> f64 {
 /// PDHG_primalGradientStep: xu = proj(x - s (c - A'y))
 fn primal_step(p: &Problem, xu: &mut [f64], x: &[f64], aty: &[f64], s: f64) {
     for i in 0..p.ncols {
-        let t = s.mul_add(aty[i], (-s).mul_add(p.cost[i], x[i]));
+        let t = s.mul_add_c(aty[i], (-s).mul_add_c(p.cost[i], x[i]));
         let t = if t < p.upper[i] { t } else { p.upper[i] };
         xu[i] = if t > p.lower[i] { t } else { p.lower[i] };
     }
@@ -381,7 +383,7 @@ fn primal_step(p: &Problem, xu: &mut [f64], x: &[f64], aty: &[f64], s: f64) {
 fn dual_step(p: &Problem, yu: &mut [f64], y: &[f64], ax: &[f64], axu: &[f64], d: f64) {
     let m2d = -2.0 * d;
     for i in 0..p.nrows {
-        yu[i] = d.mul_add(ax[i], m2d.mul_add(axu[i], d.mul_add(p.rhs[i], y[i])));
+        yu[i] = d.mul_add_c(ax[i], m2d.mul_add_c(axu[i], d.mul_add_c(p.rhs[i], y[i])));
     }
     proj_pos(&mut yu[p.neqs..p.nrows]);
 }
@@ -810,7 +812,7 @@ impl<'a> Pdhg<'a> {
                 .zip(y.iter().zip(yu.iter()))
                 .for_each(|(d, (a, b))| *d = a - b);
             let d_y = dot(dy, dy);
-            let movement = (d_x * 0.5).mul_add(beta, d_y / (2.0 * beta));
+            let movement = (d_x * 0.5).mul_add_c(beta, d_y / (2.0 * beta));
 
             let limit = if interaction != 0.0 {
                 movement / interaction.abs()
@@ -933,7 +935,7 @@ impl<'a> Pdhg<'a> {
         let diff_dual = diff_norm(&it.y[k], &it.y_last_restart, &mut self.buffer2);
         if diff_primal.min(diff_dual) > 1e-10 {
             let beta_update = diff_dual / diff_primal;
-            let log_beta = 0.5f64.mul_add(beta_update.ln(), 0.5 * st.beta.sqrt().ln());
+            let log_beta = 0.5f64.mul_add_c(beta_update.ln(), 0.5 * st.beta.sqrt().ln());
             let e = log_beta.exp();
             st.beta = e * e;
         }

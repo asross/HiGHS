@@ -1,6 +1,8 @@
 //! Iterate (iterate.h/.cc): the IPM iterate (x, xl, xu, y, zl, zu) and its
 //! residuals, objectives and complementarity, evaluated lazily.
 
+use crate::util::fma::ClangFma;
+
 use super::model::Model;
 use super::sparse_matrix::{dot_column, multiply_add};
 use super::utils::{dot, infnorm};
@@ -163,14 +165,14 @@ impl Iterate {
         if let Some(dx) = dx {
             for j in 0..nm {
                 if self.state_of(j) != State::Fixed {
-                    self.x[j] = sp.mul_add(dx[j], self.x[j]);
+                    self.x[j] = sp.mul_add_c(dx[j], self.x[j]);
                 }
             }
         }
         if let Some(dxl) = dxl {
             for j in 0..nm {
                 if self.has_barrier_lb(j) {
-                    self.xl[j] = sp.mul_add(dxl[j], self.xl[j]);
+                    self.xl[j] = sp.mul_add_c(dxl[j], self.xl[j]);
                     self.xl[j] = cmax(self.xl[j], BARRIER_MIN);
                 }
             }
@@ -178,20 +180,20 @@ impl Iterate {
         if let Some(dxu) = dxu {
             for j in 0..nm {
                 if self.has_barrier_ub(j) {
-                    self.xu[j] = sp.mul_add(dxu[j], self.xu[j]);
+                    self.xu[j] = sp.mul_add_c(dxu[j], self.xu[j]);
                     self.xu[j] = cmax(self.xu[j], BARRIER_MIN);
                 }
             }
         }
         if let Some(dy) = dy {
             for i in 0..self.y.len() {
-                self.y[i] = sd.mul_add(dy[i], self.y[i]);
+                self.y[i] = sd.mul_add_c(dy[i], self.y[i]);
             }
         }
         if let Some(dzl) = dzl {
             for j in 0..nm {
                 if self.has_barrier_lb(j) {
-                    self.zl[j] = sd.mul_add(dzl[j], self.zl[j]);
+                    self.zl[j] = sd.mul_add_c(dzl[j], self.zl[j]);
                     self.zl[j] = cmax(self.zl[j], BARRIER_MIN);
                 }
             }
@@ -199,7 +201,7 @@ impl Iterate {
         if let Some(dzu) = dzu {
             for j in 0..nm {
                 if self.has_barrier_ub(j) {
-                    self.zu[j] = sd.mul_add(dzu[j], self.zu[j]);
+                    self.zu[j] = sd.mul_add_c(dzu[j], self.zu[j]);
                     self.zu[j] = cmax(self.zu[j], BARRIER_MIN);
                 }
             }
@@ -644,10 +646,10 @@ impl Iterate {
             let mut d = model.offset() + dot(b, y);
             for j in 0..nm {
                 if lb[j].is_finite() {
-                    d = lb[j].mul_add(zl[j], d);
+                    d = lb[j].mul_add_c(zl[j], d);
                 }
                 if ub[j].is_finite() {
-                    d = (-ub[j]).mul_add(zu[j], d);
+                    d = (-ub[j]).mul_add_c(zu[j], d);
                 }
             }
             ev.dobjective = d;
@@ -660,29 +662,29 @@ impl Iterate {
             let mut p = model.offset();
             for j in 0..nm {
                 if self.state_of(j) != State::Fixed {
-                    p = c[j].mul_add(x[j], p);
+                    p = c[j].mul_add_c(x[j], p);
                 } else {
-                    offset = c[j].mul_add(x[j], offset);
+                    offset = c[j].mul_add_c(x[j], offset);
                 }
                 if self.is_implied(j) {
                     // At the moment, we are solving an LP with the cost
                     // coefficient for variable j decreased by zl[j]-zu[j].
-                    p = (-(zl[j] - zu[j])).mul_add(x[j], p);
-                    offset = (zl[j] - zu[j]).mul_add(x[j], offset);
+                    p = (-(zl[j] - zu[j])).mul_add_c(x[j], p);
+                    offset = (zl[j] - zu[j]).mul_add_c(x[j], offset);
                 }
             }
             let mut d = model.offset() + dot(b, y);
             for j in 0..nm {
                 if self.has_barrier_lb(j) {
-                    d = lb[j].mul_add(zl[j], d);
+                    d = lb[j].mul_add_c(zl[j], d);
                 }
                 if self.has_barrier_ub(j) {
-                    d = (-ub[j]).mul_add(zu[j], d);
+                    d = (-ub[j]).mul_add_c(zu[j], d);
                 }
                 if self.state_of(j) == State::Fixed {
                     // At the moment, we are solving the LP without variable
                     // j, but with the RHS decreased by AI[:,j]*x[j].
-                    d = (-x[j]).mul_add(dot_column(ai, j, y), d);
+                    d = (-x[j]).mul_add_c(dot_column(ai, j, y), d);
                 }
             }
             ev.offset = offset;
@@ -699,7 +701,7 @@ impl Iterate {
         let mut num_finite = 0;
         for j in 0..nm {
             if self.has_barrier_lb(j) {
-                comp = self.xl[j].mul_add(self.zl[j], comp);
+                comp = self.xl[j].mul_add_c(self.zl[j], comp);
                 mu_min = cmin(mu_min, self.xl[j] * self.zl[j]);
                 mu_max = cmax(mu_max, self.xl[j] * self.zl[j]);
                 num_finite += 1;
@@ -707,7 +709,7 @@ impl Iterate {
         }
         for j in 0..nm {
             if self.has_barrier_ub(j) {
-                comp = self.xu[j].mul_add(self.zu[j], comp);
+                comp = self.xu[j].mul_add_c(self.zu[j], comp);
                 mu_min = cmin(mu_min, self.xu[j] * self.zu[j]);
                 mu_max = cmax(mu_max, self.xu[j] * self.zu[j]);
                 num_finite += 1;

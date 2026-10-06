@@ -7,6 +7,8 @@
 //! The A matrix and basic_index stay owned by the caller and are passed
 //! in to the calls that use them; HVectors are borrowed per call.
 
+use crate::util::fma::ClangFma;
+
 use crate::hvector::{HVec, OwnedHVec, K_HIGHS_TINY, K_HIGHS_ZERO};
 use std::time::Instant;
 
@@ -170,7 +172,7 @@ fn solve_matrix_t(
 ) {
     let mut pivot_multiplier = 0.0;
     for k in x_start as usize..x_end as usize {
-        pivot_multiplier = t_value[k].mul_add(rhs.array[t_index[k] as usize], pivot_multiplier);
+        pivot_multiplier = t_value[k].mul_add_c(rhs.array[t_index[k] as usize], pivot_multiplier);
     }
     if pivot_multiplier.abs() > K_HIGHS_TINY {
         let mut work_count = rhs.count as usize;
@@ -178,7 +180,7 @@ fn solve_matrix_t(
         for k in y_start as usize..y_end as usize {
             let index = t_index[k] as usize;
             let value0 = rhs.array[index];
-            let value1 = (-pivot_multiplier).mul_add(t_value[k], value0);
+            let value1 = (-pivot_multiplier).mul_add_c(t_value[k], value0);
             if value0 == 0.0 {
                 rhs.index[work_count] = index as i32;
                 work_count += 1;
@@ -223,7 +225,7 @@ unsafe fn entries<'a>(
 unsafe fn axpy_unchecked(x: &mut [f64], index: &[i32], value: &[f64], m: f64) {
     for (&j, &v) in index.iter().zip(value) {
         let y = x.get_unchecked_mut(j as usize);
-        *y = (-m).mul_add(v, *y);
+        *y = (-m).mul_add_c(v, *y);
     }
 }
 
@@ -849,7 +851,7 @@ impl HFactor {
         t2_store_u = self.u_index.len() as f64 - t2_store_u;
         t2_store_p -= self.nwork as f64;
         self.build_synthetic_tick +=
-            t2_search.mul_add(20.0, (t2_store_p + t2_store_l + t2_store_u) * 80.0);
+            t2_search.mul_add_c(20.0, (t2_store_p + t2_store_l + t2_store_u) * 80.0);
 
         // 3. Prepare the kernel parts
         //
@@ -939,7 +941,7 @@ impl HFactor {
                 previous_iteration_time = current_time;
                 let iteration_time = time_difference / timer_frequency as f64;
                 average_iteration_time =
-                    0.9f64.mul_add(average_iteration_time, 0.1 * iteration_time);
+                    0.9f64.mul_add_c(average_iteration_time, 0.1 * iteration_time);
                 if time_difference > self.time_limit / 1e3 {
                     timer_frequency = 1.max(timer_frequency / 10);
                 }
@@ -1147,7 +1149,7 @@ impl HFactor {
                     if self.mwz_column_mark[i_row] != 0 {
                         self.mwz_column_mark[i_row] = 0;
                         n_fillin -= 1;
-                        value = (-my_pivot).mul_add(self.mwz_column_array[i_row], value);
+                        value = (-my_pivot).mul_add_c(self.mwz_column_array[i_row], value);
                         if value.abs() < K_HIGHS_TINY {
                             value = 0.0;
                             n_cancel += 1;
@@ -1254,7 +1256,7 @@ impl HFactor {
             }
         }
         self.build_synthetic_tick +=
-            fake_eliminate.mul_add(80.0, fake_search.mul_add(20.0, fake_fill * 160.0));
+            fake_eliminate.mul_add_c(80.0, fake_search.mul_add_c(20.0, fake_fill * 160.0));
         self.rank_deficiency = 0;
         0
     }
@@ -1457,7 +1459,7 @@ impl HFactor {
 
         // Re-factor merit
         self.u_merit_x =
-            ((l_count_x + u_count_x) as i32 as f64).mul_add(1.5, num_row as f64) as i32;
+            ((l_count_x + u_count_x) as i32 as f64).mul_add_c(1.5, num_row as f64) as i32;
         self.u_total_x = u_count_x as i32;
         if self.update_method == UPDATE_PF {
             self.u_merit_x = num_row + u_count_x as i32 * 4;
@@ -1628,7 +1630,7 @@ impl HFactor {
                 column.with(|c| self.ftran_l(c, expected_density));
                 // Update the running average density
                 let local_density = column.count as f64 / num_row as f64;
-                expected_density = K_RUNNING_AVERAGE_MULTIPLIER.mul_add(
+                expected_density = K_RUNNING_AVERAGE_MULTIPLIER.mul_add_c(
                     local_density,
                     (1.0 - K_RUNNING_AVERAGE_MULTIPLIER) * expected_density,
                 );
@@ -1936,7 +1938,7 @@ impl HFactor {
         rhs.count = rhs_count as i32;
         let u_pivot_count = self.u_pivot_index.len() as i32;
         rhs.synthetic_tick +=
-            rhs_synthetic_tick.mul_add(15.0, ((u_pivot_count - self.num_row) * 10) as f64);
+            rhs_synthetic_tick.mul_add_c(15.0, ((u_pivot_count - self.num_row) * 10) as f64);
     }
 
     fn ftran_u(&self, rhs: &mut HVec, expected_density: f64) {
@@ -2044,7 +2046,7 @@ impl HFactor {
             let mut value1 = value0;
             for (&j, &v) in idx.iter().zip(val) {
                 // SAFETY: j < num_row (HFactor invariant)
-                value1 = (-unsafe { *array.get_unchecked(j as usize) }).mul_add(v, value1);
+                value1 = (-unsafe { *array.get_unchecked(j as usize) }).mul_add_c(v, value1);
             }
             // This would skip the situation where they are both zeros
             if value0 != 0.0 || value1 != 0.0 {
@@ -2093,7 +2095,7 @@ impl HFactor {
                     // (HFactor invariant, length asserted above)
                     let x = unsafe { rhs.array.get_unchecked_mut(j as usize) };
                     let value0 = *x;
-                    let value1 = (-pivot_multiplier).mul_add(v, value0);
+                    let value1 = (-pivot_multiplier).mul_add_c(v, value0);
                     *x = if value1.abs() < K_HIGHS_TINY {
                         K_HIGHS_ZERO
                     } else {
@@ -2106,7 +2108,7 @@ impl HFactor {
                 }
             }
         }
-        rhs.synthetic_tick += rhs_synthetic_tick.mul_add(15.0, (pf_pivot_count as i32 * 10) as f64);
+        rhs.synthetic_tick += rhs_synthetic_tick.mul_add_c(15.0, (pf_pivot_count as i32 * 10) as f64);
         rhs.count = rhs_count as i32;
     }
 
@@ -2122,7 +2124,7 @@ impl HFactor {
                 for k in self.pf_start[i] as usize..self.pf_start[i + 1] as usize {
                     let index = self.pf_index[k] as usize;
                     let value0 = rhs.array[index];
-                    let value1 = (-pivot_multiplier).mul_add(self.pf_value[k], value0);
+                    let value1 = (-pivot_multiplier).mul_add_c(self.pf_value[k], value0);
                     if value0 == 0.0 {
                         rhs.index[rhs_count] = index as i32;
                         rhs_count += 1;
@@ -2146,7 +2148,7 @@ impl HFactor {
             let mut pivot_multiplier = rhs.array[pivot_row];
             for k in self.pf_start[i] as usize..self.pf_start[i + 1] as usize {
                 pivot_multiplier = (-self.pf_value[k])
-                    .mul_add(rhs.array[self.pf_index[k] as usize], pivot_multiplier);
+                    .mul_add_c(rhs.array[self.pf_index[k] as usize], pivot_multiplier);
             }
             pivot_multiplier /= self.pf_pivot_value[i];
             if rhs.array[pivot_row] == 0.0 {
@@ -2291,7 +2293,7 @@ impl HFactor {
                 let row_start = self.ur_start[i_logic] as usize;
                 let row_count = self.ur_lastp[i_logic] as usize - row_start;
                 let new_start = self.ur_index.len();
-                let new_space = (row_count as i32 as f64).mul_add(1.1, 5.0) as i32 as usize;
+                let new_space = (row_count as i32 as f64).mul_add_c(1.1, 5.0) as i32 as usize;
                 self.ur_index.resize(new_start + new_space, 0);
                 self.ur_value.resize(new_start + new_space, 0.0);
                 self.ur_index
@@ -2366,7 +2368,7 @@ impl HFactor {
                 let pf_pp = pp + pf_np0;
                 for i in self.pf_start[pf_pp] as usize..self.pf_start[pf_pp + 1] as usize {
                     value =
-                        (-self.dwork[self.pf_index[i] as usize]).mul_add(self.pf_value[i], value);
+                        (-self.dwork[self.pf_index[i] as usize]).mul_add_c(self.pf_value[i], value);
                 }
                 self.iwork.push(p_row); // OK to duplicate
                 self.dwork[p_row as usize] = value;
@@ -2407,7 +2409,7 @@ impl HFactor {
                         let index = epp.pack_index[i];
                         self.iwork.push(index);
                         let d = &mut self.dwork[index as usize];
-                        *d = epp.pack_value[i].mul_add(multiplier, *d);
+                        *d = epp.pack_value[i].mul_add_c(multiplier, *d);
                     }
                 }
                 self.dwork[p_row] = 0.0; // Force to be 0
@@ -2418,7 +2420,7 @@ impl HFactor {
                 let kpivot = i_row[pp];
                 let mut value = self.dwork[kpivot as usize];
                 for k in t_start[pp]..t_start[pp + 1] {
-                    value = (-self.dwork[self.u_index[k] as usize]).mul_add(self.u_value[k], value);
+                    value = (-self.dwork[self.u_index[k] as usize]).mul_add_c(self.u_value[k], value);
                 }
                 value /= t_pivot[pp];
                 self.iwork.push(kpivot);
@@ -2428,9 +2430,9 @@ impl HFactor {
             // 6.x compute current alpha
             let mut thex = 0.0;
             for k in u_start_x..u_count_x {
-                thex = self.dwork[self.u_index[k] as usize].mul_add(self.u_value[k], thex);
+                thex = self.dwork[self.u_index[k] as usize].mul_add_c(self.u_value[k], thex);
             }
-            t_pivot[cp] = thex.mul_add(p_value[cp], ppaq);
+            t_pivot[cp] = thex.mul_add_c(p_value[cp], ppaq);
 
             // 7. Store BTRAN result to FT elimination, update logic helper
             self.dwork[i_row[cp] as usize] = 0.0;
@@ -2664,7 +2666,7 @@ impl HFactor {
             // Solve U^T.v = r
             rhs.with(|r| self.btran_u(r, expected_density));
             let local_density = rhs.count as f64 / num_row as f64;
-            expected_density = K_RUNNING_AVERAGE_MULTIPLIER.mul_add(
+            expected_density = K_RUNNING_AVERAGE_MULTIPLIER.mul_add_c(
                 local_density,
                 (1.0 - K_RUNNING_AVERAGE_MULTIPLIER) * expected_density,
             );

@@ -1,5 +1,7 @@
 //! basiclu_factorize.c and lu_factorize_bump.c: the factorization driver.
 
+use crate::util::fma::ClangFma;
+
 use super::condest::condest;
 use super::file::list_remove;
 use super::{
@@ -141,13 +143,13 @@ impl Lu<'_> {
         // update_cost = update_cost_numer / update_cost_denom, with
         // update_cost_denom fixed here and update_cost_numer zero here and
         // increased by solves/updates.
-        let factor_cost = 0.008f64.mul_add(
+        let factor_cost = 0.008f64.mul_add_c(
             self.factor_flops as f64,
-            0.20f64.mul_add(
+            0.20f64.mul_add_c(
                 self.nsearch_pivot as f64,
-                0.20f64.mul_add(
+                0.20f64.mul_add_c(
                     self.bump_nz as f64,
-                    0.07f64.mul_add(self.matrix_nz as f64, 0.04 * self.m as f64),
+                    0.07f64.mul_add_c(self.matrix_nz as f64, 0.04 * self.m as f64),
                 ),
             ),
         );

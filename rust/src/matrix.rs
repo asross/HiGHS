@@ -2,6 +2,8 @@
 //! is CSC for `price_by_column` and row-wise for the others; `end[i]` is
 //! `start[i + 1]`, or `p_end[i]` for a partitioned row-wise matrix.
 
+use crate::util::fma::ClangFma;
+
 const K_HIGHS_TINY: f64 = 1e-14;
 const K_HIGHS_ZERO: f64 = 1e-50;
 
@@ -21,7 +23,7 @@ pub fn price_by_column(
         let (from, to) = (start[col] as usize, start[col + 1] as usize);
         let mut v = 0.0;
         for (&i, &a) in index[from..to].iter().zip(&value[from..to]) {
-            v = column[i as usize].mul_add(a, v);
+            v = column[i as usize].mul_add_c(a, v);
         }
         let nonzero = v.abs() > K_HIGHS_TINY;
         result[col] = if nonzero { v } else { 0.0 };
@@ -38,7 +40,7 @@ fn add_row(index: &[i32], value: &[f64], multiplier: f64, result: &mut [f64], re
     for (&j, &a) in index.iter().zip(value) {
         let col = j as usize;
         let value0 = result[col];
-        let value1 = multiplier.mul_add(a, value0);
+        let value1 = multiplier.mul_add_c(a, value0);
         if value0 == 0.0 {
             result_index[*count] = j;
             *count += 1;
@@ -101,7 +103,7 @@ pub fn price_by_row_dense(
         let (from, to) = (start[row] as usize, end[row] as usize);
         for (&j, &a) in index[from..to].iter().zip(&value[from..to]) {
             let x = &mut result[j as usize];
-            let value1 = multiplier.mul_add(a, *x);
+            let value1 = multiplier.mul_add_c(a, *x);
             *x = if value1.abs() < K_HIGHS_TINY { K_HIGHS_ZERO } else { value1 };
         }
     }

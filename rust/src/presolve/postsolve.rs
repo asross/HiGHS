@@ -9,6 +9,8 @@
 //! (HighsInt is 32 bits, RowType an int, HighsBasisStatus and bool a byte),
 //! so a record is read back with the bytes the C++ pushed.
 
+use crate::util::fma::ClangFma;
+
 use crate::util::cdouble::CDouble;
 use crate::util::printf::{sprintf, Arg};
 use std::mem::size_of;
@@ -455,7 +457,7 @@ pub fn reduced_primal_solution(stack: &Stack, sol: &mut [f64]) {
                 let r: DuplicateColumn = rd.pop();
                 let (c, d) = (r.col as usize, r.duplicate_col as usize);
                 // fused by clang
-                sol[c] = r.col_scale.mul_add(sol[d], sol[c]);
+                sol[c] = r.col_scale.mul_add_c(sol[d], sol[c]);
             }
             LINEAR_TRANSFORM => {
                 let r: LinearTransform = rd.pop();
@@ -830,7 +832,7 @@ impl ForcingRow {
         let direction: f64 = if self.row_type == LEQ { 1.0 } else { -1.0 };
         for rv in row_values {
             // a - b * c, fused by clang
-            let col_dual = (-rv.value).mul_add(dual_delta, sol.col_dual[rv.index as usize]);
+            let col_dual = (-rv.value).mul_add_c(dual_delta, sol.col_dual[rv.index as usize]);
             if direction * col_dual * rv.value < 0.0 {
                 dual_delta = sol.col_dual[rv.index as usize] / rv.value;
                 basic_col = rv.index;
@@ -912,7 +914,7 @@ impl DuplicateColumn {
         let merge_val = sol.col_value[col];
         let ok_residual = |x: f64, y: f64| {
             // x + colScale * y, fused by clang
-            let check = self.col_scale.mul_add(y, x);
+            let check = self.col_scale.mul_add_c(y, x);
             (check - merge_val).abs() <= tol.primal_feasibility
         };
         let is_at_bound = |value: f64, bound: f64| {
@@ -986,7 +988,7 @@ impl DuplicateColumn {
 
         if recompute_col {
             // mergeVal - colScale * y, fused by clang
-            sol.col_value[col] = (-self.col_scale).mul_add(sol.col_value[dup], merge_val);
+            sol.col_value[col] = (-self.col_scale).mul_add_c(sol.col_value[dup], merge_val);
             if self.duplicate_col_integral == 0 && self.col_integral != 0 {
                 sol.col_value[col] = (sol.col_value[col] - tol.mip_feasibility).ceil();
                 sol.col_value[dup] = f64::from((CDouble::from(merge_val) - sol.col_value[col]) / self.col_scale);

@@ -4,6 +4,8 @@
 //! kkt_solver_basis.cc (basis preconditioning, splitted_normal_matrix.cc),
 //! and conjugate_residuals.cc (the CR method).
 
+use crate::util::fma::ClangFma;
+
 use super::basis::{BasicStatus, Basis};
 use super::control::Control;
 use super::fmt::sci2;
@@ -74,14 +76,14 @@ impl LinearOperator for NormalMatrix<'_> {
 fn normal_column(idx: &[Int], val: &[f64], w: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
     let mut d = 0.0f64;
     for (&i, &v) in idx.iter().zip(val) {
-        d = rhs[i as usize].mul_add(v, d);
+        d = rhs[i as usize].mul_add_c(v, d);
     }
     if let Some(w) = w {
         d *= w;
     }
     for (&i, &v) in idx.iter().zip(val) {
         let i = i as usize;
-        lhs[i] = d.mul_add(v, lhs[i]);
+        lhs[i] = d.mul_add_c(v, lhs[i]);
     }
 }
 
@@ -103,7 +105,7 @@ fn diagonal_of_normal_matrix(model: &Model, w: Option<&[f64]>, diagonal: &mut [f
             let wj = w[j];
             for p in ai.begin(j)..ai.end(j) {
                 let i = ai.index(p);
-                diagonal[i] = (ai.value(p) * wj).mul_add(ai.value(p), diagonal[i]);
+                diagonal[i] = (ai.value(p) * wj).mul_add_c(ai.value(p), diagonal[i]);
             }
         }
     } else {
@@ -111,7 +113,7 @@ fn diagonal_of_normal_matrix(model: &Model, w: Option<&[f64]>, diagonal: &mut [f
         for j in 0..n {
             for p in ai.begin(j)..ai.end(j) {
                 let i = ai.index(p);
-                diagonal[i] = ai.value(p).mul_add(ai.value(p), diagonal[i]);
+                diagonal[i] = ai.value(p).mul_add_c(ai.value(p), diagonal[i]);
             }
         }
     }
@@ -131,7 +133,7 @@ impl LinearOperator for DiagonalPrecond<'_> {
         }
         for i in nb..m {
             lhs[i] = rhs[i] / self.diagonal[i];
-            rldot = lhs[i].mul_add(rhs[i], rldot);
+            rldot = lhs[i].mul_add_c(rhs[i], rldot);
         }
         if let Some(r) = rhs_dot_lhs {
             *r = rldot;
@@ -646,7 +648,7 @@ impl KktSolver for KktSolverDiag<'_> {
             x[j] = self.w[j] * (a[j] - aty);
             for p in ai.begin(j)..ai.end(j) {
                 let i = n + ai.index(p);
-                x[i] = (-x[j]).mul_add(ai.value(p), x[i]);
+                x[i] = (-x[j]).mul_add_c(ai.value(p), x[i]);
             }
         }
         Ok(())
@@ -975,7 +977,7 @@ impl KktSolver for KktSolverBasis<'_> {
             let j = basis.at(p);
             if basis.status_of(j) == BasicStatus::Basic {
                 let d = colscale[j];
-                rhs[p] = a[j].mul_add(d, (rhs[p] - work[p]) / d);
+                rhs[p] = a[j].mul_add_c(d, (rhs[p] - work[p]) / d);
             } else {
                 rhs[p] = 0.0;
             }

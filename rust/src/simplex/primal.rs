@@ -11,6 +11,8 @@
 //! C++ keeps its own HEkkPrimal for the debug levels and simplex analysis
 //! (timers, operation records), which this port does not support.
 
+use crate::util::fma::ClangFma;
+
 use crate::hvector::{HVec, OwnedHVec};
 use crate::simplex::ekk::{
     choose_price_technique, compute_dual_for_tableau_column, interleaved_part, sparse_loop_style,
@@ -2086,12 +2088,12 @@ impl Primal {
         let row_ap = &self.row_ap;
         for &i_col in &row_ap.index[..row_ap.count as usize] {
             let i_col = i_col as usize;
-            work_dual[i_col] = (-theta_dual).mul_add(row_ap.array[i_col], work_dual[i_col]);
+            work_dual[i_col] = (-theta_dual).mul_add_c(row_ap.array[i_col], work_dual[i_col]);
         }
         let row_ep = &self.row_ep;
         for &i_row in &row_ep.index[..row_ep.count as usize] {
             let i_col = i_row as usize + num_col;
-            work_dual[i_col] = (-theta_dual).mul_add(row_ep.array[i_row as usize], work_dual[i_col]);
+            work_dual[i_col] = (-theta_dual).mul_add_c(row_ep.array[i_row as usize], work_dual[i_col]);
         }
         // Dual for the pivot
         work_dual[self.variable_in as usize] = 0.0;
@@ -2108,7 +2110,7 @@ impl Primal {
     fn phase1_cost(bound_violated: i32, base: f64, random_value: f64) -> f64 {
         let mut cost = bound_violated as f64;
         if base != 0.0 {
-            cost *= base.mul_add(random_value, 1.0);
+            cost *= base.mul_add_c(random_value, 1.0);
         }
         cost
     }
@@ -2174,7 +2176,7 @@ impl Primal {
         let change = &mut self.col_basic_feasibility_change;
         for &i_row in &col_aq.index[..col_aq.count as usize] {
             let r = i_row as usize;
-            e.base_value[r] = (-theta_primal).mul_add(col_aq.array[r], e.base_value[r]);
+            e.base_value[r] = (-theta_primal).mul_add_c(col_aq.array[r], e.base_value[r]);
             let i_col = e.basic_index[r] as usize;
             let was_cost = e.work_cost[i_col];
             let bound_violated = bound_violated(e.base_value[r], e.base_lower[r], e.base_upper[r], tol);
@@ -2278,7 +2280,7 @@ impl Primal {
         for i_entry in 0..to_entry {
             let i_row = if use_col_indices { self.col_aq.index[i_entry] as usize } else { i_entry };
             let e = &mut self.ekk;
-            e.base_value[i_row] = (-theta_primal).mul_add(self.col_aq.array[i_row], e.base_value[i_row]);
+            e.base_value[i_row] = (-theta_primal).mul_add_c(self.col_aq.array[i_row], e.base_value[i_row]);
             // Determine whether a bound is violated and take action
             let bound_violated = bound_violated(e.base_value[i_row], e.base_lower[i_row], e.base_upper[i_row], tol);
             if bound_violated == 0 {
@@ -2290,7 +2292,7 @@ impl Primal {
         }
         let e = &mut self.ekk;
         *e.updated_primal_objective_value =
-            e.work_dual[self.variable_in as usize].mul_add(theta_primal, *e.updated_primal_objective_value);
+            e.work_dual[self.variable_in as usize].mul_add_c(theta_primal, *e.updated_primal_objective_value);
     }
 
     /// HEkkPrimal::correctPrimal
@@ -2447,7 +2449,7 @@ impl Primal {
             d_pivot_weight = if i_entry < unfused {
                 d_pivot_weight + d_alpha * d_alpha
             } else {
-                d_alpha.mul_add(d_alpha, d_pivot_weight)
+                d_alpha.mul_add_c(d_alpha, d_pivot_weight)
             };
         }
         let variable_in = self.variable_in as usize;
@@ -2499,7 +2501,7 @@ impl Primal {
             for i_col in 0..self.num_col {
                 let mut w = 1.0;
                 for &v in &a.value[a.start[i_col] as usize..a.start[i_col + 1] as usize] {
-                    w = v.mul_add(v, w);
+                    w = v.mul_add_c(v, w);
                 }
                 self.edge_weight[i_col] = w;
             }
@@ -2556,15 +2558,15 @@ impl Primal {
             let mut mu_aj = 0.0;
             if i_var < num_col {
                 for i_el in a.start[i_var] as usize..a.start[i_var + 1] as usize {
-                    mu_aj = mu[a.index[i_el] as usize].mul_add(a.value[i_el], mu_aj);
+                    mu_aj = mu[a.index[i_el] as usize].mul_add_c(a.value[i_el], mu_aj);
                 }
             } else {
                 mu_aj = mu[i_var - num_col];
             }
-            let min_weight = lambda.mul_add(lambda, 1.0);
+            let min_weight = lambda.mul_add_c(lambda, 1.0);
             let w = &mut self.edge_weight[i_var];
-            *w += (lambda * lambda).mul_add(col_aq_squared_2norm, (lambda * -2.0) * mu_aj);
-            *w = lambda.mul_add(lambda, *w);
+            *w += (lambda * lambda).mul_add_c(col_aq_squared_2norm, (lambda * -2.0) * mu_aj);
+            *w = lambda.mul_add_c(lambda, *w);
             if *w < min_weight {
                 *w = min_weight;
             }
@@ -2839,7 +2841,7 @@ fn row_ep_2norm_in_scaled_space(e: &EkkView, i_row: usize, row_ep: &HVec) -> f64
         row_ep_2norm = if i_entry < unfused {
             row_ep_2norm + value_in_scaled_space * value_in_scaled_space
         } else {
-            value_in_scaled_space.mul_add(value_in_scaled_space, row_ep_2norm)
+            value_in_scaled_space.mul_add_c(value_in_scaled_space, row_ep_2norm)
         };
     }
     row_ep_2norm

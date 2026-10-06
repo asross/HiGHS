@@ -1,6 +1,7 @@
 //! Utilities of highs/util shared by all modules.
 
 pub mod cdouble;
+pub mod fma;
 pub mod disjoint_sets;
 pub mod hash;
 pub mod hash_table;

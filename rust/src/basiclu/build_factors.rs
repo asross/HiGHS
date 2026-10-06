@@ -36,6 +36,8 @@
 //! delimit row pmap[j], Wflink/Wblink link the rows in memory order.
 //! col_pivot, row_pivot hold the pivots by column and by row index.
 
+use crate::util::fma::ClangFma;
+
 use super::file::{file_empty, list_move};
 use super::{Int, Lu, OK, REALLOCATE};
 
@@ -95,7 +97,7 @@ impl Lu<'_> {
             self.addmem_u = need - umem;
             status = REALLOCATE;
         }
-        let need = (stretch.mul_add(unz as f64, unz as f64) + (m * pad) as f64) as Int;
+        let need = (stretch.mul_add_c(unz as f64, unz as f64) + (m * pad) as f64) as Int;
         if wmem < need {
             self.addmem_w = need - wmem;
             status = REALLOCATE;
@@ -208,7 +210,7 @@ impl Lu<'_> {
                     nz += 1;
                 }
                 wend[jpivot] = put;
-                put = (put as f64 + stretch.mul_add(nz as f64, pad as f64)) as Int;
+                put = (put as f64 + stretch.mul_add_c(nz as f64, pad as f64)) as Int;
                 list_move(jpivot as Int, 0, wflink, wblink, m, None);
             }
         } else {
@@ -228,7 +230,7 @@ impl Lu<'_> {
                     }
                 }
                 wend[jpivot] = put;
-                put = (put as f64 + stretch.mul_add(nz as f64, pad as f64)) as Int;
+                put = (put as f64 + stretch.mul_add_c(nz as f64, pad as f64)) as Int;
                 list_move(jpivot as Int, 0, wflink, wblink, m, None);
                 unz += nz;
             }

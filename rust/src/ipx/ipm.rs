@@ -2,6 +2,8 @@
 //! with the KKT systems solved by a KktSolver; plus the starting point and
 //! the optional centring steps.
 
+use crate::util::fma::ClangFma;
+
 use super::control::Control;
 use super::fmt::{fixed, fmt, sci, time};
 use super::iterate::{Iterate, State};
@@ -58,7 +60,7 @@ fn step_to_boundary(x: &[f64], dx: &[f64], alpha0: f64) -> (f64, Int) {
     let mut alpha = alpha0;
     let mut iblock = -1;
     for i in 0..x.len() {
-        if alpha.mul_add(dx[i], x[i]) < 0.0 {
+        if alpha.mul_add_c(dx[i], x[i]) < 0.0 {
             alpha = -(x[i] * damp) / dx[i];
             iblock = i as Int;
         }
@@ -310,7 +312,7 @@ impl<'a> Ipm<'a> {
             xu[j] = ub[j] - x[j];
             xinfeas = cmax(xinfeas, -xu[j]);
         }
-        let xshift1 = 1.5f64.mul_add(xinfeas, 1.0);
+        let xshift1 = 1.5f64.mul_add_c(xinfeas, 1.0);
         for j in 0..n + m {
             xl[j] += xshift1;
             xu[j] += xshift1;
@@ -369,7 +371,7 @@ impl<'a> Ipm<'a> {
                 zinfeas = cmax(zinfeas, -zl[j]);
                 zinfeas = cmax(zinfeas, -zu[j]);
             }
-            let zshift1 = 1.5f64.mul_add(zinfeas, 1.0);
+            let zshift1 = 1.5f64.mul_add_c(zinfeas, 1.0);
             for j in 0..n + m {
                 if lb[j].is_finite() {
                     zl[j] += zshift1;
@@ -388,12 +390,12 @@ impl<'a> Ipm<'a> {
             if lb[j].is_finite() {
                 xsum += xl[j];
                 zsum += zl[j];
-                mu = xl[j].mul_add(zl[j], mu);
+                mu = xl[j].mul_add_c(zl[j], mu);
             }
             if ub[j].is_finite() {
                 xsum += xu[j];
                 zsum += zu[j];
-                mu = xu[j].mul_add(zu[j], mu);
+                mu = xu[j].mul_add_c(zu[j], mu);
             }
         }
         let xshift2 = 0.5 * mu / zsum;
@@ -454,15 +456,15 @@ impl<'a> Ipm<'a> {
             let mut num_finite = 0;
             for j in 0..nm {
                 if iterate.has_barrier_lb(j) {
-                    let a = maxp.mul_add(dxl[j], xl[j]);
-                    let b = maxd.mul_add(dzl[j], zl[j]);
-                    muaff = a.mul_add(b, muaff);
+                    let a = maxp.mul_add_c(dxl[j], xl[j]);
+                    let b = maxd.mul_add_c(dzl[j], zl[j]);
+                    muaff = a.mul_add_c(b, muaff);
                     num_finite += 1;
                 }
                 if iterate.has_barrier_ub(j) {
-                    let a = maxp.mul_add(dxu[j], xu[j]);
-                    let b = maxd.mul_add(dzu[j], zu[j]);
-                    muaff = a.mul_add(b, muaff);
+                    let a = maxp.mul_add_c(dxu[j], xu[j]);
+                    let b = maxd.mul_add_c(dzu[j], zu[j]);
+                    muaff = a.mul_add_c(b, muaff);
                     num_finite += 1;
                 }
             }
@@ -475,14 +477,14 @@ impl<'a> Ipm<'a> {
         let mut sl = vec![0.0; nm];
         for j in 0..nm {
             if iterate.has_barrier_lb(j) {
-                sl[j] = (-step.xl[j]).mul_add(step.zl[j], (-xl[j]).mul_add(zl[j], sigma * mu));
+                sl[j] = (-step.xl[j]).mul_add_c(step.zl[j], (-xl[j]).mul_add_c(zl[j], sigma * mu));
             }
         }
         // su = -xu.*zu + sigma*mu - dxu.*dzu
         let mut su = vec![0.0; nm];
         for j in 0..nm {
             if iterate.has_barrier_ub(j) {
-                su[j] = (-step.xu[j]).mul_add(step.zu[j], (-xu[j]).mul_add(zu[j], sigma * mu));
+                su[j] = (-step.xu[j]).mul_add_c(step.zu[j], (-xu[j]).mul_add_c(zu[j], sigma * mu));
             }
         }
         self.solve_newton_system(kkt, iterate, info, &sl, &su, step)
@@ -498,13 +500,13 @@ impl<'a> Ipm<'a> {
         // sl = -xl.*zl + sigma*mu
         for j in 0..nm {
             if iterate.has_barrier_lb(j) {
-                sl[j] = (-xl[j]).mul_add(zl[j], sigma * mu);
+                sl[j] = (-xl[j]).mul_add_c(zl[j], sigma * mu);
             }
         }
         // su = -xu.*zu + sigma*mu
         for j in 0..nm {
             if iterate.has_barrier_ub(j) {
-                su[j] = (-xu[j]).mul_add(zu[j], sigma * mu);
+                su[j] = (-xu[j]).mul_add_c(zu[j], sigma * mu);
             }
         }
         self.solve_newton_system(kkt, iterate, info, &sl, &su, step)
@@ -571,16 +573,16 @@ impl<'a> Ipm<'a> {
         // perform temporary step
         for j in 0..nm {
             if iterate.has_barrier_lb(j) {
-                xl_temp[j] = sp.mul_add(step.xl[j], xl_temp[j]);
+                xl_temp[j] = sp.mul_add_c(step.xl[j], xl_temp[j]);
             }
             if iterate.has_barrier_ub(j) {
-                xu_temp[j] = sp.mul_add(step.xu[j], xu_temp[j]);
+                xu_temp[j] = sp.mul_add_c(step.xu[j], xu_temp[j]);
             }
             if iterate.has_barrier_lb(j) {
-                zl_temp[j] = sd.mul_add(step.zl[j], zl_temp[j]);
+                zl_temp[j] = sd.mul_add_c(step.zl[j], zl_temp[j]);
             }
             if iterate.has_barrier_ub(j) {
-                zu_temp[j] = sd.mul_add(step.zu[j], zu_temp[j]);
+                zu_temp[j] = sd.mul_add_c(step.zu[j], zu_temp[j]);
             }
         }
 
@@ -589,11 +591,11 @@ impl<'a> Ipm<'a> {
         let mut num_finite = 0;
         for j in 0..nm {
             if iterate.has_barrier_lb(j) {
-                mu_temp = xl_temp[j].mul_add(zl_temp[j], mu_temp);
+                mu_temp = xl_temp[j].mul_add_c(zl_temp[j], mu_temp);
                 num_finite += 1;
             }
             if iterate.has_barrier_ub(j) {
-                mu_temp = xu_temp[j].mul_add(zu_temp[j], mu_temp);
+                mu_temp = xu_temp[j].mul_add_c(zu_temp[j], mu_temp);
                 num_finite += 1;
             }
         }
@@ -623,15 +625,15 @@ impl<'a> Ipm<'a> {
         let mut num_finite = 0;
         for j in 0..xl.len() {
             if iterate.has_barrier_lb(j) {
-                let a = maxp.mul_add(dxl[j], xl[j]);
-                let b = maxd.mul_add(dzl[j], zl[j]);
-                mufull = a.mul_add(b, mufull);
+                let a = maxp.mul_add_c(dxl[j], xl[j]);
+                let b = maxd.mul_add_c(dzl[j], zl[j]);
+                mufull = a.mul_add_c(b, mufull);
                 num_finite += 1;
             }
             if iterate.has_barrier_ub(j) {
-                let a = maxp.mul_add(dxu[j], xu[j]);
-                let b = maxd.mul_add(dzu[j], zu[j]);
-                mufull = a.mul_add(b, mufull);
+                let a = maxp.mul_add_c(dxu[j], xu[j]);
+                let b = maxd.mul_add_c(dzu[j], zu[j]);
+                mufull = a.mul_add_c(b, mufull);
                 num_finite += 1;
             }
         }
@@ -643,11 +645,11 @@ impl<'a> Ipm<'a> {
         if maxp < 1.0 {
             if step_xl <= step_xu {
                 let blockp = block_xl as usize;
-                let buffer = mufull / maxd.mul_add(dzl[blockp], zl[blockp]);
+                let buffer = mufull / maxd.mul_add_c(dzl[blockp], zl[blockp]);
                 alphap = (xl[blockp] - buffer) / (-dxl[blockp]);
             } else {
                 let blockp = block_xu as usize;
-                let buffer = mufull / maxd.mul_add(dzu[blockp], zu[blockp]);
+                let buffer = mufull / maxd.mul_add_c(dzu[blockp], zu[blockp]);
                 alphap = (xu[blockp] - buffer) / (-dxu[blockp]);
             }
             alphap = cmax(alphap, GAMMAF * maxp);
@@ -656,11 +658,11 @@ impl<'a> Ipm<'a> {
         if maxd < 1.0 {
             if step_zl <= step_zu {
                 let blockd = block_zl as usize;
-                let buffer = mufull / maxp.mul_add(dxl[blockd], xl[blockd]);
+                let buffer = mufull / maxp.mul_add_c(dxl[blockd], xl[blockd]);
                 alphad = (zl[blockd] - buffer) / (-dzl[blockd]);
             } else {
                 let blockd = block_zu as usize;
-                let buffer = mufull / maxp.mul_add(dxu[blockd], xu[blockd]);
+                let buffer = mufull / maxp.mul_add_c(dxu[blockd], xu[blockd]);
                 alphad = (zu[blockd] - buffer) / (-dzu[blockd]);
             }
             alphad = cmax(alphad, GAMMAF * maxd);
@@ -736,10 +738,10 @@ impl<'a> Ipm<'a> {
             let rlj = rl[j];
             let ruj = ru[j];
             if iterate.has_barrier_lb(j) {
-                rhs1[j] += zl[j].mul_add(rlj, sl[j]) / xl[j];
+                rhs1[j] += zl[j].mul_add_c(rlj, sl[j]) / xl[j];
             }
             if iterate.has_barrier_ub(j) {
-                rhs1[j] -= (-zu[j]).mul_add(ruj, su[j]) / xu[j];
+                rhs1[j] -= (-zu[j]).mul_add_c(ruj, su[j]) / xu[j];
             }
             if iterate.state_of(j) == State::Fixed {
                 rhs1[j] = 0.0;
@@ -766,7 +768,7 @@ impl<'a> Ipm<'a> {
                 }
                 State::Barrier => {
                     dxl[j] = dx[j] - rl[j];
-                    dzl[j] = (-zl[j]).mul_add(dxl[j], sl[j]) / xl[j];
+                    dzl[j] = (-zl[j]).mul_add_c(dxl[j], sl[j]) / xl[j];
                 }
             }
         }
@@ -778,7 +780,7 @@ impl<'a> Ipm<'a> {
                 }
                 State::Barrier => {
                     dxu[j] = ru[j] - dx[j];
-                    dzu[j] = (-zu[j]).mul_add(dxu[j], su[j]) / xu[j];
+                    dzu[j] = (-zu[j]).mul_add_c(dxu[j], su[j]) / xu[j];
                 }
             }
         }
@@ -845,7 +847,7 @@ impl<'a> Ipm<'a> {
         let logging_presidual = iterate.presidual() / iterate.bounds_measure;
         let logging_dresidual = iterate.dresidual() / iterate.costs_measure;
         let logging_gap = (logging_pobj - logging_dobj).abs()
-            / 0.5f64.mul_add((logging_pobj + logging_dobj).abs(), 1.0);
+            / 0.5f64.mul_add_c((logging_pobj + logging_dobj).abs(), 1.0);
 
         let mut s = format!(
             " {}{}  {}  {}  {}  {}  {}",

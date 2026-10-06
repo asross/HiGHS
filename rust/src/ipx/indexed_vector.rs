@@ -1,6 +1,8 @@
 //! indexed_vector.h/.cc: a dense vector with an optional pattern of its
 //! nonzero entries.
 
+use crate::util::fma::ClangFma;
+
 use super::{Int, HYPERSPARSE_THRESHOLD};
 
 #[derive(Clone, Debug, Default)]
@@ -112,7 +114,7 @@ pub fn dot(x: &IndexedVector, y: &[f64]) -> f64 {
             d += y[i as usize] * x.elements[i as usize];
         }
         for &i in &pattern[nb..] {
-            d = y[i as usize].mul_add(x.elements[i as usize], d);
+            d = y[i as usize].mul_add_c(x.elements[i as usize], d);
         }
         d
     } else {

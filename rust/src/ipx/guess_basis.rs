@@ -3,6 +3,8 @@
 //! matching on the remaining columns in decreasing order of weight; slack
 //! columns fill the remaining rows.
 
+use crate::util::fma::ClangFma;
+
 use super::control::Control;
 use super::fmt::textline;
 use super::model::Model;
@@ -74,7 +76,7 @@ fn compute_values(
                 let k = k as usize;
                 for p in l.begin(k)..l.end(k) {
                     let r = l.index(p);
-                    lhs[r] = (-l.value(p)).mul_add(temp, lhs[r]);
+                    lhs[r] = (-l.value(p)).mul_add_c(temp, lhs[r]);
                 }
             } else if temp.abs() > lhsmax {
                 lhsmax = temp.abs();

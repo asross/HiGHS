@@ -1,5 +1,7 @@
 //! lu_update.c: Forrest-Tomlin update with reordering.
 
+use crate::util::fma::ClangFma;
+
 use super::file::{file_compress, file_reappend, list_swap};
 use super::solve::dfs;
 use super::{as_int_mut, Int, Lu, ERROR_SINGULAR_UPDATE, OK, REALLOCATE};
@@ -383,7 +385,7 @@ impl Lu<'_> {
         for pos in spike.clone() {
             let i = uindex[pos] as usize;
             if marked[i] == mk {
-                newpiv = (-uvalue[pos]).mul_add(work1[i], newpiv);
+                newpiv = (-uvalue[pos]).mul_add_c(work1[i], newpiv);
                 intersect += 1;
             }
         }
@@ -394,7 +396,7 @@ impl Lu<'_> {
         }
 
         // stability measure
-        let piverr = (-xtbl).mul_add(oldpiv, newpiv).abs();
+        let piverr = (-xtbl).mul_add_c(oldpiv, newpiv).abs();
 
         // Insert spike
 
@@ -406,7 +408,7 @@ impl Lu<'_> {
             if wend[j] == wbegin[jnext] {
                 let nz = wend[j] - wbegin[j];
                 grow += nz + 1; // row including spike entry
-                grow = (grow as f64 + stretch.mul_add((nz + 1) as f64, pad as f64)) as Int;
+                grow = (grow as f64 + stretch.mul_add_c((nz + 1) as f64, pad as f64)) as Int;
                 // extra room
             }
         }
@@ -458,7 +460,7 @@ impl Lu<'_> {
             let jnext = wflink[ju] as usize;
             if wend[ju] == wbegin[jnext] {
                 let nz = wend[ju] - wbegin[ju];
-                let room = (stretch.mul_add((nz + 1) as f64, 1.0) + pad as f64) as Int;
+                let room = (stretch.mul_add_c((nz + 1) as f64, 1.0) + pad as f64) as Int;
                 file_reappend(j, m, wbegin, wend, wflink, wblink, windex, wvalue, room);
             }
             let end = wend[ju] as usize;
@@ -745,7 +747,7 @@ impl Lu<'_> {
 
         // compress W if used memory is shrinked sufficiently
         let used = self.wbegin[mu];
-        let need = (stretch.mul_add(unz as f64, unz as f64) + (m * pad) as f64) as Int;
+        let need = (stretch.mul_add_c(unz as f64, unz as f64) + (m * pad) as f64) as Int;
         if (used - need) as f64 > self.compress_thres * used as f64 {
             let _nz = file_compress(
                 m,
