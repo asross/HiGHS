@@ -107,8 +107,8 @@ count varies between runs of the same build), so it checks no path.
 MIPLIB at 100 nodes (`mip_max_nodes = 100`, 30 of 34 instances, against
 pure C++): all same path, geomean 0.95. The other four (eilA101-2,
 neos-5052403-cygnet, germanrr, co-100) spend their time limit at the root
-on the loaded machine, so the runs differ by where they stop; they were
-rerun without a time limit (see the commit message for the result).
+on the loaded machine, so the runs differ by where they stop; reruns
+without a time limit did not finish (still to check).
 x86_64 (Rosetta) against pure x86_64 C++: neos17 0.934, nu25-pr12 0.794,
 neos-911970 1.002, air05 1.017, dispatch 080458 1.017, gen-ip002 0.872
 (without the time limit, which the loaded machine hit), all same path.
