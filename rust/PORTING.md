@@ -221,12 +221,14 @@ of runProbing and the solution enumeration of enumerateSolutions (the
 other agents' ports can replace these callbacks). Orders that depend on
 containers are emulated: the libc++ unordered_multimap buckets of
 detectParallelRowsAndCols keep their key groups (emplace_hint inserts
-before the last visited element), the lifting opportunities' unordered_map
-iterates in reverse order of first insertion (one bucket per row), the
-std::sets are sorted vectors / BTreeSet, and `rowpositions` keeps stale
-entries past its length as the C++ vector does (loops over a stored row
-read it live while nested reductions store other rows). Note: the
-emulation is of libc++; a libstdc++ C++ build may order these differently.
+before the last visited element in libc++, after it in libstdc++: with
+`libstdcxx`; this picked different parallel columns on co-100's LP, which
+showed up as a different IPX starting point), the lifting opportunities'
+unordered_map iterates in reverse order of first insertion (one bucket per
+row; the same in libstdc++, which also puts a new bucket's node first),
+the std::sets are sorted vectors / BTreeSet, and `rowpositions` keeps
+stale entries past its length as the C++ vector does (loops over a stored
+row read it live while nested reductions store other rows).
 
 ## Postsolve
 

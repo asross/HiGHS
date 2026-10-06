@@ -1,10 +1,11 @@
 //! detectParallelRowsAndCols: rows and columns hashed by their scaled
 //! coefficients, and the (nearly) parallel ones merged, fixed or added.
 //!
-//! The C++ buckets are a libc++ std::unordered_multimap that is only probed
-//! by key, so only the order within a key's group matters: a group keeps
-//! its elements together through rehashes, and emplace_hint(last, ...)
-//! inserts before `last`, the last element of the group that was visited.
+//! The C++ buckets are a std::unordered_multimap that is only probed by
+//! key, so only the order within a key's group matters: a group keeps its
+//! elements together through rehashes, and emplace_hint(last, ...) inserts
+//! before `last`, the last element of the group that was visited (libc++),
+//! or after it (libstdc++: _M_insert_multi_node with an equivalent hint).
 
 use super::*;
 use crate::util::hash::{double_hash_code, sparse_combine};
@@ -44,7 +45,7 @@ impl Buckets {
     fn emplace_hint(&mut self, h: u64, last: Option<usize>, v: i32) {
         let g = self.groups.entry(h).or_default();
         match last {
-            Some(k) => g.insert(k, v),
+            Some(k) => g.insert(if cfg!(feature = "libstdcxx") { k + 1 } else { k }, v),
             None => g.push(v),
         }
     }
