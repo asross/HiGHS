@@ -10,6 +10,60 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-06, gcc/libstdc++ builds on the M1 (4442630fe5 + HPresolve)
+
+Both builds with Homebrew gcc 14 and libstdc++ (`rust/bench/gcc_builds.sh`:
+no FMA contraction, like x86_64; Rust with `libstdcxx no_fma`),
+`perf.py --reps 1` on a heavily loaded machine (load ~60), so cycles are
+rough. **31/32 same path**; the exception, IPX on the co-100 relaxation,
+is gcc's C++ computing a different IPX starting point from clang's C++
+(the Rust matches clang there, on arm64 and x86_64): being tracked down.
+
+| Group | Geomean Rust / C++ |
+|---|---|
+| MIP | 0.868 |
+| LP dual simplex | 0.830 |
+| LP primal simplex | 0.958 |
+| IPM (IPX) | 0.994 |
+| PDLP | 0.979 |
+| Read model (time_limit 0) | 0.430 |
+| **All** | **0.824** |
+
+| Group | Case | C++ Gcycles | Rust Gcycles | Rust / C++ | Same path |
+|---|---|---|---|---|---|
+| MIP | air05 | 69.03 | 69.41 | 1.006 | yes |
+| MIP | neos17 | 20.29 | 19.00 | 0.936 | yes |
+| MIP | nu25-pr12 | 14.64 | 7.87 | 0.538 | yes |
+| MIP | neos-911970 | 17.35 | 16.64 | 0.959 | yes |
+| MIP | dispatch lambda_080458 | 31.54 | 29.82 | 0.945 | yes |
+| MIP | dispatch 3c1b60d6 root | 82.63 | 77.15 | 0.934 | yes |
+| LP dual simplex | 25fv47 | 0.85 | 0.70 | 0.822 | yes |
+| LP primal simplex | 25fv47 | 1.11 | 1.07 | 0.968 | yes |
+| LP dual simplex | 80bau3b | 0.63 | 0.51 | 0.812 | yes |
+| LP primal simplex | 80bau3b | 2.38 | 2.13 | 0.893 | yes |
+| LP dual simplex | greenbea | 2.54 | 2.17 | 0.857 | yes |
+| LP primal simplex | greenbea | 8.93 | 8.91 | 0.998 | yes |
+| LP dual simplex | perold | 0.39 | 0.34 | 0.864 | yes |
+| LP primal simplex | perold | 0.53 | 0.52 | 0.986 | yes |
+| LP dual simplex | stair | 0.19 | 0.18 | 0.927 | yes |
+| LP primal simplex | stair | 0.18 | 0.17 | 0.949 | yes |
+| LP dual simplex | air04 relaxation | 3.19 | 2.60 | 0.818 | yes |
+| LP dual simplex | rail507 relaxation | 16.93 | 12.73 | 0.752 | yes |
+| LP dual simplex | co-100 relaxation | 17.68 | 12.48 | 0.706 | yes |
+| LP dual simplex | dispatch 3c1b60d6 relaxation | 42.54 | 40.24 | 0.946 | yes |
+| IPM (IPX) | greenbea | 3.98 | 3.88 | 0.975 | yes |
+| IPM (IPX) | 80bau3b | 1.34 | 1.47 | 1.097 | yes |
+| IPM (IPX) | rail507 relaxation | 16.75 | 16.96 | 1.013 | yes |
+| IPM (IPX) | co-100 relaxation | 28.84 | 23.84 | 0.827 | **NO** |
+| IPM (IPX) | dispatch 3c1b60d6 relaxation | 8.61 | 9.30 | 1.081 | yes |
+| PDLP | 25fv47 | 2.81 | 2.80 | 0.996 | yes |
+| PDLP | greenbea | 8.29 | 8.03 | 0.969 | yes |
+| PDLP | stair | 0.99 | 0.96 | 0.971 | yes |
+| Read model (time_limit 0) | co-100.mps.gz | 7.62 | 2.75 | 0.360 | yes |
+| Read model (time_limit 0) | neos-5052403-cygnet.mps.gz | 16.78 | 6.53 | 0.389 | yes |
+| Read model (time_limit 0) | dispatch 3c1b60d6.mps | 1.19 | 0.57 | 0.481 | yes |
+| Read model (time_limit 0) | dispatch 3c1b60d6.lp | 1.46 | 0.74 | 0.506 | yes |
+
 ## 2026-10-06, x86_64 (gcc) on AWS Lambda — see `asross/oopt`
 
 A cross-check off the M1: both builds compiled with **gcc** (the toolchain the
