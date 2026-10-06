@@ -1,6 +1,8 @@
 //! HighsRandom: xorshift state with hashed outputs. Draws are identical to
 //! the C++ (HighsInt is 32 bits).
 
+use crate::util::fma::ClangFma;
+
 use super::hash::{log2i, pair_hash};
 
 #[derive(Clone)]
@@ -104,7 +106,7 @@ impl HighsRandom {
 
     /// Random real in [a, b] (clang fuses a + (b - a) * f).
     pub fn real(&mut self, a: f64, b: f64) -> f64 {
-        (b - a).mul_add(self.closed_fraction(), a)
+        (b - a).mul_add_c(self.closed_fraction(), a)
     }
 
     pub fn bit(&mut self) -> bool {

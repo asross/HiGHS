@@ -2,6 +2,8 @@
 //! Every operation mirrors the C++ step by step, including where clang fuses
 //! a product into an add on arm64, so results are bit-identical.
 
+use crate::util::fma::ClangFma;
+
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -31,10 +33,10 @@ fn two_product(a: f64, b: f64) -> (f64, f64) {
     let x = a * b;
     let (a1, a2) = split(a);
     let (b1, b2) = split(b);
-    let t = (-a1).mul_add(b1, x);
-    let t = (-a2).mul_add(b1, t);
-    let t = (-a1).mul_add(b2, t);
-    (x, a2.mul_add(b2, -t))
+    let t = (-a1).mul_add_c(b1, x);
+    let t = (-a2).mul_add_c(b1, t);
+    let t = (-a1).mul_add_c(b2, t);
+    (x, a2.mul_add_c(b2, -t))
 }
 
 impl CDouble {

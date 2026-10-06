@@ -5,6 +5,8 @@
 //! Forrest-Tomlin update on top of a BASICLU factorization, lu_kernel > 0).
 //! BASICLU is called directly through its Rust port.
 
+use crate::util::fma::ClangFma;
+
 use super::control::Control;
 use super::fmt::sci2;
 use super::indexed_vector::IndexedVector;
@@ -428,8 +430,8 @@ fn stability_estimate(
     let norm_btran_res = utils::onenorm(&rhs);
 
     cmax(
-        norm_ftran_res / onenorm_b.mul_add(norm_ftran, dim as f64),
-        norm_btran_res / infnorm_b.mul_add(norm_btran, dim as f64),
+        norm_ftran_res / onenorm_b.mul_add_c(norm_ftran, dim as f64),
+        norm_btran_res / infnorm_b.mul_add_c(norm_btran, dim as f64),
     )
 }
 
@@ -902,7 +904,7 @@ fn sparse_dot(a1: &SparseMatrix, a2: &SparseMatrix) -> f64 {
     while p1 < q1 && p2 < q2 {
         let (i1, i2) = (a1.qindex(p1), a2.qindex(p2));
         if i1 == i2 {
-            d = a1.qvalue(p1).mul_add(a2.qvalue(p2), d);
+            d = a1.qvalue(p1).mul_add_c(a2.qvalue(p2), d);
             p1 += 1;
             p2 += 1;
         } else if i1 < i2 {

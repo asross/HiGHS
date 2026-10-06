@@ -2,6 +2,8 @@
 //! the scaled basis matrix (the "Russian algorithm"), sequentially over all
 //! columns or with the slice heuristic of column weights.
 
+use crate::util::fma::ClangFma;
+
 use super::basis::{BasicStatus, Basis};
 use super::control::Control;
 use super::fmt::sci2;
@@ -150,7 +152,7 @@ impl<'a> Maxvolume<'a> {
                         pmax = p;
                     }
                     tblnnz += (v != 0.0) as Int;
-                    frob = v.mul_add(v, frob);
+                    frob = v.mul_add_c(v, frob);
                 });
                 self.tblnnz = tblnnz;
                 self.frobnorm_squared = frob;
@@ -353,7 +355,7 @@ impl<'a> Maxvolume<'a> {
             let used = if tblrow_used[pmax] { 1.0 } else { 0.0 };
             let alpha = (used - weight_recomp) / (dn * pivot);
             row.for_each_nonzero(|j, x| {
-                colweights[j] = (alpha * x).mul_add(colscale[j], colweights[j]);
+                colweights[j] = (alpha * x).mul_add_c(colscale[j], colweights[j]);
             });
             colweights[jb] = used + alpha / dbinv;
             colweights[jn] = 0.0;

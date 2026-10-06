@@ -14,6 +14,8 @@
 //! reads are not kept: HEkk::solve runs in Rust only when simplex
 //! analysis, timing and debugging are off.
 
+use crate::util::fma::ClangFma;
+
 use super::basis_records::{BasisRecords, REASON_CYCLING, REASON_FAILED_INFEASIBILITY_PROOF};
 use super::dual_row::{AMatrix as RowMatrix, ChooseFail, DualRow};
 use super::dual_rhs::{DualRhs, Primal};
@@ -1465,12 +1467,12 @@ impl<'a> Dual<'a> {
             // Updated weight is low
             let weight_relative_deviation = computed_edge_weight / updated_edge_weight;
             let a = x.average_log_low_dse_weight_error.get();
-            x.average_log_low_dse_weight_error.set(0.99f64.mul_add(a, 0.01 * weight_relative_deviation.ln()));
+            x.average_log_low_dse_weight_error.set(0.99f64.mul_add_c(a, 0.01 * weight_relative_deviation.ln()));
         } else {
             // Updated weight is correct or high
             let weight_relative_deviation = updated_edge_weight / computed_edge_weight;
             let a = x.average_log_high_dse_weight_error.get();
-            x.average_log_high_dse_weight_error.set(0.99f64.mul_add(a, 0.01 * weight_relative_deviation.ln()));
+            x.average_log_high_dse_weight_error.set(0.99f64.mul_add_c(a, 0.01 * weight_relative_deviation.ln()));
         }
     }
 
@@ -2510,7 +2512,7 @@ fn row_ep_2norm_in_scaled_space(e: &EkkView, i_row: usize, row_ep: &HVec) -> f64
         row_ep_2norm = if i_entry < unfused {
             row_ep_2norm + value_in_scaled_space * value_in_scaled_space
         } else {
-            value_in_scaled_space.mul_add(value_in_scaled_space, row_ep_2norm)
+            value_in_scaled_space.mul_add_c(value_in_scaled_space, row_ep_2norm)
         };
     }
     row_ep_2norm

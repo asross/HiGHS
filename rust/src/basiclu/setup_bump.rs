@@ -15,6 +15,8 @@
 //! column j is kept in col_pivot[j], replaced by the pivot element when j
 //! becomes pivotal.
 
+use crate::util::fma::ClangFma;
+
 use super::file::{file_empty, list_add, list_init, list_move};
 use super::{Int, Lu, OK, REALLOCATE};
 
@@ -59,7 +61,7 @@ impl Lu<'_> {
         // Calculate memory and reallocate. For each row/column with nz
         // nonzeros add stretch*nz+pad elements extra space for fill-in.
         let mut need =
-            (stretch.mul_add(bump_nz as f64, bump_nz as f64) + ((m - rank) * pad) as f64) as Int;
+            (stretch.mul_add_c(bump_nz as f64, bump_nz as f64) + ((m - rank) * pad) as f64) as Int;
         need *= 2; // rowwise + columnwise
         if need > wmem {
             self.addmem_w = need - wmem;
@@ -119,7 +121,7 @@ impl Lu<'_> {
                     iwork0[i as usize] += 1;
                 }
                 wend[j] = put;
-                put = (put as f64 + stretch.mul_add(cnz as f64, pad as f64)) as Int;
+                put = (put as f64 + stretch.mul_add_c(cnz as f64, pad as f64)) as Int;
                 // reappend line to list end
                 list_move(j as Int, 0, wflink, wblink, 2 * m, None);
             }
@@ -147,7 +149,7 @@ impl Lu<'_> {
             put += rnz;
             // reappend line to list end
             list_move(m + i as Int, 0, wflink, wblink, 2 * m, None);
-            put = (put as f64 + stretch.mul_add(rnz as f64, pad as f64)) as Int;
+            put = (put as f64 + stretch.mul_add_c(rnz as f64, pad as f64)) as Int;
         }
         for j in 0..mu {
             // fill rows

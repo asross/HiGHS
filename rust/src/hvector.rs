@@ -1,6 +1,8 @@
 //! HVector's data as seen from Rust: either borrowed from a C++ HVector
 //! for the duration of a call, or owned (for the factor's own work vectors).
 
+use crate::util::fma::ClangFma;
+
 pub const K_HIGHS_TINY: f64 = 1e-14;
 pub const K_HIGHS_ZERO: f64 = 1e-50;
 
@@ -57,7 +59,7 @@ impl HVec<'_> {
         }
         for &i in &index[unfused..] {
             let value = self.array[i as usize];
-            result = value.mul_add(value, result);
+            result = value.mul_add_c(value, result);
         }
         result
     }

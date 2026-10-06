@@ -1,6 +1,8 @@
 //! lu_condest.c, lu_matrix_norm.c, lu_residual_test.c: condition estimates,
 //! norms and the stability test of a fresh factorization.
 
+use crate::util::fma::ClangFma;
+
 use super::{Int, Lu};
 
 /// lu_condest: given m-by-m U such that U[perm,perm] is triangular, return
@@ -70,7 +72,7 @@ pub(crate) fn normest(
             if i < 0 {
                 break;
             }
-            temp = (-work[i as usize]).mul_add(ux[p], temp);
+            temp = (-work[i as usize]).mul_add_c(ux[p], temp);
             p += 1;
         }
         temp += if temp >= 0.0 { 1.0 } else { -1.0 }; // choose b[i] = 1 or -1
@@ -96,7 +98,7 @@ pub(crate) fn normest(
             if i < 0 {
                 break;
             }
-            work[i as usize] = (-temp).mul_add(ux[p], work[i as usize]);
+            work[i as usize] = (-temp).mul_add_c(ux[p], work[i as usize]);
             p += 1;
         }
         y1norm += temp.abs();
@@ -176,7 +178,7 @@ impl Lu<'_> {
             let mut d: f64 = 0.0;
             let mut pos = ltbegin_p[k] as usize;
             while lindex[pos] >= 0 {
-                d = lhs[lindex[pos] as usize].mul_add(lvalue[pos], d);
+                d = lhs[lindex[pos] as usize].mul_add_c(lvalue[pos], d);
                 pos += 1;
             }
             let ipivot = p[k] as usize;
@@ -192,7 +194,7 @@ impl Lu<'_> {
             let mut pos = ubegin[ipivot] as usize;
             while uindex[pos] >= 0 {
                 let i = uindex[pos] as usize;
-                lhs[i] = (-d).mul_add(uvalue[pos], lhs[i]);
+                lhs[i] = (-d).mul_add_c(uvalue[pos], lhs[i]);
                 pos += 1;
             }
         }
@@ -204,7 +206,7 @@ impl Lu<'_> {
             let d = lhs[ipivot];
             for pos in bbegin[jpivot] as usize..bend[jpivot] as usize {
                 let i = bi[pos] as usize;
-                rhs[i] = (-d).mul_add(bx[pos], rhs[i]);
+                rhs[i] = (-d).mul_add_c(bx[pos], rhs[i]);
             }
         }
         for k in rank..m {
@@ -222,7 +224,7 @@ impl Lu<'_> {
             let mut d: f64 = 0.0;
             let mut pos = ubegin[ipivot] as usize;
             while uindex[pos] >= 0 {
-                d = lhs[uindex[pos] as usize].mul_add(uvalue[pos], d);
+                d = lhs[uindex[pos] as usize].mul_add_c(uvalue[pos], d);
                 pos += 1;
             }
             rhs[ipivot] = if d <= 0.0 { 1.0 } else { -1.0 };
@@ -234,7 +236,7 @@ impl Lu<'_> {
             let mut d: f64 = 0.0;
             let mut pos = lbegin_p[k] as usize;
             while lindex[pos] >= 0 {
-                d = lhs[lindex[pos] as usize].mul_add(lvalue[pos], d);
+                d = lhs[lindex[pos] as usize].mul_add_c(lvalue[pos], d);
                 pos += 1;
             }
             lhs[p[k] as usize] -= d;
@@ -246,7 +248,7 @@ impl Lu<'_> {
             let jpivot = pivotcol[k] as usize;
             let mut d: f64 = 0.0;
             for pos in bbegin[jpivot] as usize..bend[jpivot] as usize {
-                d = lhs[bi[pos] as usize].mul_add(bx[pos], d);
+                d = lhs[bi[pos] as usize].mul_add_c(bx[pos], d);
             }
             rhs[ipivot] -= d;
         }
@@ -261,8 +263,8 @@ impl Lu<'_> {
 
         self.matrix_norm(bbegin, bend, bi, bx);
         let mf = m as f64;
-        self.residual_test = (norm_ftran_res / self.onenorm.mul_add(norm_ftran, mf))
-            .max(norm_btran_res / self.infnorm.mul_add(norm_btran, mf));
+        self.residual_test = (norm_ftran_res / self.onenorm.mul_add_c(norm_ftran, mf))
+            .max(norm_btran_res / self.infnorm.mul_add_c(norm_btran, mf));
 
         // reset workspace
         self.work0.fill(0.0);

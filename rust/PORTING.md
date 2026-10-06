@@ -23,6 +23,13 @@ file readers in parallel. IPX, PDLP and QP last.
   again in in-order reductions (`d += x[i]*y[i]`): the first n/block*block
   terms are rounded products, the tail is fused (see
   `ipx::utils::dot_blocked`); check each call site in the final library.
+- **x86_64.** Production runs on x86_64, where the default C++ build has no
+  FMA instructions and clang fuses nothing (and the blocked reductions are
+  then plain in-order sums). So write every mirrored FMA as
+  `x.mul_add_c(a, b)` (util/fma.rs): `mul_add` on aarch64, `x * a + b`
+  elsewhere. A test rejects raw `mul_add`. Check x86_64 paths with
+  `-DCMAKE_OSX_ARCHITECTURES=x86_64 -DHIGHS_RUST_TARGET=x86_64-apple-darwin`
+  builds under Rosetta (`rust/bench/perf.py` on both).
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`
@@ -135,3 +142,18 @@ C++ divides), computes the capacity threshold in the same pass, and the
 objective propagation skips columns whose implied bound is surely
 rejected, by a double estimate with a margin thousands of times its
 rounding error.
+
+## Postsolve
+
+The undo side of HighsPostsolveStack runs in Rust (rust/src/presolve/
+postsolve.rs): undo, undoPrimal, undoUntil, getReducedPrimalSolution,
+compressIndexMaps and DuplicateColumn::okMerge. HPresolve (C++) still
+records the reductions through the inline templates of the header, so the
+C++ class keeps owning the HighsDataStack bytes, the reduction list and the
+index maps; Rust reads them through a view (`PostsolveRsStack`) and parses
+the records with the C++ byte layout (`#[repr(C)]` copies, sizes checked by
+static_assert on both sides; HighsInt must be 32 bits). Rust only reads the
+stack, so thread_safe undoPrimal needs no copy. C++ resizes the solution
+and basis vectors to the original space; Rust does the rest. The fused
+products in plain double are `x - a*d` of ForcingRow, `x + s*y` and
+`v - s*y` of DuplicateColumn, and `x + s*y` of transformToPresolvedSpace.

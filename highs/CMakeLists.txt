@@ -509,12 +509,22 @@ if(HIGHS_RUST)
   endif()
   find_program(CARGO cargo REQUIRED HINTS $ENV{HOME}/.cargo/bin)
   set(HIGHS_RUST_DIR ${PROJECT_SOURCE_DIR}/rust)
-  set(HIGHS_RUST_LIB ${CMAKE_BINARY_DIR}/rust/release/${CMAKE_STATIC_LIBRARY_PREFIX}highs_rs${CMAKE_STATIC_LIBRARY_SUFFIX})
+  # A Rust target triple to cross-build for (e.g. x86_64-apple-darwin with
+  # CMAKE_OSX_ARCHITECTURES=x86_64); empty for the host
+  set(HIGHS_RUST_TARGET "" CACHE STRING "Rust target triple for the Rust kernels")
+  if(HIGHS_RUST_TARGET)
+    set(highs_rust_target_args --target ${HIGHS_RUST_TARGET})
+    set(highs_rust_out ${CMAKE_BINARY_DIR}/rust/${HIGHS_RUST_TARGET}/release)
+  else()
+    set(highs_rust_target_args)
+    set(highs_rust_out ${CMAKE_BINARY_DIR}/rust/release)
+  endif()
+  set(HIGHS_RUST_LIB ${highs_rust_out}/${CMAKE_STATIC_LIBRARY_PREFIX}highs_rs${CMAKE_STATIC_LIBRARY_SUFFIX})
   file(GLOB_RECURSE highs_rust_sources CONFIGURE_DEPENDS ${HIGHS_RUST_DIR}/src/*.rs)
   add_custom_command(
     OUTPUT ${HIGHS_RUST_LIB}
     COMMAND ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
-            --target-dir ${CMAKE_BINARY_DIR}/rust
+            --target-dir ${CMAKE_BINARY_DIR}/rust ${highs_rust_target_args}
     # So that cargo reads rust/.cargo/config.toml
     WORKING_DIRECTORY ${HIGHS_RUST_DIR}
     DEPENDS ${highs_rust_sources} ${HIGHS_RUST_DIR}/Cargo.toml
