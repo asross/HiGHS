@@ -55,6 +55,21 @@ fn sorts_match_cpp() {
 const GOLDEN_SORTS: u64 = 9754718482623447556;
 
 #[test]
+fn ldexp_matches_libm() {
+    extern "C" {
+        fn ldexp(x: f64, e: i32) -> f64;
+    }
+    let mut r = HighsRandom::new(5);
+    for _ in 0..200000 {
+        let x = (r.fraction() - 0.5) * 2f64.powi(r.integer_below(200) - 100);
+        let e = r.integer_below(2200) - 1100;
+        // SAFETY: libm
+        let want = unsafe { ldexp(x, e) };
+        assert_eq!(super::integers::ldexp(x, e).to_bits(), want.to_bits(), "{x} {e}");
+    }
+}
+
+#[test]
 fn gfk_solves_mod2() {
     use super::gfk::GfkSolve;
     // weights u of two constraint columns over rows 0..2 and the rhs row 3:

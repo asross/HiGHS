@@ -99,6 +99,11 @@ fn frexp_exp(x: f64) -> i32 {
 /// C ldexp
 #[inline]
 pub fn ldexp(x: f64, e: i32) -> f64 {
+    if (-1022..=1023).contains(&e) {
+        // 2^e is a normal double, so the product is ldexp's correctly
+        // rounded result (also when it is subnormal or overflows)
+        return x * f64::from_bits(((1023 + e) as u64) << 52);
+    }
     // SAFETY: a pure libm function
     unsafe { c_ldexp(x, e) }
 }

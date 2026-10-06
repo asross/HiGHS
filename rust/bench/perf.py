@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECK = ROOT / "check" / "instances"
-DISPATCH = ROOT / "dispatch_milp_2026_09_30"
+DISPATCH = Path(os.environ.get("DISPATCH_DIR", ROOT / "dispatch_milp_2026_09_30"))
 
 def cases(miplib):
     mip = {"mip_rel_gap": 0.01}
@@ -21,6 +21,8 @@ def cases(miplib):
     for name in ["air05", "neos17", "nu25-pr12", "neos-911970"]:
         c.append(("MIP", name, miplib / f"{name}.mps.gz", mip))
     c.append(("MIP", "dispatch lambda_080458", DISPATCH / "lambda_20260930_080458_22776806.mps", mip))
+    c.append(("MIP", "dispatch 3c1b60d6 root", DISPATCH / "lambda_20260930_142050_3c1b60d6.mps",
+              {**mip, "mip_max_nodes": 1}))
     for name in ["25fv47", "80bau3b", "greenbea", "perold", "stair"]:
         c.append(("LP dual simplex", name, CHECK / f"{name}.mps", lp))
         c.append(("LP primal simplex", name, CHECK / f"{name}.mps", {**lp, "simplex_strategy": 4}))

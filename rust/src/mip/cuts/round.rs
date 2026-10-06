@@ -15,7 +15,8 @@
 //!   cliques), so column bounds are read through raw pointers each time,
 //!   and the slack bounds of LP rows, which come from the domain's
 //!   activities, are cached per [`SepaRound::generation`], which every
-//!   add_cut bumps;
+//!   add_cut bumps; the column bounds are cached the same way, next to the
+//!   column's other data;
 //! - LP rows are copied: a cut row's storage in the cut pool can move
 //!   when cuts are added.
 
@@ -123,11 +124,16 @@ pub const K_VARIABLE_UB: u8 = 2;
 pub const K_VARIABLE_LB: u8 = 3;
 
 /// The per-column data of HighsTransformedLp, for the columns and then the
-/// row slacks. bound_dist = min(lb_dist, ub_dist), as in every branch of
-/// the C++ constructor.
+/// row slacks, one cache line each. bound_dist = min(lb_dist, ub_dist), as
+/// in every branch of the C++ constructor.
 #[derive(Clone, Copy, Default)]
-#[repr(C, align(16))]
+#[repr(C, align(64))]
 pub struct ColData {
+    /// the global bounds (getLb, getUb), valid if gen == the round's
+    /// generation
+    pub lb: f64,
+    pub ub: f64,
+    pub gen: u32,
     pub lb_dist: f64,
     pub ub_dist: f64,
     pub simple_lb_dist: f64,
@@ -229,9 +235,7 @@ pub struct SepaRound {
     pub cols: Vec<ColData>,
     pub vub: Vec<VarBound>,
     pub vlb: Vec<VarBound>,
-    /// slack bounds by row, valid if slack_gen[row] == generation
-    slack_bounds: Vec<(f64, f64)>,
-    slack_gen: Vec<u32>,
+    /// bumped by add_cut, which can change the global domain
     pub generation: u32,
     /// HighsTransformedLp's vectorsum
     pub vectorsum: HighsSparseVectorSum,
@@ -274,11 +278,9 @@ impl SepaRound {
             ar_index: Vec::new(),
             ar_value: Vec::new(),
             row_max_abs: vec![0.0; num_row],
-            cols: vec![ColData { vub_col: -1, vlb_col: -1, ..Default::default() }; n],
+            cols: vec![ColData { vub_col: -1, vlb_col: -1, gen: u32::MAX, ..Default::default() }; n],
             vub: vec![VarBound::default(); num_col],
             vlb: vec![VarBound::default(); num_col],
-            slack_bounds: vec![(0.0, 0.0); num_row],
-            slack_gen: vec![u32::MAX; num_row],
             generation: 0,
             vectorsum: HighsSparseVectorSum::new(n),
             aggr: HighsSparseVectorSum::new(n),
@@ -326,31 +328,50 @@ impl SepaRound {
     /// slackLower/slackUpper(row, globaldom), cached until the next add_cut
     #[inline]
     pub fn slack_bounds(&mut self, row: usize) -> (f64, f64) {
-        if self.slack_gen[row] != self.generation {
-            // SAFETY: C++ queries
-            let lb = unsafe { (self.host.slack_lower)(self.host.ctx, row as i32) };
-            let ub = unsafe { (self.host.slack_upper)(self.host.ctx, row as i32) };
-            self.slack_bounds[row] = (lb, ub);
-            self.slack_gen[row] = self.generation;
-        }
-        self.slack_bounds[row]
+        self.bounds(self.num_col + row)
     }
 
-    /// The global bounds of a column or row slack (getLb, getUb)
+    /// The global bounds of a column or row slack (getLb, getUb), cached
+    /// until the next add_cut
     #[inline(always)]
     pub fn bounds(&mut self, col: usize) -> (f64, f64) {
-        if col < self.num_col {
+        let d = &self.cols[col];
+        if d.gen == self.generation {
+            (d.lb, d.ub)
+        } else {
+            self.load_bounds(col)
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn load_bounds(&mut self, col: usize) -> (f64, f64) {
+        let (lb, ub) = if col < self.num_col {
             (self.col_lower.at(col), self.col_upper.at(col))
         } else {
-            self.slack_bounds(col - self.num_col)
-        }
+            let row = (col - self.num_col) as i32;
+            // SAFETY: C++ queries
+            unsafe {
+                (
+                    (self.host.slack_lower)(self.host.ctx, row),
+                    (self.host.slack_upper)(self.host.ctx, row),
+                )
+            }
+        };
+        let d = &mut self.cols[col];
+        d.lb = lb;
+        d.ub = ub;
+        d.gen = self.generation;
+        (lb, ub)
     }
 
     /// HighsCutPool::addCut; the domain may change
     pub fn add_cut(&mut self, inds: &mut [i32], vals: &mut [f64], rhs: f64, integral: bool, conflict: bool) -> i32 {
         self.generation = self.generation.wrapping_add(1);
         if self.generation == u32::MAX {
-            self.slack_gen.fill(u32::MAX);
+            for d in &mut self.cols {
+                d.gen = u32::MAX;
+            }
             self.generation = 0;
         }
         // SAFETY: inds and vals have len entries; C++ only reorders them
