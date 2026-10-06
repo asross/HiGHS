@@ -461,7 +461,105 @@ fn pdqsort_loop<T: Copy, C: FnMut(&T, &T) -> bool, const BRANCHLESS: bool>(
     }
 }
 
-// ---- libc++ heap algorithms ----
+// ---- libstdc++ heap algorithms (gcc builds) ----
+
+#[cfg(feature = "libstdcxx")]
+mod heap_impl {
+    /// std::__push_heap: moves value up from hole towards top (signed
+    /// indices: (hole - 1) / 2 truncates to 0 at the root)
+    fn push_up<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], mut hole: isize, top: isize, value: T, comp: &mut C) {
+        let mut parent = (hole - 1) / 2;
+        while hole > top && comp(&v[parent as usize], &value) {
+            v[hole as usize] = v[parent as usize];
+            hole = parent;
+            parent = (hole - 1) / 2;
+        }
+        v[hole as usize] = value;
+    }
+
+    /// std::__adjust_heap
+    fn adjust_heap<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], mut hole: isize, len: isize, value: T, comp: &mut C) {
+        let top = hole;
+        let mut second = hole;
+        while second < (len - 1) / 2 {
+            second = 2 * (second + 1);
+            if comp(&v[second as usize], &v[(second - 1) as usize]) {
+                second -= 1;
+            }
+            v[hole as usize] = v[second as usize];
+            hole = second;
+        }
+        if (len & 1) == 0 && second == (len - 2) / 2 {
+            second = 2 * (second + 1);
+            v[hole as usize] = v[(second - 1) as usize];
+            hole = second - 1;
+        }
+        push_up(v, hole, top, value, comp);
+    }
+
+    /// std::__pop_heap(first, first + len, result)
+    fn pop_into<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], len: usize, result: usize, comp: &mut C) {
+        let value = v[result];
+        v[result] = v[0];
+        adjust_heap(v, 0, len as isize, value, comp);
+    }
+
+    pub fn make_heap<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], comp: &mut C) {
+        let len = v.len() as isize;
+        if len < 2 {
+            return;
+        }
+        let mut parent = (len - 2) / 2;
+        loop {
+            let value = v[parent as usize];
+            adjust_heap(v, parent, len, value, comp);
+            if parent == 0 {
+                return;
+            }
+            parent -= 1;
+        }
+    }
+
+    pub fn sort_heap<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], comp: &mut C) {
+        let mut n = v.len();
+        while n > 1 {
+            n -= 1;
+            pop_into(v, n, n, comp);
+        }
+    }
+
+    /// std::push_heap after v.push(x)
+    pub fn push_heap<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], comp: &mut C) {
+        let n = v.len() as isize;
+        let value = v[(n - 1) as usize];
+        push_up(v, n - 1, 0, value, comp);
+    }
+
+    /// std::pop_heap: moves the top to the back
+    pub fn pop_heap<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], comp: &mut C) {
+        let n = v.len();
+        if n > 1 {
+            pop_into(v, n - 1, n - 1, comp);
+        }
+    }
+
+    /// std::partial_sort(first, first + middle, last, comp)
+    pub fn partial_sort<T: Copy>(v: &mut [T], middle: usize, mut comp: impl FnMut(&T, &T) -> bool) {
+        // __heap_select, then __sort_heap
+        make_heap(&mut v[..middle], &mut comp);
+        for i in middle..v.len() {
+            if comp(&v[i], &v[0]) {
+                pop_into(v, middle, i, &mut comp);
+            }
+        }
+        sort_heap(&mut v[..middle], &mut comp);
+    }
+}
+
+// ---- libc++ heap algorithms (clang / Apple builds) ----
+
+#[cfg(not(feature = "libstdcxx"))]
+mod heap_impl {
 
 /// std::__sift_up on v[..len]
 fn sift_up<T: Copy, C: FnMut(&T, &T) -> bool>(v: &mut [T], len: usize, comp: &mut C) {
@@ -601,6 +699,9 @@ pub fn partial_sort<T: Copy>(v: &mut [T], middle: usize, mut comp: impl FnMut(&T
     }
     sort_heap(&mut v[..middle], &mut comp);
 }
+}
+
+pub use heap_impl::{make_heap, partial_sort, pop_heap, push_heap, sort_heap};
 
 /// std::priority_queue with libc++'s heap operations; `less(a, b)` is the
 /// queue's comparator (the top is a maximal element).

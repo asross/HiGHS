@@ -600,6 +600,19 @@ class HighsPostsolveStack {
 
   void undoRust(const HighsOptions& options, HighsSolution& solution,
                 HighsBasis& basis, size_t until, HighsInt report_col) const;
+
+  // appends the reductions recorded by the Rust presolve: the record bytes,
+  // their (type, end position) and the original columns that a
+  // DuplicateColumn makes not linearly transformable
+  void rustAppend(const char* data, size_t len, const uint8_t* types,
+                  const size_t* positions, size_t num,
+                  const HighsInt* notTransformable, size_t numNotTransformable) {
+    reductionValues.pushBytes(data, len);
+    for (size_t i = 0; i != num; ++i)
+      reductions.emplace_back(ReductionType(types[i]), positions[i]);
+    for (size_t i = 0; i != numNotTransformable; ++i)
+      linearlyTransformable[notTransformable[i]] = false;
+  }
 #endif
 
   std::vector<double> getReducedPrimalSolution(

@@ -30,6 +30,23 @@ file readers in parallel. IPX, PDLP and QP last.
   elsewhere. A test rejects raw `mul_add`. Check x86_64 paths with
   `-DCMAKE_OSX_ARCHITECTURES=x86_64 -DHIGHS_RUST_TARGET=x86_64-apple-darwin`
   builds under Rosetta (`rust/bench/perf.py` on both).
+- **gcc / libstdc++.** Production builds the C++ with gcc, whose libstdc++
+  differs from libc++ where results depend on the standard library: heap
+  and partial_sort tie orders, std::tuple layout (hashed keys),
+  uniform_int_distribution, unordered container order. Anything that
+  mirrors one of these needs both variants, the libstdc++ one under the
+  `libstdcxx` cargo feature (CMake turns it on with gcc;
+  `HIGHS_RUST_FEATURES`). Goldens: build the golden .cpp with g++ too.
+  Local gcc check on the Mac: `-DCMAKE_C_COMPILER=gcc-14
+  -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_C_FLAGS=-ffp-contract=off
+  -DCMAKE_CXX_FLAGS=-ffp-contract=off -DZLIB=OFF
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
+  -DCMAKE_EXE_LINKER_FLAGS=-Wl,-ld_classic
+  -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-ld_classic`, and for the Rust build
+  `-DHIGHS_RUST_FEATURES="libstdcxx no_fma"` (no_fma: arm64 without
+  contraction, like x86_64). zlib off because its include path puts the
+  SDK's math.h ahead of gcc's; ld_classic because the new Apple linker
+  crashes on gcc 14 objects. Instances: ~/code/miplib/plain/*.mps.
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`
@@ -186,6 +203,32 @@ constant` and `1 + coef * coef` (getBestVub/Vlb), `m * c - f` and
 `-m * a + t` (strengthenVarBound) and `s0 * v0 + s1 * v1` (implied bound
 cuts). Debug-solution checks run only for the public addVUB/addVLB and
 addClique.
+
+## Presolve (HPresolve)
+
+HPresolve runs in Rust (rust/src/presolve/hpresolve) for LP and MIP
+presolve and the MIP restarts; HPresolve.cpp is compiled only without
+HIGHS_RUST, and HPresolveRust.cpp keeps okSetInput/run as a wrapper.
+Rust owns the presolve state and a copy of the model, written back to the
+C++ HighsLp (`sync_model`) before C++ reads it (shrinkProblem's MIP
+rebuilds, probing, the end of run). Reductions are recorded in Rust in
+the HighsDataStack layout (record.rs) and appended to the C++ stack by
+`flush` (HighsPostsolveStack::rustAppend); the index maps are mirrored.
+Still C++ behind `Host` callbacks: logging, the timer, the presolve rule
+analysis setup, the HFactor of the dependent equations, and the MIP
+clique table, implications, domain and pools, including the probing loop
+of runProbing and the solution enumeration of enumerateSolutions (the
+other agents' ports can replace these callbacks). Orders that depend on
+containers are emulated: the libc++ unordered_multimap buckets of
+detectParallelRowsAndCols keep their key groups (emplace_hint inserts
+before the last visited element in libc++, after it in libstdc++: with
+`libstdcxx`; this picked different parallel columns on co-100's LP, which
+showed up as a different IPX starting point), the lifting opportunities'
+unordered_map iterates in reverse order of first insertion (one bucket per
+row; the same in libstdc++, which also puts a new bucket's node first),
+the std::sets are sorted vectors / BTreeSet, and `rowpositions` keeps
+stale entries past its length as the C++ vector does (loops over a stored
+row read it live while nested reductions store other rows).
 
 ## Postsolve
 
