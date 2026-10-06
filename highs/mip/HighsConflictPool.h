@@ -64,6 +64,14 @@ class HighsConflictPool {
           reconvergenceFrontier,
       const HighsDomainChange& reconvergenceDomchg);
 
+  // the same with the frontier's domain changes in the order of the stack
+  void addConflictCut(const HighsDomain& domain,
+                      const HighsDomainChange* entries, HighsInt len);
+
+  void addReconvergenceCut(const HighsDomain& domain,
+                           const HighsDomainChange* entries, HighsInt len,
+                           const HighsDomainChange& reconvergenceDomchg);
+
   void removeConflict(HighsInt conflict);
 
   void performAging(bool thread_safe = false);

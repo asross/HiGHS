@@ -126,24 +126,45 @@ INVERT of putIterate/getIterate are held by the Rust factor.
 HEkkDual.cpp is compiled in a unity build, so clang inlines e.g.
 HVector::norm2 into chooseRow contracted: check each compiled copy.
 
-## The MIP domain propagation
+## The MIP domain (HighsDomain)
 
-HighsDomain keeps its C++ class and data; under HIGHS_RUST its
-propagation kernels run in Rust (mip/domain.rs) on a view of that data:
-row activities with their infinity counts (HighsCDouble arrays),
-updateActivityLbChange/UbChange for model rows, cut pools and the
-watched literals of conflict pools, the capacity thresholds, markPropagate,
-computeRowActivities, computeMin/MaxActivity, propagateRowUpper/Lower and
-the row and cut batches of propagate(). The kernels never call back into
-C++ (they append to the C++ lists of rows/cuts/conflicts to propagate
-through a push function). The view is cached in HighsDomain::rsView_ and
-invalidated where a vector it points to may move (copy, assignment,
-computeRowActivities, pool changes, cutAdded, conflictAdded); debug builds
-check the cache against a fresh fill on every use. The const methods,
-which threads may call concurrently on the global domain, use a temporary
-view. Still C++: changeBound, backtrack, the domain change stack,
-objective propagation (its red-black trees), conflict propagation and
-analysis, and the clique table and implications that changeBound calls.
+HighsDomain keeps its C++ class and data (external code reads col_lower_,
+col_upper_ and the stack everywhere); under HIGHS_RUST it runs in Rust
+(mip/domain.rs, objprop.rs, conflict.rs) on a view of that data: changeBound
+with the domain change stack, its reasons and previous bounds,
+backtrack/backtrackToGlobal, setDomainChangeStack, the whole propagate()
+loop (model rows, cuts, conflicts, objective), the activity updates with
+infinity counts and capacity thresholds, ObjectivePropagation with its
+red-black trees (HighsRbTree ported exactly: the trees are built by the C++
+constructor and updated in Rust), conflict analysis (ConflictSet: the
+frontiers are BTreeMaps by stack position) and tightenCoefficients. Still
+C++: the clique table's and implications' fixings of a fixed binary (called
+back through one function, which re-enters changeBound), the conflict and
+cut pools (adding a conflict, resetAge), the pseudocosts and node queue
+read by conflict analysis, getPropagationConstraint/getCutoffConstraint for
+external callers, and the debug solution (HIGHS_DEBUGSOL is not supported).
+
+The view (highs/mip/HighsDomainRust.h, HighsDomainRustView.h) is cached in
+HighsDomain::rsView_ and refilled where a vector it holds by data() and
+size() may move: copy, assignment, computeRowActivities,
+setupObjectivePropagation, adding or clearing pools; cutAdded and
+conflictAdded update their pool's part in place. The vectors that grow
+during propagation are passed as the std::vector objects (StdVec, the
+begin/end/capacity layout, checked at runtime) and appended to in place,
+with a C++ reserve when full. Rust's Dom derefs to the view and indexes its
+pointer+length pairs with bounds checks; the hot loops copy the pairs they
+use into locals. Only Ctx::change_bound calls back into C++ code that
+re-enters Rust; Dom views are borrowed from the Ctx, so none is alive
+across it. The const methods (computeMin/MaxActivity,
+propagateRowUpper/Lower, tightenCoefficients), which threads may call
+concurrently on the global domain, get a small Bounds struct instead.
+
+Rust-only shortcuts (same results, less work): the row propagation skips
+entries whose implied bound is surely not tighter without dividing (the
+C++ divides), computes the capacity threshold in the same pass, and the
+objective propagation skips columns whose implied bound is surely
+rejected, by a double estimate with a margin thousands of times its
+rounding error.
 
 ## The clique table and implications (MIP)
 
