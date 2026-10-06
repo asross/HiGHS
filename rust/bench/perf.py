@@ -42,6 +42,8 @@ def cases(miplib):
         c.append(("Read model (time_limit 0)", f"{name}.mps.gz", miplib / f"{name}.mps.gz", read))
     c.append(("Read model (time_limit 0)", "dispatch 3c1b60d6.mps", DISPATCH / "lambda_20260930_142050_3c1b60d6.mps", read))
     c.append(("Read model (time_limit 0)", "dispatch 3c1b60d6.lp", DISPATCH / "lambda_20260930_142050_3c1b60d6.lp", read))
+    # builds without zlib: plain .mps next to (or instead of) the .mps.gz
+    c = [(g, n, i.with_suffix("") if not i.exists() and i.suffix == ".gz" else i, o) for g, n, i, o in c]
     return [x for x in c if x[2].exists()]
 
 PATH_RE = re.compile(r"^(Model status.*|.*iterations: .*|Objective value.*|  Nodes .*|  LP iterations .*|  Primal bound .*|  Dual bound .*)$", re.M)
