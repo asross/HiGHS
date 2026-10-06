@@ -65,13 +65,14 @@ pub fn multiply_mod_m61(a: u64, b: u64) -> u64 {
 
     // Partially reduce term_0 and term_32 modulo M61 individually so that no
     // carry bit is lost; the final reduction happens at the end.
-    term_0 = (term_0 & M61) + (term_0 >> 61);
-    term_0 += ((term_32 >> 29).wrapping_add(term_32 << 32)) & M61;
+    term_0 = (term_0 & M61).wrapping_add(term_0 >> 61);
+    term_0 = term_0.wrapping_add(((term_32 >> 29).wrapping_add(term_32 << 32)) & M61);
 
     // The lower 61 bits of term_0 are the lower 61 bits of the result; the
     // upper ones fold back since q * 2^61 + r = q + r (mod 2^61 - 1).
     let ab61 = (term_64 << 3) | (term_0 >> 61);
-    let mut result = (term_0 & M61) + ab61;
+    // unsigned wrap-around as in the C++
+    let mut result = (term_0 & M61).wrapping_add(ab61);
     if result >= M61 {
         result -= M61;
     }
