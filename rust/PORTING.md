@@ -226,9 +226,11 @@ The node queue's red-black trees and std::sets order nodes by keys that
 end with the node index, so BTreeSets of the keys give the same orders
 (doubles compared with `<`, so -0 == 0). The lurking bounds of reduced cost
 fixing are std::multimaps where an element inserted at the hint
-lower_bound(key) precedes its equal keys: a decreasing sequence number in
-the key does the same (rootReducedCost sorts them unstably by key, so the
-order matters).
+lower_bound(key) precedes its equal keys (in libc++ and libstdc++): a
+decreasing sequence number in the key does the same (rootReducedCost sorts
+them unstably by key, so the order matters). The cut pool's hash-to-cut
+std::unordered_multimap is only searched for any match and erased by
+value, so its group order (different in libstdc++) does not matter.
 
 HighsSearch keeps the local domain (external code uses it), the LP
 pointer and the conflict scratch; the node stack, statistics (C++ reads
