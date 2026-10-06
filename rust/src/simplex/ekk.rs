@@ -32,6 +32,8 @@
 //!   HVectors other than HEkk's arrays come per call as `CHVec`s, sized by
 //!   C++, or are owned by the Rust solvers.
 
+use crate::util::fma::ClangFma;
+
 use crate::factor::{AMatrix, HFactor};
 use crate::ffi::{sl, sl_mut, CHVec};
 use crate::hvector::{HVec, K_HIGHS_TINY, K_HIGHS_ZERO};
@@ -74,7 +76,7 @@ fn is_inf(x: f64) -> bool {
 /// HEkk::updateOperationResultDensity
 #[inline]
 pub fn update_operation_result_density(local_density: f64, density: &mut f64) {
-    *density = density.mul_add(
+    *density = density.mul_add_c(
         1.0 - K_RUNNING_AVERAGE_MULTIPLIER,
         K_RUNNING_AVERAGE_MULTIPLIER * local_density,
     );
@@ -115,7 +117,7 @@ pub fn compute_dual_for_tableau_column(
     for (k, &i_row) in tableau_index.iter().enumerate() {
         let i_row = i_row as usize;
         let (a, c) = (tableau_array[i_row], work_cost[basic_index[i_row] as usize]);
-        dual = if k < unfused { dual - a * c } else { (-a).mul_add(c, dual) };
+        dual = if k < unfused { dual - a * c } else { (-a).mul_add_c(c, dual) };
     }
     dual
 }
@@ -390,7 +392,7 @@ impl Csc<'_> {
             for (&i_row, &a) in self.index[from..to].iter().zip(&self.value[from..to]) {
                 let i_row = i_row as usize;
                 let value0 = column.array[i_row];
-                add(column, i_row, value0, multiplier.mul_add(a, value0));
+                add(column, i_row, value0, multiplier.mul_add_c(a, value0));
             }
         } else {
             let i_row = use_col - num_col;
@@ -909,14 +911,14 @@ impl EkkView<'_> {
         for i_row in 0..self.num_row {
             let i_var = self.basic_index[i_row] as usize;
             if i_var < self.num_col {
-                value = self.base_value[i_row].mul_add(self.col_cost[i_var], value);
+                value = self.base_value[i_row].mul_add_c(self.col_cost[i_var], value);
             }
         }
         let n = self.num_col;
         let (flag, work_value, cost) = (&self.nonbasic_flag[..n], &self.work_value[..n], &self.col_cost[..n]);
         for i in 0..n {
             if flag[i] != 0 {
-                value = work_value[i].mul_add(cost[i], value);
+                value = work_value[i].mul_add_c(cost[i], value);
             }
         }
         value *= self.cost_scale;
@@ -933,7 +935,7 @@ impl EkkView<'_> {
         let (flag, work_value, work_dual) = (&self.nonbasic_flag[..n], &self.work_value[..n], &self.work_dual[..n]);
         for i in 0..n {
             if flag[i] != 0 {
-                value = work_value[i].mul_add(work_dual[i], value);
+                value = work_value[i].mul_add_c(work_dual[i], value);
             }
         }
         value *= self.cost_scale;
@@ -941,7 +943,7 @@ impl EkkView<'_> {
             // In phase 1 the dual objective has no objective shift.
             // Otherwise the shift is added according to the sign implied
             // by sense_
-            value = (self.sense as f64).mul_add(self.offset, value);
+            value = (self.sense as f64).mul_add_c(self.offset, value);
         }
         *self.dual_objective_value = value;
     }
@@ -1208,8 +1210,8 @@ impl EkkView<'_> {
                 dual_steepest_edge_array_value *= inv_col_ap_scale;
             }
             let w = &mut self.dual_edge_weight[i_row];
-            let inner = new_pivotal_edge_weight.mul_add(aa_i_row, kai * dual_steepest_edge_array_value);
-            *w = aa_i_row.mul_add(inner, *w);
+            let inner = new_pivotal_edge_weight.mul_add_c(aa_i_row, kai * dual_steepest_edge_array_value);
+            *w = aa_i_row.mul_add_c(inner, *w);
             *w = w.max(K_MIN_DUAL_STEEPEST_EDGE_WEIGHT);
         }
     }
@@ -1400,22 +1402,22 @@ impl EkkView<'_> {
                 if lower > -K_HIGHS_INF {
                     if lower < -1.0 {
                         // lower -= random_value * base * (-lower)
-                        lower = (random_value * base).mul_add(lower, lower);
+                        lower = (random_value * base).mul_add_c(lower, lower);
                     } else if lower < 1.0 {
-                        lower = (-random_value).mul_add(base, lower);
+                        lower = (-random_value).mul_add_c(base, lower);
                     } else {
-                        lower = (-(random_value * base)).mul_add(lower, lower);
+                        lower = (-(random_value * base)).mul_add_c(lower, lower);
                     }
                     self.work_lower[i_var] = lower;
                 }
                 if upper < K_HIGHS_INF {
                     if upper < -1.0 {
                         // upper += random_value * base * (-upper)
-                        upper = (-(random_value * base)).mul_add(upper, upper);
+                        upper = (-(random_value * base)).mul_add_c(upper, upper);
                     } else if upper < 1.0 {
-                        upper = random_value.mul_add(base, upper);
+                        upper = random_value.mul_add_c(base, upper);
                     } else {
-                        upper = (random_value * base).mul_add(upper, upper);
+                        upper = (random_value * base).mul_add_c(upper, upper);
                     }
                     self.work_upper[i_var] = upper;
                 }
@@ -1829,7 +1831,7 @@ mod tests {
     fn small_kernels() {
         let mut density = 0.5;
         update_operation_result_density(1.0, &mut density);
-        assert_eq!(density, 0.5f64.mul_add(0.95, 0.05));
+        assert_eq!(density, 0.5f64.mul_add_c(0.95, 0.05));
         assert_eq!(choose_price_technique(PRICE_COL, 0.0), (true, false));
         assert_eq!(choose_price_technique(PRICE_ROW_SWITCH_COL_SWITCH, 0.8), (true, true));
         assert_eq!(choose_price_technique(PRICE_ROW_SWITCH_COL_SWITCH, 0.5), (false, true));

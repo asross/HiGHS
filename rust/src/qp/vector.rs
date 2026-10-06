@@ -3,9 +3,11 @@
 //! of its first `num_nz` entries; `dim` may be less than `value.len()`.
 
 /// `s + a * b` as one fused multiply-add (clang contracts these)
+use crate::util::fma::ClangFma;
+
 #[inline(always)]
 pub(crate) fn fma(a: f64, b: f64, s: f64) -> f64 {
-    a.mul_add(b, s)
+    a.mul_add_c(b, s)
 }
 
 #[derive(Clone, Debug)]

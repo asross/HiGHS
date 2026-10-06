@@ -18,6 +18,8 @@
 //! Markowitz search, since updated elements move to the end of the column,
 //! and likewise for rows).
 
+use crate::util::fma::ClangFma;
+
 use super::file::{file_compress, file_reappend, list_move, list_remove};
 use super::{Int, Lu, OK, REALLOCATE};
 
@@ -30,13 +32,13 @@ const MAXROW_SMALL: Int = 64;
 /// with a double expression, contracted to an FMA)
 #[inline]
 fn add_room(x: Int, a: Int, stretch: f64, pad: Int) -> Int {
-    (x as f64 + (stretch.mul_add(a as f64, a as f64) + pad as f64)) as Int
+    (x as f64 + (stretch.mul_add_c(a as f64, a as f64) + pad as f64)) as Int
 }
 
 /// `a + stretch*b + pad` truncated to lu_int
 #[inline]
 fn room_for(a: Int, b: Int, stretch: f64, pad: Int) -> Int {
-    (stretch.mul_add(b as f64, a as f64) + pad as f64) as Int
+    (stretch.mul_add_c(b as f64, a as f64) + pad as f64) as Int
 }
 
 impl Lu<'_> {
@@ -275,7 +277,7 @@ impl Lu<'_> {
             // Compute update in workspace and append to column.
             let a = xrj / pivot;
             for pos in 1..=cnz1 {
-                work[pos] = (-a).mul_add(wvalue[cbeg + pos], work[pos]);
+                work[pos] = (-a).mul_add_c(wvalue[cbeg + pos], work[pos]);
             }
             if small {
                 let mut mask: u64 = 0;
@@ -796,7 +798,7 @@ impl Lu<'_> {
                 if where_other == end {
                     where_other = where_pivot;
                 }
-                wvalue[where_other] = (-xrj).mul_add(other_value / pivot, wvalue[where_other]);
+                wvalue[where_other] = (-xrj).mul_add_c(other_value / pivot, wvalue[where_other]);
 
                 // If we have numerical cancellation, then remove the entry and
                 // mark the column.

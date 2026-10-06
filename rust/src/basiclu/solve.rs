@@ -2,6 +2,8 @@
 //! lu_solve_for_update.c and their kernels lu_solve_symbolic.c,
 //! lu_solve_triangular.c, lu_dfs.c, plus lu_garbage_perm.c.
 
+use crate::util::fma::ClangFma;
+
 use super::{as_int_mut, Int, Lu, OK, REALLOCATE};
 
 /// lu_dfs: compute reach(i) in a graph by depth first search (adapted from
@@ -140,7 +142,7 @@ pub(crate) fn solve_triangular(
                 Some(end) => {
                     for pos in begin[$ipivot] as usize..end[$ipivot] as usize {
                         let i = index[pos] as usize;
-                        lhs[i] = (-$x).mul_add(value[pos], lhs[i]);
+                        lhs[i] = (-$x).mul_add_c(value[pos], lhs[i]);
                         flop_count += 1;
                     }
                 }
@@ -152,7 +154,7 @@ pub(crate) fn solve_triangular(
                             break;
                         }
                         let i = i as usize;
-                        lhs[i] = (-$x).mul_add(value[pos], lhs[i]);
+                        lhs[i] = (-$x).mul_add_c(value[pos], lhs[i]);
                         flop_count += 1;
                         pos += 1;
                     }
@@ -265,7 +267,7 @@ impl Lu<'_> {
                 let x = work1[jpivot] / col_pivot[jpivot];
                 for pos in wbegin[jpivot] as usize..wend[jpivot] as usize {
                     let i = windex[pos] as usize;
-                    work1[i] = (-x).mul_add(wvalue[pos], work1[i]);
+                    work1[i] = (-x).mul_add_c(wvalue[pos], work1[i]);
                 }
                 lhs[ipivot] = x;
             }
@@ -275,7 +277,7 @@ impl Lu<'_> {
                 let x = lhs[eta_row[t] as usize];
                 for pos in rbegin[t] as usize..rbegin[t + 1] as usize {
                     let i = lindex[pos] as usize;
-                    lhs[i] = (-x).mul_add(lvalue[pos], lhs[i]);
+                    lhs[i] = (-x).mul_add_c(lvalue[pos], lhs[i]);
                 }
             }
 
@@ -288,7 +290,7 @@ impl Lu<'_> {
                     if i < 0 {
                         break;
                     }
-                    x = lhs[i as usize].mul_add(lvalue[pos], x);
+                    x = lhs[i as usize].mul_add_c(lvalue[pos], x);
                     pos += 1;
                 }
                 lhs[p[k] as usize] -= x;
@@ -305,7 +307,7 @@ impl Lu<'_> {
                     if i < 0 {
                         break;
                     }
-                    x = work1[i as usize].mul_add(lvalue[pos], x);
+                    x = work1[i as usize].mul_add_c(lvalue[pos], x);
                     pos += 1;
                 }
                 work1[p[k] as usize] -= x;
@@ -317,7 +319,7 @@ impl Lu<'_> {
                 let ipivot = eta_row[t] as usize;
                 let mut x: f64 = 0.0;
                 while pos < rbegin[t + 1] as usize {
-                    x = work1[lindex[pos] as usize].mul_add(lvalue[pos], x);
+                    x = work1[lindex[pos] as usize].mul_add_c(lvalue[pos], x);
                     pos += 1;
                 }
                 work1[ipivot] -= x;
@@ -334,7 +336,7 @@ impl Lu<'_> {
                     if i < 0 {
                         break;
                     }
-                    work1[i as usize] = (-x).mul_add(uvalue[pos], work1[i as usize]);
+                    work1[i as usize] = (-x).mul_add_c(uvalue[pos], work1[i as usize]);
                     pos += 1;
                 }
                 lhs[jpivot] = x;
@@ -874,7 +876,7 @@ fn solve_etas(
         let ipivot = eta_row[t] as usize;
         let mut x: f64 = 0.0;
         while pos < rbegin[t + 1] as usize {
-            x = work[lindex[pos] as usize].mul_add(lvalue[pos], x);
+            x = work[lindex[pos] as usize].mul_add_c(lvalue[pos], x);
             pos += 1;
         }
         work[ipivot] -= x;
@@ -914,7 +916,7 @@ fn solve_etas_t(
                     pattern[*nz] = i;
                     *nz += 1;
                 }
-                xlhs[i as usize] = (-x).mul_add(lvalue[pos], xlhs[i as usize]);
+                xlhs[i as usize] = (-x).mul_add_c(lvalue[pos], xlhs[i as usize]);
                 *rflops += 1;
             }
         }
@@ -986,7 +988,7 @@ fn solve_lt(
                     if i < 0 {
                         break;
                     }
-                    xlhs[i as usize] = (-x).mul_add(lvalue[pos], xlhs[i as usize]);
+                    xlhs[i as usize] = (-x).mul_add_c(lvalue[pos], xlhs[i as usize]);
                     *lflops += 1;
                     pos += 1;
                 }
@@ -1086,7 +1088,7 @@ fn solve_u(
                     if i < 0 {
                         break;
                     }
-                    work[i as usize] = (-x).mul_add(uvalue[pos], work[i as usize]);
+                    work[i as usize] = (-x).mul_add_c(uvalue[pos], work[i as usize]);
                     *uflops += 1;
                     pos += 1;
                 }

@@ -7,6 +7,7 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #include "presolve/HighsPostsolveStack.h"
 
+#include <cstddef>
 #include <numeric>
 
 #include "lp_data/HConst.h"
@@ -34,6 +35,15 @@ void HighsPostsolveStack::initializeIndexMaps(HighsInt numRow,
 void HighsPostsolveStack::compressIndexMaps(
     const std::vector<HighsInt>& newRowIndex,
     const std::vector<HighsInt>& newColIndex) {
+#ifdef HIGHS_RUST
+  size_t numRow, numCol;
+  highs_rs_postsolve_compress_index_maps(
+      origRowIndex.data(), origRowIndex.size(), origColIndex.data(),
+      origColIndex.size(), newRowIndex.data(), newRowIndex.size(),
+      newColIndex.data(), newColIndex.size(), &numRow, &numCol);
+  origRowIndex.resize(numRow);
+  origColIndex.resize(numCol);
+#else
   // loop over rows, decrease row counter for deleted rows (marked with -1),
   // store original index at new index position otherwise
   HighsInt numRow = origRowIndex.size();
@@ -55,8 +65,70 @@ void HighsPostsolveStack::compressIndexMaps(
       origColIndex[newColIndex[i]] = origColIndex[i];
   }
   origColIndex.resize(numCol);
+#endif
 }
 
+#ifdef HIGHS_RUST
+void HighsPostsolveStack::undoRust(const HighsOptions& options,
+                                   HighsSolution& solution, HighsBasis& basis,
+                                   size_t until, HighsInt report_col) const {
+  // The records as Rust reads them (rust/src/presolve/postsolve.rs)
+  static_assert(sizeof(HighsInt) == 4, "Rust postsolve needs 32-bit HighsInt");
+  static_assert(sizeof(RowType) == 4, "layout of the Rust records");
+  static_assert(sizeof(HighsBasisStatus) == 1, "layout of the Rust records");
+  static_assert(sizeof(Nonzero) == 16, "layout of the Rust records");
+  static_assert(sizeof(LinearTransform) == 24, "layout of the Rust records");
+  static_assert(sizeof(FreeColSubstitution) == 32, "layout of the Rust records");
+  static_assert(sizeof(DoubletonEquation) == 72, "layout of the Rust records");
+  static_assert(sizeof(EqualityRowAddition) == 16, "layout of the Rust records");
+  static_assert(sizeof(EqualityRowAdditions) == 4, "layout of the Rust records");
+  static_assert(sizeof(SingletonRow) == 24, "layout of the Rust records");
+  static_assert(sizeof(FixedCol) == 24, "layout of the Rust records");
+  static_assert(sizeof(RedundantRow) == 4, "layout of the Rust records");
+  static_assert(sizeof(ForcingRow) == 16, "layout of the Rust records");
+  static_assert(sizeof(ForcingColumn) == 24, "layout of the Rust records");
+  static_assert(sizeof(ForcingColumnRemovedRow) == 16,
+                "layout of the Rust records");
+  static_assert(sizeof(DuplicateRow) == 24, "layout of the Rust records");
+  static_assert(sizeof(SlackColSubstitution) == 16,
+                "layout of the Rust records");
+  static_assert(offsetof(DoubletonEquation, rowType) == 64,
+                "layout of the Rust records");
+  static_assert(sizeof(std::pair<ReductionType, size_t>) == 16,
+                "layout of the Rust records");
+
+  // expand the solution and basis to the original index space (Rust
+  // moves the entries)
+  const bool dual_valid = solution.dual_valid;
+  solution.col_value.resize(origNumCol);
+  solution.row_value.resize(origNumRow);
+  if (dual_valid) {
+    solution.col_dual.resize(origNumCol);
+    solution.row_dual.resize(origNumRow);
+  }
+  if (basis.valid) {
+    basis.col_status.resize(origNumCol);
+    basis.row_status.resize(origNumRow);
+  }
+  const PostsolveRsStack s = rustStack();
+  const PostsolveRsTolerances tol{options.primal_feasibility_tolerance,
+                                  options.dual_feasibility_tolerance,
+                                  options.mip_feasibility_tolerance};
+  const PostsolveRsSolution x{solution.col_value.data(),
+                              solution.col_dual.data(),
+                              basis.col_status.data(),
+                              size_t(origNumCol),
+                              solution.row_value.data(),
+                              solution.row_dual.data(),
+                              basis.row_status.data(),
+                              size_t(origNumRow),
+                              dual_valid,
+                              basis.valid};
+  highs_rs_postsolve_undo(&s, &tol, &x, until, report_col);
+}
+#endif
+
+#ifndef HIGHS_RUST
 void HighsPostsolveStack::LinearTransform::undo(const HighsOptions& options,
                                                 HighsSolution& solution) const {
   solution.col_value[col] *= scale;
@@ -866,8 +938,14 @@ void HighsPostsolveStack::DuplicateColumn::undo(const HighsOptions& options,
   }
 }
 
+#endif  // HIGHS_RUST
+
 bool HighsPostsolveStack::DuplicateColumn::okMerge(
     const double tolerance) const {
+#ifdef HIGHS_RUST
+  static_assert(sizeof(DuplicateColumn) == 56, "layout of the Rust record");
+  return highs_rs_postsolve_duplicate_col_ok_merge(this, tolerance);
+#else
   // When merging x and y to x+a.y, not all values of a are permitted,
   // since it must be possible to map back onto feasible values of x
   // and y.
@@ -1009,8 +1087,10 @@ bool HighsPostsolveStack::DuplicateColumn::okMerge(
     }
   }
   return ok_merge;
+#endif
 }
 
+#ifndef HIGHS_RUST
 void HighsPostsolveStack::DuplicateColumn::undoFix(
     const HighsOptions& options, HighsSolution& solution,
     const double mergeValue) const {
@@ -1391,5 +1471,7 @@ void HighsPostsolveStack::SlackColSubstitution::undo(
     basis.col_status[col] = HighsBasisStatus::kNonbasic;
   }
 }
+
+#endif  // HIGHS_RUST
 
 }  // namespace presolve

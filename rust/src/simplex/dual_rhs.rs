@@ -3,6 +3,8 @@
 //! the greatest primal infeasibilities is owned here; HEkk's arrays come
 //! in as slices for each call.
 
+use crate::util::fma::ClangFma;
+
 use crate::hvector::K_HIGHS_ZERO;
 use crate::util::random::HighsRandom;
 use std::cmp::Ordering;
@@ -266,7 +268,7 @@ impl DualRhs {
                 column_index[i_entry] as usize
             };
             // Fused by clang
-            p.base_value[i_row] = (-theta).mul_add(column_array[i_row], p.base_value[i_row]);
+            p.base_value[i_row] = (-theta).mul_add_c(column_array[i_row], p.base_value[i_row]);
             self.work_infeasibility[i_row] = p.infeasibility(i_row);
             if p.base_value[i_row] <= -K_EXCESSIVE_PRIMAL_VALUE
                 || p.base_value[i_row] >= K_EXCESSIVE_PRIMAL_VALUE

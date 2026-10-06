@@ -3,6 +3,7 @@
 //! heuristic, and their postprocessing. Step for step as the C++,
 //! including where clang fuses `a + b * c`.
 
+use crate::util::fma::ClangFma;
 use super::integers::{frexp, integral_scale, is_integral, ldexp, nearest_integer};
 use super::round::{MinCpp, SepaRound, K_HIGHS_INF};
 use super::sort::{partial_sort, partition, pdqsort, pdqsort_branchless, upper_bound};
@@ -615,14 +616,14 @@ impl CutGeneration {
     #[inline]
     fn update_violation_and_norm(&self, index: usize, aj: f64, violation: &mut f64, norm: &mut f64) {
         let s = self.solval[index];
-        *violation = aj.mul_add(s, *violation);
+        *violation = aj.mul_add_c(s, *violation);
         if aj > 0.0 && s <= self.feastol {
             return;
         }
         if aj < 0.0 && s >= self.upper[index] - self.feastol {
             return;
         }
-        *norm = aj.mul_add(aj, *norm);
+        *norm = aj.mul_add_c(aj, *norm);
     }
 
     /// The efficacy of the MIR cut for delta (NaN-free inputs); None if
@@ -645,7 +646,7 @@ impl CutGeneration {
         }
         let contscale = scale * oneoveroneminusf0;
         let mut sqrnorm = contscale * contscale * contsqrnorm;
-        let mut viol = contscale.mul_add(contcontribution, -downrhs);
+        let mut viol = contscale.mul_add_c(contcontribution, -downrhs);
         let feastol = self.feastol;
         for &[v, s, u] in &self.intdata {
             let scalaj = v * scale;
@@ -653,14 +654,14 @@ impl CutGeneration {
             let fj = scalaj - downaj;
             let aj = downaj + 0.0f64.max_cpp((fj - f0) * oneoveroneminusf0);
             // updateViolationAndNorm
-            viol = aj.mul_add(s, viol);
+            viol = aj.mul_add_c(s, viol);
             if aj > 0.0 && s <= feastol {
                 continue;
             }
             if aj < 0.0 && s >= u - feastol {
                 continue;
             }
-            sqrnorm = aj.mul_add(aj, sqrnorm);
+            sqrnorm = aj.mul_add_c(aj, sqrnorm);
         }
         Some(viol / sqrnorm.sqrt())
     }
@@ -984,13 +985,13 @@ impl CutGeneration {
                     has_general_ints = true;
                 }
                 if self.vals[i] > 0.0 {
-                    maxact = self.vals[i].mul_add(self.upper[i], maxact);
+                    maxact = self.vals[i].mul_add_c(self.upper[i], maxact);
                 }
             }
         }
 
         // 100 + 0.15 * numCols, fused by clang
-        let max_len = (env.num_lp_cols() as i32 as f64).mul_add(0.15, 100.0) as i32 as usize;
+        let max_len = (env.num_lp_cols() as i32 as f64).mul_add_c(0.15, 100.0) as i32 as usize;
         if self.rowlen - num_zeros > max_len {
             let num_cancel = self.rowlen - num_zeros - max_len;
             let mut cancel_nzs = std::mem::take(&mut self.cancel_nzs);
@@ -1013,7 +1014,7 @@ impl CutGeneration {
                 if self.vals[j] < 0.0 {
                     self.rhs -= self.vals[j] * self.upper[j];
                 } else {
-                    maxact = (-self.vals[j]).mul_add(self.upper[j], maxact);
+                    maxact = (-self.vals[j]).mul_add_c(self.upper[j], maxact);
                 }
                 self.vals[j] = 0.0;
             }
@@ -1369,7 +1370,7 @@ impl CutGeneration {
                 self.complementation[i] = 0;
                 self.solval[i] -= glb;
             }
-            activity = self.solval[i].mul_add(self.vals[i], activity);
+            activity = self.solval[i].mul_add_c(self.vals[i], activity);
         }
         if activity > self.rhs.to_f64() {
             let sol_scale = self.rhs.to_f64() / activity;

@@ -20,6 +20,7 @@
 //! - LP rows are copied: a cut row's storage in the cut pool can move
 //!   when cuts are added.
 
+use crate::util::fma::ClangFma;
 use crate::util::sparse_vector_sum::HighsSparseVectorSum;
 use std::ffi::c_void;
 
@@ -528,12 +529,12 @@ impl SepaRound {
             if d.vub_col != -1 {
                 let vb = self.vub[col];
                 let y = col_value[d.vub_col as usize];
-                frac = frac || is_frac(y) || vb.coef.mul_add(y, vb.constant) < x - feastol;
+                frac = frac || is_frac(y) || vb.coef.mul_add_c(y, vb.constant) < x - feastol;
             }
             if d.vlb_col != -1 {
                 let vb = self.vlb[col];
                 let y = col_value[d.vlb_col as usize];
-                frac = frac || is_frac(y) || vb.coef.mul_add(y, vb.constant) > x + feastol;
+                frac = frac || is_frac(y) || vb.coef.mul_add_c(y, vb.constant) > x + feastol;
             }
             self.cols[col].fractional = frac;
         }

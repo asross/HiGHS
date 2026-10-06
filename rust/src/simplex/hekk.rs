@@ -32,6 +32,8 @@
 //! rarely, the handling of a rank deficient initial basis and the debug
 //! check of a rank deficient INVERT.
 
+use crate::util::fma::ClangFma;
+
 use std::cell::Cell;
 use std::ffi::{c_char, c_void, CString};
 
@@ -927,7 +929,7 @@ pub fn factor_solve_error(e: &mut EkkView) -> f64 {
     for (&i_row, &value) in solution_index.iter().zip(&solution_value) {
         for i_el in e.ar_p_end[i_row] as usize..e.ar_start[i_row + 1] as usize {
             let i_col = e.ar_index[i_el] as usize;
-            btran_scattered_rhs[i_col] = e.ar_value[i_el].mul_add(value, btran_scattered_rhs[i_col]);
+            btran_scattered_rhs[i_col] = e.ar_value[i_el].mul_add_c(value, btran_scattered_rhs[i_col]);
         }
         let i_col = num_col + i_row;
         if e.nonbasic_flag[i_col] == 0 {

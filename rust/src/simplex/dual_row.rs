@@ -6,6 +6,8 @@
 //! where HEkkDual reads and writes them, and are passed in per call along
 //! with the HEkk arrays.
 
+use crate::util::fma::ClangFma;
+
 use std::collections::BTreeSet;
 
 use crate::hvector::{K_HIGHS_TINY, K_HIGHS_ZERO};
@@ -131,7 +133,7 @@ impl DualRow {
             if alpha > ta {
                 self.work_data[work_count] = WorkPair { col: i_col, value: alpha };
                 work_count += 1;
-                let relax = work_dual[i_col as usize].mul_add(mv as f64, td);
+                let relax = work_dual[i_col as usize].mul_add_c(mv as f64, td);
                 if work_theta * alpha > relax {
                     work_theta = relax / alpha;
                 }
@@ -162,7 +164,7 @@ impl DualRow {
         let mut work_count = 0;
         let mut total_change = 0.0;
         let total_delta = work_delta.abs();
-        let mut select_theta = 10f64.mul_add(work_theta, 1e-7);
+        let mut select_theta = 10f64.mul_add_c(work_theta, 1e-7);
         loop {
             for i in work_count..full_count {
                 let WorkPair { col, value: alpha } = work_data[i];
@@ -171,7 +173,7 @@ impl DualRow {
                 if alpha * select_theta >= tight {
                     work_data.swap(work_count, i);
                     work_count += 1;
-                    total_change = work_range[i_col].mul_add(alpha, total_change);
+                    total_change = work_range[i_col].mul_add_c(alpha, total_change);
                 }
             }
             select_theta *= 10.0;
@@ -259,7 +261,7 @@ impl DualRow {
                 if dual <= select_theta * value {
                     work_data.swap(work_count, i);
                     work_count += 1;
-                    total_change = value.mul_add(work_range[i_col], total_change);
+                    total_change = value.mul_add_c(work_range[i_col], total_change);
                 } else if dual + td < remain_theta * value {
                     remain_theta = (dual + td) / value;
                 }
@@ -375,7 +377,7 @@ impl DualRow {
             for (&i_row, &value) in index.iter().zip(value) {
                 let i_row = i_row as usize;
                 let value0 = column[i_row];
-                let value1 = change.mul_add(value, value0);
+                let value1 = change.mul_add_c(value, value0);
                 if value0 == 0.0 {
                     column_index[*column_count] = i_row as i32;
                     *column_count += 1;
@@ -400,7 +402,7 @@ impl DualRow {
         let mut dual_objective_value_change = 0.0;
         for (&i_col, &value) in self.pack_index[..pack_count].iter().zip(&self.pack_value[..pack_count]) {
             let i_col = i_col as usize;
-            work_dual[i_col] = (-theta).mul_add(value, work_dual[i_col]);
+            work_dual[i_col] = (-theta).mul_add_c(value, work_dual[i_col]);
             // Identify the change to the dual objective
             let delta_dual = theta * value;
             let local_value = work_value[i_col];
@@ -444,7 +446,7 @@ impl DualRow {
                 let (from, to) = (a.start[i_var] as usize, a.start[i_var + 1] as usize);
                 let mut result = 0.0;
                 for (&i_row, &value) in a.index[from..to].iter().zip(&a.value[from..to]) {
-                    result = row_ep[i_row as usize].mul_add(value, result);
+                    result = row_ep[i_row as usize].mul_add_c(value, result);
                 }
                 result
             } else {
@@ -478,7 +480,7 @@ impl DualRow {
             }
             let pv = devex_index[vr_n] as f64 * value;
             if pv != 0.0 {
-                computed_edge_weight = pv.mul_add(pv, computed_edge_weight);
+                computed_edge_weight = pv.mul_add_c(pv, computed_edge_weight);
             }
         }
         computed_edge_weight

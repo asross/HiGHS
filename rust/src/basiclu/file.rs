@@ -16,6 +16,8 @@
 //! file size. next/prev link the lines in memory order (next[nlines] and
 //! prev[nlines] are the first and last line).
 
+use crate::util::fma::ClangFma;
+
 use super::Int;
 
 /// lu_list_init: initialize all lists to empty; returns the initial
@@ -210,7 +212,7 @@ pub(crate) fn file_compress(
             used += 1;
         }
         end[iu] = used;
-        extra_space = stretch.mul_add((iend - ibeg) as f64, pad as f64) as Int;
+        extra_space = stretch.mul_add_c((iend - ibeg) as f64, pad as f64) as Int;
         nz += iend - ibeg;
         i = next[iu];
     }

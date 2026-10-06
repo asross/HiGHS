@@ -1,6 +1,7 @@
 //! HighsModkSeparator::separateLpSolution: maximally violated mod-k cuts
 //! from the congruence system of the tight integral rows.
 
+use crate::util::fma::ClangFma;
 use super::cut_generation::CutGeneration;
 use super::gfk::{GfkSolve, SolutionEntry};
 use super::integers::{integral_scale, nearest_integer};
@@ -42,7 +43,7 @@ pub fn separate(lp: &mut SepaRound, cutgen: &mut CutGeneration) {
     let mut solval: Vec<f64> = Vec::new();
     let mut num_nonzero_rhs = 0;
     // 1000 + 0.1 * num_col_, fused by clang
-    let max_int_row_len = (num_col as i32 as f64).mul_add(0.1, 1000.0) as i32 as usize;
+    let max_int_row_len = (num_col as i32 as f64).mul_add_c(0.1, 1000.0) as i32 as usize;
 
     for row in 0..num_row {
         if skip_row[row] {

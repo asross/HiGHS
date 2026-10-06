@@ -15,6 +15,7 @@
 #include "../extern/pdqsort/pdqsort.h"
 #include "mip/HighsConflictPool.h"
 #include "mip/HighsCutPool.h"
+#include "mip/HighsDomainRust.h"
 #include "mip/HighsMipSolverData.h"
 
 static double activityContributionMin(double coef, const double& lb,
@@ -78,11 +79,13 @@ HighsDomain::HighsDomain(HighsMipSolver& mipsolver) : mipsolver(&mipsolver) {
 }
 
 void HighsDomain::addCutpool(HighsCutPool& cutpool) {
+  invalidateRustView();
   HighsInt cutpoolindex = cutpoolpropagation.size();
   cutpoolpropagation.emplace_back(cutpoolindex, this, cutpool);
 }
 
 void HighsDomain::addConflictPool(HighsConflictPool& conflictPool) {
+  invalidateRustView();
   HighsInt conflictPoolIndex = conflictPoolPropagation.size();
   conflictPoolPropagation.emplace_back(conflictPoolIndex, this, conflictPool);
 }
@@ -177,6 +180,8 @@ void HighsDomain::ConflictPoolPropagation::conflictDeleted(HighsInt conflict) {
 }
 
 void HighsDomain::ConflictPoolPropagation::conflictAdded(HighsInt conflict) {
+  // resizes the arrays below
+  domain->invalidateRustView();
   HighsInt start = conflictpool_->getConflictRanges()[conflict].first;
   HighsInt end = conflictpool_->getConflictRanges()[conflict].second;
   const std::vector<HighsDomainChange>& conflictEntries =
@@ -446,6 +451,8 @@ void HighsDomain::CutpoolPropagation::recomputeCapacityThreshold(HighsInt cut) {
 }
 
 void HighsDomain::CutpoolPropagation::cutAdded(HighsInt cut, bool propagate) {
+  // resizes the arrays below and may have moved the cut pool's matrix
+  domain->invalidateRustView();
   if (!propagate) {
     if (domain != &domain->mipsolver->mipdata_->getDomain()) return;
     HighsInt start = cutpool->getMatrix().getRowStart(cut);
@@ -1261,6 +1268,16 @@ void HighsDomain::computeMinActivity(HighsInt start, HighsInt end,
                                      const HighsInt* ARindex,
                                      const double* ARvalue, HighsInt& ninfmin,
                                      HighsCDouble& activitymin) const {
+#ifdef HIGHS_RUST
+  {
+    highs_rs::ConstView view(*this);
+    const highs_rs::Domain* v = view.get();
+    highs_rs::highs_rs_domain_compute_activity(v, ARindex + start,
+                                               ARvalue + start, end - start,
+                                               false, &ninfmin, &activitymin);
+    return;
+  }
+#endif
   if (infeasible_) {
     activitymin = 0.0;
     ninfmin = 0;
@@ -1306,6 +1323,16 @@ void HighsDomain::computeMaxActivity(HighsInt start, HighsInt end,
                                      const HighsInt* ARindex,
                                      const double* ARvalue, HighsInt& ninfmax,
                                      HighsCDouble& activitymax) const {
+#ifdef HIGHS_RUST
+  {
+    highs_rs::ConstView view(*this);
+    const highs_rs::Domain* v = view.get();
+    highs_rs::highs_rs_domain_compute_activity(v, ARindex + start,
+                                               ARvalue + start, end - start,
+                                               true, &ninfmax, &activitymax);
+    return;
+  }
+#endif
   if (infeasible_) {
     activitymax = 0.0;
     ninfmax = 0;
@@ -1416,6 +1443,15 @@ HighsInt HighsDomain::propagateRowUpper(const HighsInt* Rindex,
                                         const HighsCDouble& minactivity,
                                         HighsInt ninfmin,
                                         HighsDomainChange* boundchgs) const {
+#ifdef HIGHS_RUST
+  {
+    highs_rs::ConstView view(*this);
+    const highs_rs::Domain* v = view.get();
+    return highs_rs::highs_rs_domain_propagate_row(v, Rindex, Rvalue, Rlen,
+                                                   Rupper, &minactivity,
+                                                   ninfmin, false, boundchgs);
+  }
+#endif
   assert(std::isfinite(double(minactivity)));
   if (ninfmin > 1) return 0;
   HighsInt numchgs = 0;
@@ -1433,11 +1469,12 @@ HighsInt HighsDomain::propagateRowUpper(const HighsInt* Rindex,
       // inside the current bound: skip the exact (double-double)
       // computation where a double estimate, with a generous margin for
       // its rounding errors, shows that it is not
-      if (impliedBoundNoTighter(Rindex[i], Rvalue[i] > 0,
-                                (Rupper - (minact - actcontribution)) / Rvalue[i],
-                                (std::fabs(Rupper) + std::fabs(minact) +
-                                 std::fabs(actcontribution)) /
-                                    std::fabs(Rvalue[i])))
+      if (impliedBoundNoTighter(
+              Rindex[i], Rvalue[i] > 0,
+              (Rupper - (minact - actcontribution)) / Rvalue[i],
+              (std::fabs(Rupper) + std::fabs(minact) +
+               std::fabs(actcontribution)) /
+                  std::fabs(Rvalue[i])))
         continue;
       minresact = minactivity - actcontribution;
     }
@@ -1471,6 +1508,15 @@ HighsInt HighsDomain::propagateRowLower(const HighsInt* Rindex,
                                         const HighsCDouble& maxactivity,
                                         HighsInt ninfmax,
                                         HighsDomainChange* boundchgs) const {
+#ifdef HIGHS_RUST
+  {
+    highs_rs::ConstView view(*this);
+    const highs_rs::Domain* v = view.get();
+    return highs_rs::highs_rs_domain_propagate_row(v, Rindex, Rvalue, Rlen,
+                                                   Rlower, &maxactivity,
+                                                   ninfmax, true, boundchgs);
+  }
+#endif
   assert(std::isfinite(double(maxactivity)));
   if (ninfmax > 1) return 0;
   HighsInt numchgs = 0;
@@ -1485,11 +1531,12 @@ HighsInt HighsDomain::propagateRowLower(const HighsInt* Rindex,
       maxresact = maxactivity;
     } else {
       // as in propagateRowUpper
-      if (impliedBoundNoTighter(Rindex[i], Rvalue[i] < 0,
-                                (Rlower - (maxact - actcontribution)) / Rvalue[i],
-                                (std::fabs(Rlower) + std::fabs(maxact) +
-                                 std::fabs(actcontribution)) /
-                                    std::fabs(Rvalue[i])))
+      if (impliedBoundNoTighter(
+              Rindex[i], Rvalue[i] < 0,
+              (Rlower - (maxact - actcontribution)) / Rvalue[i],
+              (std::fabs(Rlower) + std::fabs(maxact) +
+               std::fabs(actcontribution)) /
+                  std::fabs(Rvalue[i])))
         continue;
       maxresact = maxactivity - actcontribution;
     }
@@ -1558,6 +1605,16 @@ void HighsDomain::updateActivityLbChange(HighsInt col, double oldbound,
     objProp_.updateActivityLbChange(col, oldbound, newbound);
     if (infeasible_) return;
   }
+
+#ifdef HIGHS_RUST
+  if (!recordRedundantRows_) {
+    highs_rs::highs_rs_domain_update_activity(
+        highs_rs::DomainAccess::view(*this), col, oldbound, newbound, false);
+    if (infeasible_ && objProp_.isActive())
+      objProp_.updateActivityLbChange(col, newbound, oldbound);
+    return;
+  }
+#endif
 
   for (HighsInt i = start; i != end; ++i) {
     if (mip->a_matrix_.value_[i] > 0) {
@@ -1725,6 +1782,16 @@ void HighsDomain::updateActivityUbChange(HighsInt col, double oldbound,
     objProp_.updateActivityUbChange(col, oldbound, newbound);
     if (infeasible_) return;
   }
+
+#ifdef HIGHS_RUST
+  if (!recordRedundantRows_) {
+    highs_rs::highs_rs_domain_update_activity(
+        highs_rs::DomainAccess::view(*this), col, oldbound, newbound, true);
+    if (infeasible_ && objProp_.isActive())
+      objProp_.updateActivityUbChange(col, newbound, oldbound);
+    return;
+  }
+#endif
 
   for (HighsInt i = start; i != end; ++i) {
     if (mip->a_matrix_.value_[i] > 0) {
@@ -1977,6 +2044,7 @@ void HighsDomain::markPropagate(HighsInt row) {
 }
 
 void HighsDomain::computeRowActivities() {
+  invalidateRustView();
   activitymin_.resize(mipsolver->numRow());
   activitymininf_.resize(mipsolver->numRow());
   activitymax_.resize(mipsolver->numRow());
@@ -1984,6 +2052,14 @@ void HighsDomain::computeRowActivities() {
   capacityThreshold_.resize(mipsolver->numRow());
   propagateflags_.resize(mipsolver->numRow());
   propagateinds_.reserve(mipsolver->numRow());
+
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::Domain* v = highs_rs::DomainAccess::view(*this);
+    highs_rs::highs_rs_domain_compute_row_activities(v);
+    return;
+  }
+#endif
 
   for (HighsInt i = 0; i != mipsolver->numRow(); ++i) {
     HighsInt start = mipsolver->mipdata_->ARstart_[i];
@@ -2488,7 +2564,18 @@ bool HighsDomain::propagate() {
 
         // printf("numproprows (model): %" HIGHSINT_FORMAT "\n", numproprows);
 
+#ifdef HIGHS_RUST
+        {
+          const highs_rs::Domain* v = highs_rs::DomainAccess::view(*this);
+          highs_rs::highs_rs_domain_propagate_model_rows(
+              v, propagateinds.data(), numproprows,
+              propRowNumChangedBounds_.data(), changedbounds.get(),
+              HighsInt(changedboundsize));
+          (void)propagateIndex;
+        }
+#else
         for (HighsInt k = 0; k != numproprows; ++k) propagateIndex(k);
+#endif
 
         for (HighsInt k = 0; k != numproprows; ++k) {
           HighsInt i = propagateinds[k];
@@ -2554,7 +2641,16 @@ bool HighsDomain::propagate() {
 
           // printf("numproprows (cuts): %" HIGHSINT_FORMAT "\n", numproprows);
 
+#ifdef HIGHS_RUST
+          const highs_rs::Domain* v = highs_rs::DomainAccess::view(*this);
+          highs_rs::highs_rs_domain_propagate_cuts(
+              v, cutpool, propagateinds.data(), numproprows,
+              propRowNumChangedBounds_.data(), changedbounds.get(),
+              HighsInt(changedboundsize));
+          (void)propagateIndex;
+#else
           for (HighsInt k = 0; k != numproprows; ++k) propagateIndex(k);
+#endif
 
           for (HighsInt k = 0; k != numproprows; ++k) {
             HighsInt i = propagateinds[k];

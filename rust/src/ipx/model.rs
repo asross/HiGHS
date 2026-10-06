@@ -14,6 +14,8 @@
 //! The user model is (a) scaled (equilibration, and "flipping" variables
 //! with only a finite upper bound) and (b) dualized if appropriate.
 
+use crate::util::fma::ClangFma;
+
 use super::control::Control;
 use super::fmt::{g, sci, textline};
 use super::sparse_matrix::{dot_column, scale_column, scatter_column, transpose, SparseMatrix};
@@ -503,22 +505,22 @@ impl Model {
             let mut dobjective = self.offset + dot(&self.scaled_rhs, y);
             for j in 0..nv {
                 if lbu[j].is_finite() {
-                    dobjective = lbu[j].mul_add(zl[j], dobjective);
+                    dobjective = lbu[j].mul_add_c(zl[j], dobjective);
                 }
                 if ubu[j].is_finite() {
-                    dobjective = (-ubu[j]).mul_add(zu[j], dobjective);
+                    dobjective = (-ubu[j]).mul_add_c(zu[j], dobjective);
                 }
             }
             let objective_gap =
-                (pobjective - dobjective) / 0.5f64.mul_add((pobjective + dobjective).abs(), 1.0);
+                (pobjective - dobjective) / 0.5f64.mul_add_c((pobjective + dobjective).abs(), 1.0);
 
             let mut complementarity = 0.0f64;
             for j in 0..nv {
                 if lbu[j].is_finite() {
-                    complementarity = xl[j].mul_add(zl[j], complementarity);
+                    complementarity = xl[j].mul_add_c(zl[j], complementarity);
                 }
                 if ubu[j].is_finite() {
-                    complementarity = xu[j].mul_add(zu[j], complementarity);
+                    complementarity = xu[j].mul_add_c(zu[j], complementarity);
                 }
             }
             // vectorized by 8 in C++: unfused for the first nc/8*8 terms
@@ -528,7 +530,7 @@ impl Model {
                 complementarity -= y[i] * slack[i];
             }
             for i in nb..nc {
-                complementarity = (-y[i]).mul_add(slack[i], complementarity);
+                complementarity = (-y[i]).mul_add_c(slack[i], complementarity);
             }
 
             info.abs_presidual = presidual;
@@ -1443,12 +1445,12 @@ impl Model {
                 }
             } else {
                 for j in 0..self.num_var {
-                    lhs[j] = alpha.mul_add(dot_column(ai, j, rhs), lhs[j]);
+                    lhs[j] = alpha.mul_add_c(dot_column(ai, j, rhs), lhs[j]);
                 }
             }
         } else if self.dualized {
             for i in 0..self.num_constr {
-                lhs[i] = alpha.mul_add(dot_column(ai, i, rhs), lhs[i]);
+                lhs[i] = alpha.mul_add_c(dot_column(ai, i, rhs), lhs[i]);
             }
         } else {
             for j in 0..self.num_var {

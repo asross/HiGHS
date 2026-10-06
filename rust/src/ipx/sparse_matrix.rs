@@ -1,5 +1,7 @@
 //! sparse_matrix.h/.cc: sparse matrix in CSC format and kernels on it.
 
+use crate::util::fma::ClangFma;
+
 use super::{cmax, utils, Int};
 
 /// Sparse matrix in CSC format, with a queue for building a new column.
@@ -296,7 +298,7 @@ pub fn dot_column(a: &SparseMatrix, j: usize, rhs: &[f64]) -> f64 {
     let (b, e) = (a.begin(j), a.end(j));
     let mut d = 0.0f64;
     for (&i, &v) in a.rowidx[b..e].iter().zip(&a.values[b..e]) {
-        d = rhs[i as usize].mul_add(v, d);
+        d = rhs[i as usize].mul_add_c(v, d);
     }
     d
 }
@@ -307,7 +309,7 @@ pub fn scatter_column(a: &SparseMatrix, j: usize, alpha: f64, lhs: &mut [f64]) {
     let (b, e) = (a.begin(j), a.end(j));
     for (&i, &v) in a.rowidx[b..e].iter().zip(&a.values[b..e]) {
         let i = i as usize;
-        lhs[i] = alpha.mul_add(v, lhs[i]);
+        lhs[i] = alpha.mul_add_c(v, lhs[i]);
     }
 }
 
@@ -316,7 +318,7 @@ pub fn multiply_add(a: &SparseMatrix, rhs: &[f64], alpha: f64, lhs: &mut [f64], 
     let n = a.cols() as usize;
     if trans == b't' || trans == b'T' {
         for j in 0..n {
-            lhs[j] = alpha.mul_add(dot_column(a, j, rhs), lhs[j]);
+            lhs[j] = alpha.mul_add_c(dot_column(a, j, rhs), lhs[j]);
         }
     } else {
         for j in 0..n {
@@ -354,7 +356,7 @@ pub fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: u8, upper: bool,
                 let end = c[1] as usize - usize::from(!unitdiag);
                 let mut d = 0.0f64;
                 for (&i, &v) in ai[begin..end].iter().zip(&ax[begin..end]) {
-                    d = x[i as usize].mul_add(v, d);
+                    d = x[i as usize].mul_add_c(v, d);
                 }
                 x[i] -= d;
                 if !unitdiag {
@@ -371,7 +373,7 @@ pub fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: u8, upper: bool,
                 let end = ap[i + 1] as usize;
                 let mut d = 0.0f64;
                 for (&i, &v) in ai[begin..end].iter().zip(&ax[begin..end]) {
-                    d = x[i as usize].mul_add(v, d);
+                    d = x[i as usize].mul_add_c(v, d);
                 }
                 x[i] -= d;
                 if !unitdiag {
@@ -394,7 +396,7 @@ pub fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: u8, upper: bool,
             if temp != 0.0 {
                 for (&i, &v) in ai[begin..end].iter().zip(&ax[begin..end]) {
                     let i = i as usize;
-                    x[i] = (-v).mul_add(temp, x[i]);
+                    x[i] = (-v).mul_add_c(temp, x[i]);
                 }
                 nz += 1;
             }
@@ -411,7 +413,7 @@ pub fn triangular_solve(a: &SparseMatrix, x: &mut [f64], trans: u8, upper: bool,
             if temp != 0.0 {
                 for (&i, &v) in ai[begin..end].iter().zip(&ax[begin..end]) {
                     let i = i as usize;
-                    x[i] = (-v).mul_add(temp, x[i]);
+                    x[i] = (-v).mul_add_c(temp, x[i]);
                 }
                 nz += 1;
             }
@@ -471,7 +473,7 @@ pub fn normest_inverse(a: &SparseMatrix, upper: bool, unitdiag: bool) -> f64 {
             }
             let mut temp = 0.0f64;
             for p in begin..end {
-                temp = (-x[a.index(p)]).mul_add(a.values[p], temp);
+                temp = (-x[a.index(p)]).mul_add_c(a.values[p], temp);
             }
             temp += if temp >= 0.0 { 1.0 } else { -1.0 };
             if !unitdiag {
@@ -488,7 +490,7 @@ pub fn normest_inverse(a: &SparseMatrix, upper: bool, unitdiag: bool) -> f64 {
             }
             let mut temp = 0.0f64;
             for p in begin..end {
-                temp = (-x[a.index(p)]).mul_add(a.values[p], temp);
+                temp = (-x[a.index(p)]).mul_add_c(a.values[p], temp);
             }
             temp += if temp >= 0.0 { 1.0 } else { -1.0 };
             if !unitdiag {

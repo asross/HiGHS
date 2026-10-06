@@ -3,6 +3,8 @@
 //! nonzero dual and primal pushes of nonbasic variables between their
 //! bounds.
 
+use crate::util::fma::ClangFma;
+
 use super::basis::{copy_basic, Basis};
 use super::control::Control;
 use super::fmt::{fmt, sci2, textline};
@@ -273,7 +275,7 @@ impl<'a> Crossover<'a> {
             // Update solution.
             if step != 0.0 {
                 let update = |x: &mut f64, pivot: f64, lb: f64, ub: f64| {
-                    *x = cmin(cmax(step.mul_add(pivot, *x), lb), ub);
+                    *x = cmin(cmax(step.mul_add_c(pivot, *x), lb), ub);
                 };
                 if ftran.sparse() {
                     for &p in &ftran.pattern[..ftran.nnz() as usize] {
@@ -409,10 +411,10 @@ impl<'a> Crossover<'a> {
             // Update solution.
             if step != 0.0 {
                 btran.for_each_nonzero(|i, x| {
-                    y[i] = step.mul_add(x, y[i]);
+                    y[i] = step.mul_add_c(x, y[i]);
                 });
                 let update = |zj: &mut f64, pivot: f64, sr: i32| {
-                    *zj = (-step).mul_add(pivot, *zj);
+                    *zj = (-step).mul_add_c(pivot, *zj);
                     if sr & 1 != 0 {
                         *zj = cmax(*zj, 0.0);
                     }
@@ -470,13 +472,13 @@ fn primal_ratio_test(
     ftran.for_each_nonzero(|p, pivot| {
         if pivot.abs() > PIVOT_ZERO_TOL {
             // test block at lower bound
-            if step.mul_add(pivot, xbasic[p]) < lbbasic[p] - feastol {
+            if step.mul_add_c(pivot, xbasic[p]) < lbbasic[p] - feastol {
                 step = (lbbasic[p] - xbasic[p] - feastol) / pivot;
                 pblock = p as Int;
                 block_at_lb = true;
             }
             // test block at upper bound
-            if step.mul_add(pivot, xbasic[p]) > ubbasic[p] + feastol {
+            if step.mul_add_c(pivot, xbasic[p]) > ubbasic[p] + feastol {
                 step = (ubbasic[p] - xbasic[p] + feastol) / pivot;
                 pblock = p as Int;
                 block_at_lb = false;
@@ -541,11 +543,11 @@ fn dual_ratio_test(z: &[f64], row: &IndexedVector, sign_restrict: &[i32], mut st
     // First pass: determine maximum step size exploiting feasibility tol.
     for_each_in_row(row, z, sign_restrict, |j, pivot, zj, sr| {
         if pivot.abs() > PIVOT_ZERO_TOL {
-            if (sr & 1) != 0 && (-step).mul_add(pivot, zj) < -feastol {
+            if (sr & 1) != 0 && (-step).mul_add_c(pivot, zj) < -feastol {
                 step = (zj + feastol) / pivot;
                 jblock = j as Int;
             }
-            if (sr & 2) != 0 && (-step).mul_add(pivot, zj) > feastol {
+            if (sr & 2) != 0 && (-step).mul_add_c(pivot, zj) > feastol {
                 step = (zj - feastol) / pivot;
                 jblock = j as Int;
             }

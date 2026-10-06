@@ -1,5 +1,7 @@
 //! utils.h/.cc: norms and permutations of dense vectors.
 
+use crate::util::fma::ClangFma;
+
 use super::{cmax, Int};
 use std::cmp::Ordering;
 
@@ -50,7 +52,7 @@ pub(crate) fn dot_blocked(x: &[f64], y: &[f64], acc: f64, block: usize) -> f64 {
         d += x[i] * y[i];
     }
     for i in nb..n {
-        d = x[i].mul_add(y[i], d);
+        d = x[i].mul_add_c(y[i], d);
     }
     d
 }
@@ -60,7 +62,7 @@ pub(crate) fn dot_blocked(x: &[f64], y: &[f64], acc: f64, block: usize) -> f64 {
 pub(crate) fn dot_fused(x: &[f64], y: &[f64]) -> f64 {
     let mut d = 0.0f64;
     for i in 0..x.len() {
-        d = x[i].mul_add(y[i], d);
+        d = x[i].mul_add_c(y[i], d);
     }
     d
 }

@@ -1,6 +1,7 @@
 //! HighsPathSeparator::separateLpSolution: aggregations of rows along paths
 //! of continuous columns, and path mixing cuts.
 
+use crate::util::fma::ClangFma;
 use super::cut_generation::CutGeneration;
 use super::round::{MinCpp, SepaRound};
 use crate::util::cdouble::CDouble;
@@ -504,7 +505,7 @@ impl PathSeparator {
                                     viol += -solval[j] * cut_vals[j];
                                 }
                                 for j in blocked..num_inds {
-                                    viol = (-solval[j]).mul_add(cut_vals[j], viol);
+                                    viol = (-solval[j]).mul_add_c(cut_vals[j], viol);
                                 }
                                 viol *= delta;
                                 if viol > 10.0 * feastol {

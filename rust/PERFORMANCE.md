@@ -72,3 +72,20 @@ Notes:
 - QP (not in perf.py; generated QPs, see the QP port commit): 0.90.
 - MIP is still mostly C++ (presolve, search, cuts, propagation), so its
   ratio reflects only the LP solves inside it.
+- Unit tests (ctest -j1, `-DBUILD_TESTING=ON -DALL_TESTS=ON`, 168/168 pass
+  in both): 197 s C++, 133 s Rust (wall time, quiet machine); unit_tests_all
+  76 s -> 53 s.
+
+## x86_64 (production architecture), 2026-10-05
+
+Until 2026-10-05 the port mirrored clang's arm64 fused multiply-adds with
+`mul_add` everywhere, which on x86_64 (no FMA in the default C++ build)
+would have been a slow software `fma()` and changed the search paths. All
+mirrored FMAs now go through `mul_add_c` (fused on aarch64 only). x86_64
+builds (`-DCMAKE_OSX_ARCHITECTURES=x86_64
+-DHIGHS_RUST_TARGET=x86_64-apple-darwin`), run under Rosetta 2 with
+`perf.py --reps 1`: **same path on all 31 cases** against the x86_64 C++.
+Cycles under Rosetta are translated code and one run each, so only
+indicative (geomean 0.775; readers 0.26, dual simplex 0.79, IPX 0.87,
+MIP 1.02, primal 1.02, PDLP 1.03); native x86 timings (e.g. EC2) still to
+do.

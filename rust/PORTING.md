@@ -23,6 +23,13 @@ file readers in parallel. IPX, PDLP and QP last.
   again in in-order reductions (`d += x[i]*y[i]`): the first n/block*block
   terms are rounded products, the tail is fused (see
   `ipx::utils::dot_blocked`); check each call site in the final library.
+- **x86_64.** Production runs on x86_64, where the default C++ build has no
+  FMA instructions and clang fuses nothing (and the blocked reductions are
+  then plain in-order sums). So write every mirrored FMA as
+  `x.mul_add_c(a, b)` (util/fma.rs): `mul_add` on aarch64, `x * a + b`
+  elsewhere. A test rejects raw `mul_add`. Check x86_64 paths with
+  `-DCMAKE_OSX_ARCHITECTURES=x86_64 -DHIGHS_RUST_TARGET=x86_64-apple-darwin`
+  builds under Rosetta (`rust/bench/perf.py` on both).
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`
@@ -118,3 +125,37 @@ initial basis. The factor's refactorization information and the saved
 INVERT of putIterate/getIterate are held by the Rust factor.
 HEkkDual.cpp is compiled in a unity build, so clang inlines e.g.
 HVector::norm2 into chooseRow contracted: check each compiled copy.
+
+## The MIP domain propagation
+
+HighsDomain keeps its C++ class and data; under HIGHS_RUST its
+propagation kernels run in Rust (mip/domain.rs) on a view of that data:
+row activities with their infinity counts (HighsCDouble arrays),
+updateActivityLbChange/UbChange for model rows, cut pools and the
+watched literals of conflict pools, the capacity thresholds, markPropagate,
+computeRowActivities, computeMin/MaxActivity, propagateRowUpper/Lower and
+the row and cut batches of propagate(). The kernels never call back into
+C++ (they append to the C++ lists of rows/cuts/conflicts to propagate
+through a push function). The view is cached in HighsDomain::rsView_ and
+invalidated where a vector it points to may move (copy, assignment,
+computeRowActivities, pool changes, cutAdded, conflictAdded); debug builds
+check the cache against a fresh fill on every use. The const methods,
+which threads may call concurrently on the global domain, use a temporary
+view. Still C++: changeBound, backtrack, the domain change stack,
+objective propagation (its red-black trees), conflict propagation and
+analysis, and the clique table and implications that changeBound calls.
+
+## Postsolve
+
+The undo side of HighsPostsolveStack runs in Rust (rust/src/presolve/
+postsolve.rs): undo, undoPrimal, undoUntil, getReducedPrimalSolution,
+compressIndexMaps and DuplicateColumn::okMerge. HPresolve (C++) still
+records the reductions through the inline templates of the header, so the
+C++ class keeps owning the HighsDataStack bytes, the reduction list and the
+index maps; Rust reads them through a view (`PostsolveRsStack`) and parses
+the records with the C++ byte layout (`#[repr(C)]` copies, sizes checked by
+static_assert on both sides; HighsInt must be 32 bits). Rust only reads the
+stack, so thread_safe undoPrimal needs no copy. C++ resizes the solution
+and basis vectors to the original space; Rust does the rest. The fused
+products in plain double are `x - a*d` of ForcingRow, `x + s*y` and
+`v - s*y` of DuplicateColumn, and `x + s*y` of transformToPresolvedSpace.

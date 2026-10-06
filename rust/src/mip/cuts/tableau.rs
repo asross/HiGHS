@@ -1,6 +1,7 @@
 //! HighsTableauSeparator::separateLpSolution: cuts from rows of the simplex
 //! tableau of fractional basic integer variables.
 
+use crate::util::fma::ClangFma;
 use super::cut_generation::CutGeneration;
 use super::round::{MinCpp, SepaRound};
 use super::sort::{pdqsort, pdqsort_branchless};
@@ -164,7 +165,7 @@ impl TableauSeparator {
                 }
                 min_weight = min_weight.min_cpp(scaled_weight);
                 max_weight = max_weight.max_cpp(scaled_weight);
-                fv.row_ep_norm2 = scaled_weight.mul_add(scaled_weight, fv.row_ep_norm2);
+                fv.row_ep_norm2 = scaled_weight.mul_add_c(scaled_weight, fv.row_ep_norm2);
                 self.row_ep.push((row, weight));
             }
             fv.ep_len = self.row_ep.len() - fv.ep_start;

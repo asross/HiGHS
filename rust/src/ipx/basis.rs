@@ -3,6 +3,8 @@
 //! construction of a starting basis (crash, repair, pivoting free variables
 //! in and fixed variables out).
 
+use crate::util::fma::ClangFma;
+
 use super::control::Control;
 use super::fmt::{fmt, g, sci2, textline, time};
 use super::guess_basis::guess_basis;
@@ -411,7 +413,7 @@ impl Basis {
                     }
                     if *mb < -2 {
                         // marked column
-                        row.elements[j] = temp.mul_add(v, row.elements[j]);
+                        row.elements[j] = temp.mul_add_c(v, row.elements[j]);
                     }
                 }
             }
@@ -431,7 +433,7 @@ impl Basis {
                 if mb == -1 || (mb == -2 && !ignore_fixed) {
                     let (b, e) = (c[0] as usize, c[1] as usize);
                     for (&i, &v) in aidx[b..e].iter().zip(&ax[b..e]) {
-                        result = v.mul_add(btr[i as usize], result);
+                        result = v.mul_add_c(btr[i as usize], result);
                     }
                 }
                 *r = result;
@@ -888,7 +890,7 @@ impl Basis {
                     ftran.for_each_nonzero(|p, f| {
                         let j = self.at(p);
                         if colweights[j].is_infinite() {
-                            delta_obj = (-c[j]).mul_add(f, delta_obj);
+                            delta_obj = (-c[j]).mul_add_c(f, delta_obj);
                         }
                     });
                     if delta_obj.abs() > dependency_tol {

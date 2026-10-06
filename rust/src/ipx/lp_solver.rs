@@ -3,6 +3,8 @@
 //! basis preconditioning) and crossover, and postsolves the solution. Also
 //! info.cc (StatusString, the Info dump).
 
+use crate::util::fma::ClangFma;
+
 use super::basis::Basis;
 use super::control::{Control, Hooks};
 use super::crossover::Crossover;
@@ -534,11 +536,11 @@ impl LpSolver {
         let mut sum_products = 0.0f64;
         for j in 0..nm {
             if xl[j] > 0.0 && zl[j] > 0.0 {
-                sum_products = xl[j].mul_add(zl[j], sum_products);
+                sum_products = xl[j].mul_add_c(zl[j], sum_products);
                 num_products += 1;
             }
             if xu[j] > 0.0 && zu[j] > 0.0 {
-                sum_products = xu[j].mul_add(zu[j], sum_products);
+                sum_products = xu[j].mul_add_c(zu[j], sum_products);
                 num_products += 1;
             }
         }
