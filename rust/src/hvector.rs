@@ -112,10 +112,31 @@ impl HVec<'_> {
             return;
         }
         let size = self.size as usize;
+        let (array, index) = (&self.array[..size], &mut self.index[..size]);
         let mut num = 0;
-        for (i, &v) in self.array[..size].iter().enumerate() {
-            self.index[num] = i as i32;
+        // By blocks of 4, so that the count of nonzeros is a chain of one
+        // add per block rather than one per entry
+        let mut blocks = array.chunks_exact(4);
+        let mut i = 0;
+        for b in &mut blocks {
+            let nz = [(b[0] != 0.0) as usize, (b[1] != 0.0) as usize, (b[2] != 0.0) as usize, (b[3] != 0.0) as usize];
+            let (p1, p2) = (nz[0], nz[0] + nz[1]);
+            let p3 = p2 + nz[2];
+            // SAFETY: each position is num plus the nonzeros among the
+            // entries before i + k, so at most i + k < size = index.len()
+            unsafe {
+                *index.get_unchecked_mut(num) = i as i32;
+                *index.get_unchecked_mut(num + p1) = i as i32 + 1;
+                *index.get_unchecked_mut(num + p2) = i as i32 + 2;
+                *index.get_unchecked_mut(num + p3) = i as i32 + 3;
+            }
+            num += p3 + nz[3];
+            i += 4;
+        }
+        for &v in blocks.remainder() {
+            index[num] = i as i32;
             num += (v != 0.0) as usize;
+            i += 1;
         }
         self.count = num as i32;
     }
@@ -193,6 +214,27 @@ impl OwnedHVec {
             pack_count: self.pack_count,
             pack_index: &mut self.pack_index,
             pack_value: &mut self.pack_value,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn re_index_finds_the_nonzeros_in_order() {
+        for n in 0..12 {
+            let mut v = OwnedHVec::new(n);
+            let want: Vec<i32> = (0..n).filter(|i| i % 3 != 1).collect();
+            for &i in &want {
+                v.array[i as usize] = 1.0 + i as f64;
+            }
+            v.count = -1;
+            v.view().re_index();
+            let mut view = v.view();
+            view.re_index();
+            assert_eq!(&view.index[..view.count as usize], &want[..]);
         }
     }
 }
