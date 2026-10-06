@@ -20,6 +20,18 @@ biggest wins on the LP-heavy instances. One x86 bit-identity divergence remains,
 `dm_small_pert_s1_noramp`, on the newer MIP ports (same class the arm64-only
 `mul_add` fix addressed for the simplex). Full tables + per-solve logs for both
 builds: `asross/oopt` branch `rustport-lambda-2026-10-06`.
+## 2026-10-06, HPresolve in Rust
+
+Presolve cycles (read+presolve minus read, `write_presolved_model_file`,
+best of 5, M1, loaded) against the same build with the C++ presolve
+(rust-port 45bc2d0bb1): dispatch 080458 0.965, 3c1b60d6 0.964,
+3c1b60d6_wind185 0.958, air05 0.972, co-100 0.82 (3 reps), 80bau3b
+0.97, greenbea 1.06 (0.04 Gcycles). Same paths everywhere: presolve logs
+and presolved models identical on 82 check instances, 35 MIPLIB and 3
+dispatch MILPs (arm64 and x86_64), full solves and 14 MIPLIB at a node
+limit. `perf.py --reps 1` against pure C++ (before the clique/implications
+merge): MIP 0.925, dual simplex 0.739, primal 0.947, IPX 0.928, PDLP
+0.961, readers 0.330, all 0.805, all same path.
 
 ## 2026-10-06, clique table and implications in Rust (8572be192b)
 
