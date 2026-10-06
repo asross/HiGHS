@@ -16,8 +16,10 @@ Both builds with Homebrew gcc 14 and libstdc++ (`rust/bench/gcc_builds.sh`:
 no FMA contraction, like x86_64; Rust with `libstdcxx no_fma`),
 `perf.py --reps 1` on a heavily loaded machine (load ~60), so cycles are
 rough. **31/32 same path**; the exception, IPX on the co-100 relaxation,
-is gcc's C++ computing a different IPX starting point from clang's C++
-(the Rust matches clang there, on arm64 and x86_64): being tracked down.
+came from presolve: libstdc++ inserts into a std::unordered_multimap group
+after the hint, libc++ before it (parallel row/column buckets), so gcc's
+presolve kept 6 different columns. Fixed under `libstdcxx` (5e64ec1876):
+then same path on all cases against both gcc and clang builds.
 
 | Group | Geomean Rust / C++ |
 |---|---|
