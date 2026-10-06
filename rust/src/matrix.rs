@@ -112,14 +112,17 @@ pub fn price_by_row_dense(
 /// Sets result_index to the nonzeros of a dense result, zeroing tiny values.
 /// Returns the count.
 pub fn index_dense_result(result: &mut [f64], result_index: &mut [i32]) -> usize {
+    // By selects, as whether an entry is kept is unpredictable: every
+    // index is written at count (at most the entry's own position) and
+    // counted if kept
+    let result_index = &mut result_index[..result.len()];
     let mut count = 0;
     for (col, x) in result.iter_mut().enumerate() {
-        if x.abs() < K_HIGHS_TINY {
-            *x = 0.0;
-        } else {
-            result_index[count] = col as i32;
-            count += 1;
-        }
+        let keep = !(x.abs() < K_HIGHS_TINY);
+        *x = if keep { *x } else { 0.0 };
+        // SAFETY: count <= col < result.len() = result_index.len()
+        unsafe { *result_index.get_unchecked_mut(count) = col as i32 };
+        count += keep as usize;
     }
     count
 }
