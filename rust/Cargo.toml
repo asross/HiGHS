@@ -6,6 +6,15 @@ edition = "2021"
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+[features]
+# Follow libstdc++ (gcc) instead of libc++ where the C++ standard library's
+# choices show in results: heap/partial_sort tie orders, std::tuple layout
+# in hashes, uniform_int_distribution
+libstdcxx = []
+# Never fuse multiply-adds, like a C++ build without FMA instructions or
+# with -ffp-contract=off (default on x86_64)
+no_fma = []
+
 [profile.release]
 lto = true
 codegen-units = 1

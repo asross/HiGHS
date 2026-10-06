@@ -52,7 +52,11 @@ fn sorts_match_cpp() {
     assert_eq!(h, GOLDEN_SORTS);
 }
 
+// golden_cuts.cpp built with clang++ (libc++) / g++ (libstdc++)
+#[cfg(not(feature = "libstdcxx"))]
 const GOLDEN_SORTS: u64 = 9754718482623447556;
+#[cfg(feature = "libstdcxx")]
+const GOLDEN_SORTS: u64 = 13589791909028228840;
 
 #[test]
 fn ldexp_matches_libm() {

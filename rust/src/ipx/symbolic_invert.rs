@@ -7,7 +7,7 @@ use super::sparse_matrix::{copy_columns, transpose, SparseMatrix};
 use super::sparse_utils::{augmenting_path, depth_first_search};
 use super::Int;
 
-/// std::default_random_engine of libc++ (minstd_rand0, seed 1) with
+/// std::default_random_engine (minstd_rand0, seed 1 in libc++ and libstdc++) with
 /// std::uniform_int_distribution<Int>(0, m-1), so that the permutation is
 /// the one the C++ code computes.
 struct MinstdRand0(u64);
@@ -18,9 +18,27 @@ impl MinstdRand0 {
         self.0 as u32
     }
 
+    /// uniform_int_distribution(0, m-1) of libstdc++: for an engine range
+    /// [1, 2^31-2] (neither 2^32-1 nor 2^64-1 wide) it downscales: draw
+    /// below a multiple of m, then divide
+    #[cfg(feature = "libstdcxx")]
+    fn uniform(&mut self, m: u32) -> u32 {
+        const URNG_RANGE: u64 = 2147483646 - 1; // max - min
+        let uerange = m as u64; // (b - a) + 1
+        let scaling = URNG_RANGE / uerange;
+        let past = uerange * scaling;
+        loop {
+            let ret = self.next() as u64 - 1;
+            if ret < past {
+                return (ret / scaling) as u32;
+            }
+        }
+    }
+
     /// uniform_int_distribution(0, m-1): libc++'s independent bits engine
     /// over the engine range [1, 2^31-2], which for w <= 30 bits draws one
     /// engine value below a multiple of 2^w and keeps its low w bits
+    #[cfg(not(feature = "libstdcxx"))]
     fn uniform(&mut self, m: u32) -> u32 {
         let rp = m; // b - a + 1
         if rp == 1 {

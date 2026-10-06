@@ -30,6 +30,23 @@ file readers in parallel. IPX, PDLP and QP last.
   elsewhere. A test rejects raw `mul_add`. Check x86_64 paths with
   `-DCMAKE_OSX_ARCHITECTURES=x86_64 -DHIGHS_RUST_TARGET=x86_64-apple-darwin`
   builds under Rosetta (`rust/bench/perf.py` on both).
+- **gcc / libstdc++.** Production builds the C++ with gcc, whose libstdc++
+  differs from libc++ where results depend on the standard library: heap
+  and partial_sort tie orders, std::tuple layout (hashed keys),
+  uniform_int_distribution, unordered container order. Anything that
+  mirrors one of these needs both variants, the libstdc++ one under the
+  `libstdcxx` cargo feature (CMake turns it on with gcc;
+  `HIGHS_RUST_FEATURES`). Goldens: build the golden .cpp with g++ too.
+  Local gcc check on the Mac: `-DCMAKE_C_COMPILER=gcc-14
+  -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_C_FLAGS=-ffp-contract=off
+  -DCMAKE_CXX_FLAGS=-ffp-contract=off -DZLIB=OFF
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
+  -DCMAKE_EXE_LINKER_FLAGS=-Wl,-ld_classic
+  -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-ld_classic`, and for the Rust build
+  `-DHIGHS_RUST_FEATURES="libstdcxx no_fma"` (no_fma: arm64 without
+  contraction, like x86_64). zlib off because its include path puts the
+  SDK's math.h ahead of gcc's; ld_classic because the new Apple linker
+  crashes on gcc 14 objects. Instances: ~/code/miplib/plain/*.mps.
 - **Safe Rust by default.** Slices, not raw pointers, outside the `extern "C"`
   shims; every pointer crosses the FFI with its length. `unsafe` only with a
   measured win and a comment saying why it is sound. `rust/.cargo/config.toml`

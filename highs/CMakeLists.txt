@@ -512,6 +512,20 @@ if(HIGHS_RUST)
   # A Rust target triple to cross-build for (e.g. x86_64-apple-darwin with
   # CMAKE_OSX_ARCHITECTURES=x86_64); empty for the host
   set(HIGHS_RUST_TARGET "" CACHE STRING "Rust target triple for the Rust kernels")
+  # Cargo features, e.g. "libstdcxx no_fma" to match a gcc build. libstdcxx
+  # is the default with gcc, whose libstdc++ the C++ results depend on.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(highs_rust_default_features "libstdcxx")
+  else()
+    set(highs_rust_default_features "")
+  endif()
+  set(HIGHS_RUST_FEATURES "${highs_rust_default_features}" CACHE STRING "Cargo features for the Rust kernels")
+  if(HIGHS_RUST_FEATURES)
+    string(REPLACE " " "," highs_rust_features_csv "${HIGHS_RUST_FEATURES}")
+    set(highs_rust_feature_args --features ${highs_rust_features_csv})
+  else()
+    set(highs_rust_feature_args)
+  endif()
   if(HIGHS_RUST_TARGET)
     set(highs_rust_target_args --target ${HIGHS_RUST_TARGET})
     set(highs_rust_out ${CMAKE_BINARY_DIR}/rust/${HIGHS_RUST_TARGET}/release)
@@ -524,7 +538,7 @@ if(HIGHS_RUST)
   add_custom_command(
     OUTPUT ${HIGHS_RUST_LIB}
     COMMAND ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
-            --target-dir ${CMAKE_BINARY_DIR}/rust ${highs_rust_target_args}
+            --target-dir ${CMAKE_BINARY_DIR}/rust ${highs_rust_target_args} ${highs_rust_feature_args}
     # So that cargo reads rust/.cargo/config.toml
     WORKING_DIRECTORY ${HIGHS_RUST_DIR}
     DEPENDS ${highs_rust_sources} ${HIGHS_RUST_DIR}/Cargo.toml
