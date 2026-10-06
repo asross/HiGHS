@@ -10,6 +10,76 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-06, path-preserving speedups of the LP kernels (7227d4a032)
+
+A pass over the ported simplex kernels guided by a SIGPROF PC sampler
+on the dispatch LPs (3c1b60d6 relaxation, MIPs 080458 and the hard tick
+3c1b60d6): same floating-point operations in the same order, so every
+path is unchanged. Function-level effects were measured as shares of
+the profile samples of one run each (robust to the heavily loaded
+machine, where whole-run cycles vary by ±5%).
+
+| Commit | Change | Effect (share of samples, or cycles) |
+|---|---|---|
+| 45809efea9 | `re_index` by blocks of 4, unchecked writes | relaxation 0.986 cycles, -3.5% instructions |
+| dba330cad8 | `getValueScale` max in 4 lanes (NaN: serial) | `Dual::iterate` 2.35% -> 1.28% |
+| 866473fcbe | primal infeasibility by selects | `update_primal` 5.13% -> 4.10% |
+| 8df46daaa6 | CHUZR tests merit before infeasibility (one branch) | `choose_normal` 4.59% -> 3.75% |
+| a8dc91ec7a | CHUZC candidate test by a select | `choose_possible` 3.54% -> 2.48% |
+| 02cc14ff8a | dense PRICE result indexed by selects | `price_by_row_with_switch` 2.16% -> 1.25% |
+| 0e8f15ccce | per-thread pool for `OwnedHVec` buffers | hard tick: madvise 5.01% -> 1.92% |
+| 7227d4a032 | `factorSolveError` keeps its work arrays | hard tick: madvise 1.67% -> 0.25% |
+
+This build against the rust-port build before the pass (d379793f05 +
+x86 FMA fix, `perf.py --reps 3`, M1, loaded): all same path.
+
+| Group | Geomean after / before |
+|---|---|
+| MIP | 0.976 |
+| LP dual simplex | 0.924 |
+| LP primal simplex | 0.974 |
+| IPM (IPX) | 0.999 |
+| PDLP | 1.003 |
+| Read model (time_limit 0) | 1.011 |
+| **All** | **0.971** |
+
+Dispatch cases: MIP lambda_080458 30.57 -> 28.88 Gcycles (0.945),
+3c1b60d6 relaxation (dual simplex) 48.36 -> 45.07 (0.932); the hard tick
+(not in perf.py) gains a further ~4% from the pool. Against pure C++
+(non-dispatch cases): LP dual simplex 0.823, MIP 0.996, all 0.857.
+
+Tried and rejected (measured slower or no change):
+- Branchless HFactor solves (ftran_l/btran_l/U/hyper-sparse: select the
+  kept value, branch only for a nonempty column): +7% cycles, +21%
+  instructions on the relaxation; ftran_l alone 7.2% -> 9.6%. The
+  zero/nonzero branch there is mostly predictable.
+- Software prefetch of the RHS entry 16 pivots ahead in the dense
+  triangular solves: slower (the reads hit L2; the cost is mispredicts).
+- Caching the column end in the hyper-sparse DFS: no change.
+- Branchless `choose_normal` without black_box: LLVM turned the rare
+  update into selects, chaining the division through every row (2x
+  slower); likewise `choose_possible` before black_box.
+- Skipping zero terms of `update_dual`'s objective sum (exact: a sum
+  started at +0 never becomes -0): slower (the extra store outweighs
+  the shorter add chain).
+- Selects in the DSE weight update (`aa == 0` skip): slower.
+- A vectorized dense path for `update_primal`: no change (the sparse
+  path is the hot one).
+- IPX maxvolume `find_largest` by vectorized passes: slower (memory
+  bound; one pass is best).
+
+Not done: IPX allocates its CR and KKT work vectors per call (madvise
+~3% of an IPX solve on macOS); on Linux glibc the cost is mostly a
+memset, so the gain there would be small. On x86_64 (baseline SSE2)
+LLVM turns some of the new selects back into branches (the first test
+of the primal infeasibility, `index_dense_result`, the candidate test
+of `choose_possible`), so part of those gains may not carry over to
+production; native x86 measurements are still to do.
+
+x86_64 (Rosetta, `perf.py --reps 1` against the x86_64 C++): same path on
+all 31 cases; geomean 0.820 (dual simplex 0.880, IPX 0.917, MIP 1.023,
+primal 1.020, PDLP 0.976, readers 0.307), cycles only indicative.
+
 ## 2026-10-05, after the simplex, IPX, PDLP and QP ports (d379793f05)
 
 In Rust: HFactor, the whole LP simplex path from HEkk::solve down (dual and

@@ -29,12 +29,15 @@ impl Primal<'_> {
         let value = self.base_value[i];
         let lower = self.base_lower[i];
         let upper = self.base_upper[i];
-        let mut primal_infeasibility = 0.0;
-        if value < lower - self.tp {
-            primal_infeasibility = lower - value;
+        // Selects rather than branches: which case holds is unpredictable
+        let (below, above) = (lower - value, value - upper);
+        let primal_infeasibility = if value < lower - self.tp {
+            below
         } else if value > upper + self.tp {
-            primal_infeasibility = value - upper;
-        }
+            above
+        } else {
+            0.0
+        };
         if self.squared {
             primal_infeasibility * primal_infeasibility
         } else {
@@ -93,11 +96,16 @@ impl DualRhs {
         let mut best_merit = 0.0;
         let mut best_index = -1;
         let mut consider = |i_row: usize| {
-            if infeas[i_row] > K_HIGHS_ZERO {
-                let my_infeas = infeas[i_row];
-                let my_weight = edge_weight[i_row];
-                if best_merit * my_weight < my_infeas {
-                    best_merit = my_infeas / my_weight;
+            let my_infeas = infeas[i_row];
+            let my_weight = edge_weight[i_row];
+            // The tests of the C++ in the other order (they have no side
+            // effects): whether a row is infeasible is unpredictable, but
+            // its merit rarely beats the best. black_box keeps LLVM from
+            // turning the rare update into selects, which would chain the
+            // division through every row
+            if best_merit * my_weight < my_infeas {
+                if my_infeas > K_HIGHS_ZERO {
+                    best_merit = std::hint::black_box(my_infeas / my_weight);
                     best_index = i_row as i32;
                 }
             }

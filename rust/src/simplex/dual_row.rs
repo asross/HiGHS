@@ -130,13 +130,16 @@ impl DualRow {
             // move_out * move is +/-1 or 0, so its product is exact in
             // either order
             let alpha = value * (move_out * mv) as f64;
-            if alpha > ta {
-                self.work_data[work_count] = WorkPair { col: i_col, value: alpha };
-                work_count += 1;
-                let relax = work_dual[i_col as usize].mul_add_c(mv as f64, td);
-                if work_theta * alpha > relax {
-                    work_theta = relax / alpha;
-                }
+            // Whether alpha passes is unpredictable, so the pair is stored
+            // and counted by a select (work_count <= the entry's position
+            // < pack_count), leaving one rarely taken branch for the theta
+            // update, which black_box keeps from becoming selects
+            let candidate = alpha > ta;
+            self.work_data[work_count] = WorkPair { col: i_col, value: alpha };
+            work_count += candidate as usize;
+            let relax = work_dual[i_col as usize].mul_add_c(mv as f64, td);
+            if candidate & (work_theta * alpha > relax) {
+                work_theta = std::hint::black_box(relax / alpha);
             }
         }
         (work_count, work_theta)

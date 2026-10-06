@@ -112,16 +112,46 @@ impl HVec<'_> {
             return;
         }
         let size = self.size as usize;
+        let (array, index) = (&self.array[..size], &mut self.index[..size]);
         let mut num = 0;
-        for (i, &v) in self.array[..size].iter().enumerate() {
-            self.index[num] = i as i32;
+        // By blocks of 4, so that the count of nonzeros is a chain of one
+        // add per block rather than one per entry
+        let mut blocks = array.chunks_exact(4);
+        let mut i = 0;
+        for b in &mut blocks {
+            let nz = [(b[0] != 0.0) as usize, (b[1] != 0.0) as usize, (b[2] != 0.0) as usize, (b[3] != 0.0) as usize];
+            let (p1, p2) = (nz[0], nz[0] + nz[1]);
+            let p3 = p2 + nz[2];
+            // SAFETY: each position is num plus the nonzeros among the
+            // entries before i + k, so at most i + k < size = index.len()
+            unsafe {
+                *index.get_unchecked_mut(num) = i as i32;
+                *index.get_unchecked_mut(num + p1) = i as i32 + 1;
+                *index.get_unchecked_mut(num + p2) = i as i32 + 2;
+                *index.get_unchecked_mut(num + p3) = i as i32 + 3;
+            }
+            num += p3 + nz[3];
+            i += 4;
+        }
+        for &v in blocks.remainder() {
+            index[num] = i as i32;
             num += (v != 0.0) as usize;
+            i += 1;
         }
         self.count = num as i32;
     }
 }
 
 /// An HVector owned by Rust: setup/clear as in HVectorBase.
+///
+/// Its buffers come from, and on drop go back to, a small per-thread pool:
+/// the solvers set up their work vectors per solve (and per call of e.g.
+/// computeDual), as in the C++, and allocating and zeroing them anew (41
+/// bytes per entry) cost several percent of the dispatch MIPs' many short
+/// LP solves. A vector goes back cleared (HVector::clear, on which the
+/// solvers rely between uses anyway), and the solves leave cwork (the
+/// marks of the hyper-sparse solve) zero, so a reused vector is
+/// indistinguishable from a new one.
 pub struct OwnedHVec {
     pub size: i32,
     pub count: i32,
@@ -136,21 +166,66 @@ pub struct OwnedHVec {
     pub pack_value: Vec<f64>,
 }
 
-impl OwnedHVec {
-    pub fn new(size: i32) -> Self {
-        let n = size as usize;
-        OwnedHVec {
-            size,
-            count: 0,
+/// The buffers of a pooled OwnedHVec, with `array` and `cwork` zero
+struct Buffers {
+    index: Vec<i32>,
+    array: Vec<f64>,
+    cwork: Vec<u8>,
+    iwork: Vec<i32>,
+    pack_index: Vec<i32>,
+    pack_value: Vec<f64>,
+}
+
+impl Buffers {
+    fn new(n: usize) -> Self {
+        Buffers {
             index: vec![0; n],
             array: vec![0.0; n],
             cwork: vec![0; n + 6400],
             iwork: vec![0; n * 4],
+            pack_index: vec![0; n],
+            pack_value: vec![0.0; n],
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        41 * self.array.len() + self.cwork.len()
+    }
+}
+
+/// At most this many vectors, and bytes, are kept per thread (the oldest
+/// go first)
+const POOL_VECTORS: usize = 16;
+const POOL_BYTES: usize = 64 << 20;
+
+thread_local! {
+    static POOL: std::cell::RefCell<Vec<Buffers>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl OwnedHVec {
+    pub fn new(size: i32) -> Self {
+        let n = size as usize;
+        let pooled = POOL
+            .try_with(|p| {
+                let mut p = p.borrow_mut();
+                let i = p.iter().rposition(|b| b.array.len() == n)?;
+                Some(p.remove(i))
+            })
+            .ok()
+            .flatten();
+        let b = pooled.unwrap_or_else(|| Buffers::new(n));
+        OwnedHVec {
+            size,
+            count: 0,
+            index: b.index,
+            array: b.array,
+            cwork: b.cwork,
+            iwork: b.iwork,
             synthetic_tick: 0.0,
             pack_flag: false,
             pack_count: 0,
-            pack_index: vec![0; n],
-            pack_value: vec![0.0; n],
+            pack_index: b.pack_index,
+            pack_value: b.pack_value,
         }
     }
 
@@ -193,6 +268,63 @@ impl OwnedHVec {
             pack_count: self.pack_count,
             pack_index: &mut self.pack_index,
             pack_value: &mut self.pack_value,
+        }
+    }
+}
+
+impl Drop for OwnedHVec {
+    fn drop(&mut self) {
+        let n = self.size.max(0) as usize;
+        let intact = self.array.len() == n
+            && self.index.len() == n
+            && self.cwork.len() == n + 6400
+            && self.iwork.len() == 4 * n
+            && self.pack_index.len() == n
+            && self.pack_value.len() == n;
+        if !intact {
+            return;
+        }
+        self.clear();
+        debug_assert!(self.array.iter().all(|&x| x == 0.0) && self.cwork.iter().all(|&c| c == 0));
+        let b = Buffers {
+            index: std::mem::take(&mut self.index),
+            array: std::mem::take(&mut self.array),
+            cwork: std::mem::take(&mut self.cwork),
+            iwork: std::mem::take(&mut self.iwork),
+            pack_index: std::mem::take(&mut self.pack_index),
+            pack_value: std::mem::take(&mut self.pack_value),
+        };
+        if b.bytes() > POOL_BYTES / 4 {
+            return;
+        }
+        let _ = POOL.try_with(|p| {
+            let mut p = p.borrow_mut();
+            let mut bytes = b.bytes() + p.iter().map(Buffers::bytes).sum::<usize>();
+            while !p.is_empty() && (p.len() >= POOL_VECTORS || bytes > POOL_BYTES) {
+                bytes -= p.remove(0).bytes();
+            }
+            p.push(b);
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn re_index_finds_the_nonzeros_in_order() {
+        for n in 0..12 {
+            let mut v = OwnedHVec::new(n);
+            let want: Vec<i32> = (0..n).filter(|i| i % 3 != 1).collect();
+            for &i in &want {
+                v.array[i as usize] = 1.0 + i as f64;
+            }
+            v.count = -1;
+            v.view().re_index();
+            let mut view = v.view();
+            view.re_index();
+            assert_eq!(&view.index[..view.count as usize], &want[..]);
         }
     }
 }
