@@ -7,6 +7,8 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #include "mip/HighsCutGeneration.h"
 
+#ifndef HIGHS_RUST
+
 #include "../extern/pdqsort/pdqsort.h"
 #include "mip/HighsDomain.h"
 #include "mip/HighsMipSolverData.h"
@@ -1480,3 +1482,5 @@ bool HighsCutGeneration::tryGenerateCut(std::vector<HighsInt>& inds_,
     // neither cmir nor lifted cut successful
     return false;
 }
+
+#endif  // HIGHS_RUST

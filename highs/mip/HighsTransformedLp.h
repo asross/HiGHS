@@ -24,6 +24,39 @@
 
 class HighsLpRelaxation;
 
+#ifdef HIGHS_RUST
+#include <memory>
+
+class HighsCutPool;
+namespace highs_rs {
+struct SepaRound;
+}
+struct HighsSepaRoundCtx;
+
+/// The data of a separation round, held by the Rust port
+/// (rust/src/mip/cuts/round.rs); the separators run in Rust on it
+/// (mip/HighsSeparationRust.cpp)
+class HighsTransformedLp {
+ private:
+  const HighsDomain& globaldom_;
+  std::unique_ptr<HighsSepaRoundCtx> ctx_;
+  highs_rs::SepaRound* rs_ = nullptr;
+
+ public:
+  HighsTransformedLp(const HighsLpRelaxation& lprelaxation,
+                     HighsImplications& implications,
+                     const HighsDomain& globaldom);
+  ~HighsTransformedLp();
+  HighsTransformedLp(const HighsTransformedLp&) = delete;
+  HighsTransformedLp& operator=(const HighsTransformedLp&) = delete;
+
+  /// the Rust round, with the cut pool that cuts go to
+  highs_rs::SepaRound* rust(HighsCutPool& cutpool);
+  HighsSepaRoundCtx& ctx() { return *ctx_; }
+
+  const HighsDomain& getGlobaldom() const { return globaldom_; }
+};
+#else
 /// Helper class to compute single-row relaxations from the current LP
 /// relaxation by substituting bounds and aggregating rows
 class HighsTransformedLp {
@@ -73,5 +106,6 @@ class HighsTransformedLp {
 
   const HighsDomain& getGlobaldom() const { return globaldom_; }
 };
+#endif
 
 #endif

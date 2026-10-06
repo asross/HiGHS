@@ -79,6 +79,29 @@ Instance::objval (dot_split4). The C++ Cholesky factor writes past the
 size of its std::vector once the null space was empty at a recompute;
 cholesky.rs models the vector's capacity to follow it.
 
+## Cut separation (MIP)
+
+rust/src/mip/cuts ports HighsTransformedLp, HighsLpAggregator,
+HighsCutGeneration, the path, tableau and mod-k separators and
+HighsGFkSolve. With HIGHS_RUST, HighsTransformedLp's constructor (a
+separation round, HighsSeparation::separationRound) builds a Rust
+`SepaRound` (round.rs, see its module comment for what is viewed, what is
+copied and what is read live), and the separators' separateLpSolution call
+Rust (highs/mip/HighsSeparationRust.cpp); HighsLpAggregator is an empty
+placeholder and HighsCutGeneration only serves generateConflict for the
+search. Implications (getBestVub/Vlb, cleanupVarbounds), slack bounds, LP
+rows, the cut pool, the node queue and the basis inverse rows are C++
+callbacks (`Host`). Speed: the per-column data of the transformation is one
+array of structs, the slack bounds are cached until the next addCut (which
+can change the global domain), the LP rows are copied once per round, and
+the work space lives in the separators. Orders that depend on the sorting
+algorithm are kept with ports of pdqsort and libc++'s heap, partial_sort
+and partition (sort.rs, checked against golden_cuts.cpp). clang fuses
+`100 + 0.15 * n` and `1000 + 0.1 * n`; the path mixing violation loop is
+split by 8 in the LTO build.
+HighsSeparation's orchestration (propagation, LP resolves, clique and
+implied bound separation, cut pool separation) stays C++.
+
 HEkk::solve runs in Rust from initialiseForSolve down (simplex/hekk.rs,
 dual.rs, primal.rs) when no simplex analysis, timing or debugging is
 asked for and the strategy is serial dual or primal

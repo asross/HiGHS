@@ -10,6 +10,8 @@
 
 #include "mip/HighsTableauSeparator.h"
 
+#ifndef HIGHS_RUST
+
 #include <algorithm>
 
 #include "../extern/pdqsort/pdqsort.h"
@@ -242,3 +244,5 @@ void HighsTableauSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
       bestScore = fracvar.score;
   }
 }
+
+#endif  // HIGHS_RUST

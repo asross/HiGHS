@@ -21,6 +21,14 @@
 
 class HighsLpRelaxation;
 
+#ifdef HIGHS_RUST
+/// The aggregation is part of the Rust separation round (see
+/// HighsTransformedLp); this placeholder keeps the separator interface
+class HighsLpAggregator {
+ public:
+  HighsLpAggregator(const HighsLpRelaxation&) {}
+};
+#else
 /// Helper class to compute single-row relaxations from the current LP
 /// relaxation by substituting bounds and aggregating rows
 class HighsLpAggregator {
@@ -46,5 +54,6 @@ class HighsLpAggregator {
   /// checks whether the current aggregation is empty
   bool isEmpty() { return vectorsum.nonzeroinds.empty(); }
 };
+#endif
 
 #endif

@@ -8,6 +8,8 @@
 
 #include "mip/HighsLpAggregator.h"
 
+#ifndef HIGHS_RUST
+
 #include "mip/HighsLpRelaxation.h"
 
 HighsLpAggregator::HighsLpAggregator(const HighsLpRelaxation& lprelaxation)
@@ -54,3 +56,5 @@ void HighsLpAggregator::getCurrentAggregation(std::vector<HighsInt>& inds,
 }
 
 void HighsLpAggregator::clear() { vectorsum.clear(); }
+
+#endif  // HIGHS_RUST

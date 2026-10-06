@@ -396,6 +396,7 @@ set(highs_sources
     mip/HighsRedcostFixing.cpp
     mip/HighsSearch.cpp
     mip/HighsSeparation.cpp
+    mip/HighsSeparationRust.cpp
     mip/HighsSeparator.cpp
     mip/HighsTableauSeparator.cpp
     mip/HighsTransformedLp.cpp

@@ -26,6 +26,28 @@ class HighsTransformedLp;
 class HighsCutPool;
 class HighsDomain;
 
+#ifdef HIGHS_RUST
+/// Cut generation is ported to Rust (rust/src/mip/cuts/cut_generation.rs);
+/// the separators call it there. This wrapper serves the conflicts of the
+/// search (mip/HighsSeparationRust.cpp)
+class HighsCutGeneration {
+ private:
+  const HighsLpRelaxation& lpRelaxation;
+  HighsCutPool& cutpool;
+
+ public:
+  HighsCutGeneration(const HighsLpRelaxation& lpRelaxation,
+                     HighsCutPool& cutpool)
+      : lpRelaxation(lpRelaxation), cutpool(cutpool) {}
+
+  /// generate a conflict from the given proof constraint which cuts of the
+  /// given local domain (the proof vectors are left unchanged)
+  bool generateConflict(const HighsDomain& localdom,
+                        const HighsDomain& globaldom,
+                        std::vector<HighsInt>& proofinds,
+                        std::vector<double>& proofvals, double& proofrhs);
+};
+#else
 /// Helper class to compute single-row relaxations from the current LP
 /// relaxation by substituting bounds and aggregating rows
 class HighsCutGeneration {
@@ -112,5 +134,6 @@ class HighsCutGeneration {
                          std::vector<HighsInt>& inds, std::vector<double>& vals,
                          double& rhs);
 };
+#endif
 
 #endif

@@ -20,6 +20,29 @@
 
 /// Helper class to compute single-row relaxations from the current LP
 /// relaxation by substituting bounds and aggregating rows
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct PathSeparator;
+}
+
+/// Runs in Rust (rust/src/mip/cuts/path.rs), which holds the random
+/// generator and work space
+class HighsPathSeparator : public HighsSeparator {
+ private:
+  highs_rs::PathSeparator* rs_;
+
+ public:
+  void separateLpSolution(HighsLpRelaxation& lpRelaxation,
+                          HighsLpAggregator& lpAggregator,
+                          HighsTransformedLp& transLp,
+                          HighsCutPool& cutpool) override;
+
+  HighsPathSeparator(const HighsMipSolver& mipsolver);
+  ~HighsPathSeparator() override;
+  HighsPathSeparator(const HighsPathSeparator&) = delete;
+  HighsPathSeparator& operator=(const HighsPathSeparator&) = delete;
+};
+#else
 class HighsPathSeparator : public HighsSeparator {
  private:
   HighsRandom randgen;
@@ -35,5 +58,6 @@ class HighsPathSeparator : public HighsSeparator {
     randgen.initialise(mipsolver.options_mip_->random_seed);
   }
 };
+#endif
 
 #endif

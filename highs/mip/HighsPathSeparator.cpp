@@ -10,6 +10,8 @@
 
 #include "mip/HighsPathSeparator.h"
 
+#ifndef HIGHS_RUST
+
 #include "mip/HighsCutGeneration.h"
 #include "mip/HighsLpAggregator.h"
 #include "mip/HighsLpRelaxation.h"
@@ -558,3 +560,5 @@ void HighsPathSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
     }
   }
 }
+
+#endif  // HIGHS_RUST

@@ -10,6 +10,8 @@
 
 #include "mip/HighsModkSeparator.h"
 
+#ifndef HIGHS_RUST
+
 #include <unordered_set>
 
 #include "../extern/pdqsort/pdqsort.h"
@@ -265,3 +267,5 @@ void HighsModkSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
                           cutpool, lp.num_col_, foundCut))
     return;
 }
+
+#endif  // HIGHS_RUST

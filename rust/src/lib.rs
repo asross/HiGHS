@@ -11,6 +11,7 @@
 
 pub mod io;
 pub mod matrix;
+pub mod mip;
 pub mod simplex;
 pub mod util;
 

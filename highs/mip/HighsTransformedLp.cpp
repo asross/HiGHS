@@ -8,6 +8,8 @@
 
 #include "mip/HighsTransformedLp.h"
 
+#ifndef HIGHS_RUST
+
 #include "mip/HighsMipSolverData.h"
 #include "util/HighsCDouble.h"
 #include "util/HighsIntegers.h"
@@ -592,3 +594,5 @@ bool HighsTransformedLp::untransform(std::vector<double>& vals,
 
   return true;
 }
+
+#endif  // HIGHS_RUST
