@@ -10,6 +10,40 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, primal heuristics: feasibility jump, ziRound, shifting, graph LNS
+
+Feasibility jump in Rust (mip/feasjump.rs), ziRound and shifting
+(heuristics.rs), graph LNS neighbourhoods and scoring (lns.rs); see
+PORTING.md. M1, heavily loaded (load 25-60), so cycles are rough.
+
+Feasibility jump alone (cycles with FJ minus without, node limit 1, min of
+3): C++ / rust-port / this build.
+
+| Case | C++ | rust-port | this |
+|---|---|---|---|
+| neos17 | 2.19G | 2.14G | 1.42G |
+| dispatch 080458 | 2.22G | 2.37G | 1.70G |
+| gen-ip002 | 0.38G | 0.39G | 0.22G |
+| gen-ip054 | 0.20G | 0.17G | 0.13G |
+| markshare2 | 0.26G | 0.26G | 0.19G |
+| markshare_4_0 | 0.09G | 0.09G | 0.06G |
+
+Gains come from layout (CSR both ways; a variable's value, jump move and
+good-set slot in one struct, so updating a neighbour's move touches one
+cache line; no allocation per jump value) and from computing the scores of
+a constraint's old and new LHS once per constraint.
+
+Whole solves against the rust-port HIGHS_RUST build (2000 nodes, `cyc.py
+2`, all same path): geomean 0.951; gen-ip002 0.903, gen-ip054 0.882,
+markshare_4_0 0.902, markshare2 0.947, neos17 0.959, neos-911970 0.959,
+nu25-pr12 0.977, air05 0.999, dispatch 080458 0.987, 3c1b60d6 1.002.
+
+Against pure C++: `perf.py --reps 1` same path on all cases, MIP 0.869,
+all 0.834. gcc/libstdc++ pair (`gcc_builds.sh`, 300 nodes, 12 MIPLIB +
+dispatch 080458): same path, geomean 0.880; hard_10-03_1340 and 3c1b60d6
+LNS dev logs identical. x86_64 under Rosetta (2000 nodes, the cyc.py
+7-instance set): same path, geomean 0.911.
+
 ## 2026-10-06, gcc/libstdc++ builds on the M1 (4442630fe5 + HPresolve)
 
 Both builds with Homebrew gcc 14 and libstdc++ (`rust/bench/gcc_builds.sh`:
