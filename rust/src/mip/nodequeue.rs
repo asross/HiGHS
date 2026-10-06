@@ -550,3 +550,39 @@ mod ffi {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::domain::UPPER;
+    use super::*;
+
+    fn chg(col: i32, val: f64, lower: bool) -> DomChg {
+        DomChg { boundval: val, column: col, boundtype: if lower { LOWER } else { UPPER } }
+    }
+
+    #[test]
+    fn orders_and_bounding() {
+        let mut q = NodeQueue::new();
+        q.set_num_col(2);
+        q.emplace_node(&[chg(0, 1.0, true)], &[0], 5.0, 7.0, 2);
+        q.emplace_node(&[chg(0, 0.0, false), chg(1, 1.0, true)], &[0], 3.0, 9.0, 3);
+        q.emplace_node(&[chg(1, 0.0, false)], &[0], 4.0, 4.0, 2);
+        assert_eq!(q.num_nodes(), 3);
+        assert_eq!(q.best_lower_bound(), 3.0);
+        assert_eq!(q.num_nodes_up(1), 1);
+        assert_eq!(q.num_nodes_down_val(0, 0.5), 1);
+        // the best estimate: 0.5 lb + 0.5 estimate = 4 (the third node)
+        q.pop(false);
+        assert_eq!(q.popped.lower_bound, 4.0);
+        // bounding prunes the node with lower bound 5
+        let w = q.perform_bounding(4.5);
+        assert_eq!(w, ldexp1(1 - 2));
+        assert_eq!(q.num_nodes(), 1);
+        // the smallest free slot is reused
+        q.emplace_node(&[], &[], 1.0, 1.0, 1);
+        assert_eq!(q.freeslots.len(), 1);
+        q.pop(true);
+        assert_eq!(q.popped.lower_bound, 1.0);
+        assert_eq!(ldexp1(-1074), f64::from_bits(1));
+    }
+}

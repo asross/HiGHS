@@ -13,7 +13,7 @@
 //! dot products of isDuplicate and getParallelism, the violation); none is
 //! vectorized in libhighs.
 
-use super::cuts::sort::{pdqsort, pdqsort_branchless};
+use super::cuts::sort::pdqsort;
 use crate::util::cdouble::CDouble;
 use crate::util::fma::ClangFma;
 use crate::util::hash::{double_hash_code, vector_hash, HighsHash};
@@ -210,7 +210,7 @@ pub struct CutPool {
     rownormalization: Vec<f64>,
     maxabscoef: Vec<f64>,
     rowintegral: Vec<u8>,
-    hash_to_cut: HashMap<u64, Vec<i32>>,
+    hash_to_cut: HashMap<u64, Vec<i32>, IdHash>,
     prop_domains: Vec<*mut c_void>,
     prop_rows: BTreeSet<(i32, i32)>,
     best_observed_score: f64,
@@ -234,10 +234,33 @@ fn cut_hash(index: &[i32], value: &[f64], maxabscoef: f64, codes: &mut Vec<u32>)
     let scale = 1.0 / maxabscoef;
     codes.clear();
     codes.extend(value.iter().map(|&v| double_hash_code(scale * v)));
-    let ibytes: Vec<u8> = index.iter().flat_map(|i| i.to_ne_bytes()).collect();
-    let vbytes: Vec<u8> = codes.iter().flat_map(|i| i.to_ne_bytes()).collect();
-    vector_hash(&ibytes) ^ (vector_hash(&vbytes) >> 32)
+    vector_hash(bytes_of(index)) ^ (vector_hash(bytes_of(codes)) >> 32)
 }
+
+/// The bytes of a slice of 4-byte integers
+fn bytes_of<T: Copy>(v: &[T]) -> &[u8] {
+    const { assert!(std::mem::size_of::<T>() == 4) };
+    // SAFETY: i32 / u32 have no padding and any byte is a valid u8
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
+}
+
+/// A hasher of keys that are hashes already (the cut hashes)
+#[derive(Default, Clone, Copy)]
+struct IdHasher(u64);
+
+impl std::hash::Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, _: &[u8]) {
+        unreachable!()
+    }
+    fn write_u64(&mut self, x: u64) {
+        self.0 = x;
+    }
+}
+
+type IdHash = std::hash::BuildHasherDefault<IdHasher>;
 
 /// The model's size for addCut's propagation limits
 #[repr(C)]
@@ -258,7 +281,7 @@ impl CutPool {
             rownormalization: Vec::new(),
             maxabscoef: Vec::new(),
             rowintegral: Vec::new(),
-            hash_to_cut: HashMap::new(),
+            hash_to_cut: HashMap::default(),
             prop_domains: Vec::new(),
             prop_rows: BTreeSet::new(),
             best_observed_score: 0.0,
@@ -514,7 +537,10 @@ impl CutPool {
                 s.sort_buffer.push((index[i], value[i]));
             }
             let norm = dot_fused(len, 0.0, |i| (value[i], value[i]));
-            pdqsort_branchless(&mut s.sort_buffer, |a, b| a.0 < b.0);
+            // the columns of a cut are distinct: every sort gives the order
+            // of the C++ pdqsort_branchless
+            s.sort_buffer.sort_unstable_by_key(|x| x.0);
+            debug_assert!(s.sort_buffer.windows(2).all(|w| w[0].0 < w[1].0));
             for i in 0..len {
                 index[i] = s.sort_buffer[i].0;
                 value[i] = s.sort_buffer[i].1;
@@ -673,8 +699,9 @@ impl CutPool {
                     let s = &mut *p;
                     s.ages[iu] += 1;
                     if s.ages[iu] as i32 >= agelim {
-                        let (ix, vx) = s.cut(i);
-                        let h = cut_hash(ix, vx, s.maxabscoef[iu], &mut Vec::new());
+                        let (st, e) = s.matrix.row_range(i);
+                        let (ix, vx) = (&s.matrix.ar_index[st..e], &s.matrix.ar_value[st..e]);
+                        let h = cut_hash(ix, vx, s.maxabscoef[iu], &mut s.value_hash_codes);
                         Some(h)
                     } else {
                         if propagated {
@@ -1061,5 +1088,39 @@ mod ffi {
             return std::ptr::null_mut();
         }
         Box::into_raw(v.into_boxed_slice()) as *mut i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe extern "C" fn added(_: *mut c_void, _: i32, _: bool) {}
+    unsafe extern "C" fn deleted(_: *mut c_void, _: i32, _: bool) {}
+
+    #[test]
+    fn add_duplicate_and_age_out() {
+        let p = Box::into_raw(Box::new(CutPool::new(3, 10, 100, 0, added, deleted)));
+        let model = ModelSize { num_nonzero: 10, num_row: 5 };
+        // SAFETY: a live pool, no borrows held
+        unsafe {
+            let (mut i, mut v) = ([2, 0], [1.0, 2.0]);
+            let r = CutPool::add_cut(p, std::ptr::null(), &model, &mut i, &mut v, 1.0, false, true, false);
+            assert_eq!(r, 0);
+            // sorted by column
+            assert_eq!(i, [0, 2]);
+            // a scaled copy is a duplicate
+            let (mut i, mut v) = ([0, 2], [4.0, 2.0]);
+            assert_eq!(CutPool::add_cut(p, std::ptr::null(), &model, &mut i, &mut v, 2.0, false, true, false), -1);
+            assert_eq!((*p).num_cuts(), 1);
+            for _ in 0..10 {
+                CutPool::perform_aging(p);
+            }
+            assert_eq!((*p).num_cuts(), 0);
+            // the index is reused
+            let (mut i, mut v) = ([1], [1.0]);
+            assert_eq!(CutPool::add_cut(p, std::ptr::null(), &model, &mut i, &mut v, 1.0, false, true, false), 0);
+            drop(Box::from_raw(p));
+        }
     }
 }

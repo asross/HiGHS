@@ -19,3 +19,4 @@ pub mod conflictpool;
 pub mod cutpool;
 pub mod nodequeue;
 pub mod redcost;
+pub mod search;

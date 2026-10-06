@@ -139,9 +139,9 @@ red-black trees (HighsRbTree ported exactly: the trees are built by the C++
 constructor and updated in Rust), conflict analysis (ConflictSet: the
 frontiers are BTreeMaps by stack position) and tightenCoefficients. Still
 C++: the clique table's and implications' fixings of a fixed binary (called
-back through one function, which re-enters changeBound), the conflict and
-cut pools (adding a conflict, resetAge), the pseudocosts and node queue
-read by conflict analysis, getPropagationConstraint/getCutoffConstraint for
+back through one function, which re-enters changeBound), adding a
+conflict and resetAge (through the C++ pool handles, see the
+branch-and-bound section), getPropagationConstraint/getCutoffConstraint for
 external callers, and the debug solution (HIGHS_DEBUGSOL is not supported).
 
 The view (highs/mip/HighsDomainRust.h, HighsDomainRustView.h) is cached in
@@ -186,6 +186,54 @@ constant` and `1 + coef * coef` (getBestVub/Vlb), `m * c - f` and
 `-m * a + t` (strengthenVarBound) and `s0 * v0 + s1 * v1` (implied bound
 cuts). Debug-solution checks run only for the public addVUB/addVLB and
 addClique.
+
+## The branch-and-bound search (MIP)
+
+HighsSearch, HighsNodeQueue, HighsPseudocost, HighsRedcostFixing,
+HighsCutPool (with HighsDynamicRowMatrix) and HighsConflictPool run in
+Rust (mip/search.rs, nodequeue.rs, pseudocost.rs, redcost.rs, cutpool.rs,
+conflictpool.rs). Each C++ class is a handle (`rust()` gives the Rust
+object) with its old API; HighsDynamicRowMatrix is a view of the Rust
+pool's arrays (getMatrix() returns it by value) and the pools' entry and
+rhs vectors are `HighsRsSpan`s, valid until the pool changes. The Rust
+domain reads the conflict pool directly and gets the cut pool's arrays in
+its view (refilled on cutAdded as before); conflict analysis uses the
+pseudocosts and node queue directly. The pools tell their C++
+propagation domains (CutpoolPropagation, ConflictPoolPropagation, still
+C++) of added and deleted rows through callbacks that read the pool, so
+the Rust holds no borrow across them. The thread safe calls of the cut
+pool (resetAge, lpCutRemoved, increaseNumLps, separate) touch only atomics,
+as in the C++.
+
+The node queue's red-black trees and std::sets order nodes by keys that
+end with the node index, so BTreeSets of the keys give the same orders
+(doubles compared with `<`, so -0 == 0). The lurking bounds of reduced cost
+fixing are std::multimaps where an element inserted at the hint
+lower_bound(key) precedes its equal keys: a decreasing sequence number in
+the key does the same (rootReducedCost sorts them unstably by key, so the
+order matters).
+
+HighsSearch keeps the local domain (external code uses it), the LP
+pointer and the conflict scratch; the node stack, statistics (C++ reads
+nnodes etc. through references into the Rust struct) and branching state
+are Rust's. The search calls C++ through `CSearchFns` for the domain
+operations, the LP relaxation (strong branching's Playground is boxed; the
+fallback LP of branch() is created and swapped in C++ in steps), the
+symmetries, the conflicts from LP proofs (addBoundExceedingConflict,
+addInfeasibleConflict), reduced cost fixing at a node, incumbents, limits
+and logging. Node bases and stabilizer orbits are std::shared_ptrs boxed on
+the C++ heap (`Shared`, cloned and freed by callbacks). No callback
+re-enters the search. clang fuses `cost += (1 - w) * avg` and the score
+sums of the pseudocosts, `avg * count + sum` of flushPseudoCost, `minrel -
+r * (minrel - 1)` of branch, the reductions over a cut in the cut pool
+(none vectorized), `0.5 * lb + 0.5 * estimate` of the node queue, and `1 -
+10 * feastol` and `frac * redcost + lpobj` of addRootRedcost.
+
+Still C++: the propagation domains of the pools, HighsCutSet filling
+(separate returns the selected cuts), pruneInfeasibleNodes' domain loop,
+setRINS/RENSNeighbourhood, checkLimits, and the implications' and
+separators' node queue and pseudocost callbacks (which call the Rust
+through the handles).
 
 ## Postsolve
 
