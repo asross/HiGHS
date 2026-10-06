@@ -7,6 +7,7 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #include "presolve/HPresolve.h"
 
+#ifndef HIGHS_RUST
 namespace presolve {
 
 HPresolve::Result HPresolve::presolveRuleTest(
@@ -37,3 +38,4 @@ HPresolve::Result HPresolve::presolveRuleTestColStuffing(
   return rowPresolve(postsolve_stack, 0);
 }
 }  // namespace presolve
+#endif  // HIGHS_RUST

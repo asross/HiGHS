@@ -42,6 +42,8 @@
     if (__result != presolve::HPresolve::Result::kOk) return __result; \
   } while (0)
 
+// With HIGHS_RUST the presolve runs in Rust (HPresolveRust.cpp)
+#ifndef HIGHS_RUST
 namespace presolve {
 
 #ifndef NDEBUG
@@ -8594,3 +8596,4 @@ HighsInt HPresolve::debugGetCheckRow() const {
 }
 
 }  // namespace presolve
+#endif  // HIGHS_RUST

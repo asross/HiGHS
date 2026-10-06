@@ -77,6 +77,15 @@ class HighsDataStack {
 
   void setPosition(size_t position_) { this->position = position_; }
 
+#ifdef HIGHS_RUST
+  // appends raw bytes (the records the Rust presolve built)
+  void pushBytes(const char* bytes, std::size_t n) {
+    std::size_t dataSize = data.size();
+    data.resize(dataSize + n);
+    if (n != 0) std::memcpy(data.data() + dataSize, bytes, n);
+  }
+#endif
+
   size_t getCurrentDataSize() const { return data.size(); }
 
   const char* getData() const { return data.data(); }

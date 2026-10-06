@@ -25,25 +25,25 @@ pub const ZERO: u8 = 3;
 pub const NONBASIC: u8 = 4;
 
 // RowType
-const GEQ: i32 = 0;
-const LEQ: i32 = 1;
-const EQ: i32 = 2;
+pub(crate) const GEQ: i32 = 0;
+pub(crate) const LEQ: i32 = 1;
+pub(crate) const EQ: i32 = 2;
 
 // ReductionType
-const LINEAR_TRANSFORM: u8 = 0;
-const FREE_COL_SUBSTITUTION: u8 = 1;
-const DOUBLETON_EQUATION: u8 = 2;
-const EQUALITY_ROW_ADDITION: u8 = 3;
-const EQUALITY_ROW_ADDITIONS: u8 = 4;
-const SINGLETON_ROW: u8 = 5;
-const FIXED_COL: u8 = 6;
-const REDUNDANT_ROW: u8 = 7;
-const FORCING_ROW: u8 = 8;
-const FORCING_COLUMN: u8 = 9;
-const FORCING_COLUMN_REMOVED_ROW: u8 = 10;
-const DUPLICATE_ROW: u8 = 11;
-const DUPLICATE_COLUMN: u8 = 12;
-const SLACK_COL_SUBSTITUTION: u8 = 13;
+pub(crate) const LINEAR_TRANSFORM: u8 = 0;
+pub(crate) const FREE_COL_SUBSTITUTION: u8 = 1;
+pub(crate) const DOUBLETON_EQUATION: u8 = 2;
+pub(crate) const EQUALITY_ROW_ADDITION: u8 = 3;
+pub(crate) const EQUALITY_ROW_ADDITIONS: u8 = 4;
+pub(crate) const SINGLETON_ROW: u8 = 5;
+pub(crate) const FIXED_COL: u8 = 6;
+pub(crate) const REDUNDANT_ROW: u8 = 7;
+pub(crate) const FORCING_ROW: u8 = 8;
+pub(crate) const FORCING_COLUMN: u8 = 9;
+pub(crate) const FORCING_COLUMN_REMOVED_ROW: u8 = 10;
+pub(crate) const DUPLICATE_ROW: u8 = 11;
+pub(crate) const DUPLICATE_COLUMN: u8 = 12;
+pub(crate) const SLACK_COL_SUBSTITUTION: u8 = 13;
 
 /// A plain-old-data record: `#[repr(C)]`, only integer and float fields, so
 /// every byte pattern is a valid value.
@@ -61,133 +61,133 @@ pub struct Nonzero {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct LinearTransform {
-    scale: f64,
-    constant: f64,
-    col: i32,
+pub(crate) struct LinearTransform {
+    pub(crate) scale: f64,
+    pub(crate) constant: f64,
+    pub(crate) col: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct FreeColSubstitution {
-    rhs: f64,
-    col_cost: f64,
-    row: i32,
-    col: i32,
-    row_type: i32,
+pub(crate) struct FreeColSubstitution {
+    pub(crate) rhs: f64,
+    pub(crate) col_cost: f64,
+    pub(crate) row: i32,
+    pub(crate) col: i32,
+    pub(crate) row_type: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct DoubletonEquation {
-    coef: f64,
-    coef_subst: f64,
-    rhs: f64,
-    subst_lower: f64,
-    subst_upper: f64,
-    subst_cost: f64,
-    row: i32,
-    col_subst: i32,
-    col: i32,
-    lower_tightened: u8,
-    upper_tightened: u8,
-    row_type: i32,
+pub(crate) struct DoubletonEquation {
+    pub(crate) coef: f64,
+    pub(crate) coef_subst: f64,
+    pub(crate) rhs: f64,
+    pub(crate) subst_lower: f64,
+    pub(crate) subst_upper: f64,
+    pub(crate) subst_cost: f64,
+    pub(crate) row: i32,
+    pub(crate) col_subst: i32,
+    pub(crate) col: i32,
+    pub(crate) lower_tightened: u8,
+    pub(crate) upper_tightened: u8,
+    pub(crate) row_type: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct EqualityRowAddition {
-    row: i32,
-    added_eq_row: i32,
-    eq_row_scale: f64,
+pub(crate) struct EqualityRowAddition {
+    pub(crate) row: i32,
+    pub(crate) added_eq_row: i32,
+    pub(crate) eq_row_scale: f64,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct EqualityRowAdditions {
-    added_eq_row: i32,
+pub(crate) struct EqualityRowAdditions {
+    pub(crate) added_eq_row: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct SingletonRow {
-    coef: f64,
-    row: i32,
-    col: i32,
-    col_lower_tightened: u8,
-    col_upper_tightened: u8,
+pub(crate) struct SingletonRow {
+    pub(crate) coef: f64,
+    pub(crate) row: i32,
+    pub(crate) col: i32,
+    pub(crate) col_lower_tightened: u8,
+    pub(crate) col_upper_tightened: u8,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct FixedCol {
-    fix_value: f64,
-    col_cost: f64,
-    col: i32,
-    fix_type: u8,
+pub(crate) struct FixedCol {
+    pub(crate) fix_value: f64,
+    pub(crate) col_cost: f64,
+    pub(crate) col: i32,
+    pub(crate) fix_type: u8,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct RedundantRow {
-    row: i32,
+pub(crate) struct RedundantRow {
+    pub(crate) row: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ForcingRow {
-    side: f64,
-    row: i32,
-    row_type: i32,
+pub(crate) struct ForcingRow {
+    pub(crate) side: f64,
+    pub(crate) row: i32,
+    pub(crate) row_type: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ForcingColumn {
-    col_cost: f64,
-    col_bound: f64,
-    col: i32,
-    at_infinite_upper: u8,
-    col_integral: u8,
+pub(crate) struct ForcingColumn {
+    pub(crate) col_cost: f64,
+    pub(crate) col_bound: f64,
+    pub(crate) col: i32,
+    pub(crate) at_infinite_upper: u8,
+    pub(crate) col_integral: u8,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ForcingColumnRemovedRow {
-    rhs: f64,
-    row: i32,
+pub(crate) struct ForcingColumnRemovedRow {
+    pub(crate) rhs: f64,
+    pub(crate) row: i32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct DuplicateRow {
-    duplicate_row_scale: f64,
-    duplicate_row: i32,
-    row: i32,
-    row_lower_tightened: u8,
-    row_upper_tightened: u8,
+pub(crate) struct DuplicateRow {
+    pub(crate) duplicate_row_scale: f64,
+    pub(crate) duplicate_row: i32,
+    pub(crate) row: i32,
+    pub(crate) row_lower_tightened: u8,
+    pub(crate) row_upper_tightened: u8,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DuplicateColumn {
-    col_scale: f64,
-    col_lower: f64,
-    col_upper: f64,
-    duplicate_col_lower: f64,
-    duplicate_col_upper: f64,
-    col: i32,
-    duplicate_col: i32,
-    col_integral: u8,
-    duplicate_col_integral: u8,
+    pub(crate) col_scale: f64,
+    pub(crate) col_lower: f64,
+    pub(crate) col_upper: f64,
+    pub(crate) duplicate_col_lower: f64,
+    pub(crate) duplicate_col_upper: f64,
+    pub(crate) col: i32,
+    pub(crate) duplicate_col: i32,
+    pub(crate) col_integral: u8,
+    pub(crate) duplicate_col_integral: u8,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct SlackColSubstitution {
-    rhs: f64,
-    row: i32,
-    col: i32,
+pub(crate) struct SlackColSubstitution {
+    pub(crate) rhs: f64,
+    pub(crate) row: i32,
+    pub(crate) col: i32,
 }
 
 // SAFETY: all are #[repr(C)] with integer and float fields only
