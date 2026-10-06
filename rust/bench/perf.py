@@ -62,7 +62,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cpp"); ap.add_argument("rust")
     ap.add_argument("--reps", type=int, default=3)
-    ap.add_argument("--miplib", type=Path, default=Path(os.environ.get("MIPLIB_DIR", ".")))
+    ap.add_argument("--miplib", type=Path, default=Path(os.environ.get("MIPLIB_DIR", str(Path.home() / "code" / "miplib"))))
     a = ap.parse_args()
     rows, by_group = [], {}
     for group, name, inst, opts in cases(a.miplib):
