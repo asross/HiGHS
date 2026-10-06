@@ -522,16 +522,30 @@ pub fn get_value_scale(values: &[f64]) -> f64 {
     if values.is_empty() {
         return 1.0;
     }
-    let mut max_abs_value = 0.0;
-    for &v in values {
-        // std::max(fabs(value), max_abs_value)
-        let a = v.abs();
-        if a < max_abs_value {
-        } else {
-            max_abs_value = a;
+    nearest_power_of_two_scale(max_abs(values))
+}
+
+/// `max_abs_value = std::max(fabs(value), max_abs_value)` over the values
+/// from 0. Without NaNs that is the largest |value|, which four maxima find
+/// without a serial chain of compares; a NaN takes the serial loop.
+fn max_abs(values: &[f64]) -> f64 {
+    // std::max(a, m): m if a < m, else a
+    let max = |m: f64, a: f64| if a < m { m } else { a };
+    let mut lane = [0.0f64; 4];
+    let mut nan = false;
+    let mut blocks = values.chunks_exact(4);
+    for b in &mut blocks {
+        for k in 0..4 {
+            let a = b[k].abs();
+            nan |= a.is_nan();
+            lane[k] = max(lane[k], a);
         }
     }
-    nearest_power_of_two_scale(max_abs_value)
+    if nan {
+        return values.iter().fold(0.0, |m, v| max(m, v.abs()));
+    }
+    let m = max(max(lane[0], lane[1]), max(lane[2], lane[3]));
+    blocks.remainder().iter().fold(m, |m, v| max(m, v.abs()))
 }
 
 // ---- HEkk methods on the view ----
@@ -1969,5 +1983,23 @@ mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_ekk_clear_out(p: *mut BasisRecords) {
         (*p).out = Default::default();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn max_abs_is_the_serial_std_max() {
+        let serial = |v: &[f64]| v.iter().fold(0.0, |m: f64, x| if x.abs() < m { m } else { x.abs() });
+        let base = [0.5, -3.0, 2.0, -0.0, 7.5, -7.5, 1.0, 4.0, -9.0, 0.25, 3.0];
+        for n in 0..=base.len() {
+            for nan_at in [None, Some(0), Some(5), Some(9)] {
+                let mut v = base[..n].to_vec();
+                if let Some(i) = nan_at.filter(|&i| i < n) {
+                    v[i] = f64::NAN;
+                }
+                assert_eq!(super::max_abs(&v).to_bits(), serial(&v).to_bits());
+            }
+        }
     }
 }
