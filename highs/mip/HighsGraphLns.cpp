@@ -10,6 +10,7 @@
  */
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 #include "../extern/pdqsort/pdqsort.h"
 #include "io/HighsIO.h"
@@ -17,6 +18,57 @@
 #include "mip/HighsLpRelaxation.h"
 #include "mip/HighsMipSolverData.h"
 #include "mip/HighsPrimalHeuristics.h"
+
+#ifdef HIGHS_RUST
+// rust/src/mip/lns.rs: decision columns, neighbourhoods, flip promise and
+// candidates, move type choice
+struct LnsRsGraph {
+  int num_col;
+  int num_row;
+  const HighsInt* a_start;
+  const HighsInt* a_index;
+  const double* a_value;
+  const HighsInt* ar_start;
+  const HighsInt* ar_index;
+  const double* ar_value;
+};
+struct LnsRs;
+extern "C" {
+int highs_rs_lns_decision_cols(const LnsRsGraph* g, const double* row_lower,
+                               const double* row_upper,
+                               const uint8_t* integrality,
+                               const HighsInt* intcols, int num_int,
+                               HighsInt* out);
+LnsRs* highs_rs_lns_new(const LnsRsGraph* g, const HighsInt* decision,
+                        int num);
+void highs_rs_lns_free(LnsRs* h);
+const uint8_t* highs_rs_lns_in_n(const LnsRs* h);
+int highs_rs_lns_build(LnsRs* h, const LnsRsGraph* g, int type, int size,
+                       int deep, const double* inc, const double* relax,
+                       const double* glo, const double* gup, HighsRandom* rng,
+                       const HighsInt** cols);
+void highs_rs_lns_update_promise(LnsRs* h, const double* inc,
+                                 const double* glo, const double* gup,
+                                 const double* rc);
+int highs_rs_lns_select_type(const void* types, HighsInt* deep_tries,
+                             int flips_exhausted);
+int highs_rs_lns_flip_candidates(LnsRs* h, const double* cur,
+                                 const double* glo, const double* gup,
+                                 const double* rc, double feastol);
+HighsInt highs_rs_lns_flip_candidate(const LnsRs* h, int i);
+int highs_rs_lns_find_partners(LnsRs* h, const LnsRsGraph* g, HighsInt j,
+                               const double* cur, const double* glo,
+                               const double* gup, const double* rc);
+HighsInt highs_rs_lns_partner(const LnsRs* h, int i);
+}
+static LnsRsGraph lnsRsGraph(const HighsLp& model,
+                             const HighsMipSolverData& mipdata) {
+  return {int(model.num_col_),          int(model.num_row_),
+          model.a_matrix_.start_.data(), model.a_matrix_.index_.data(),
+          model.a_matrix_.value_.data(), mipdata.ARstart_.data(),
+          mipdata.ARindex_.data(),      mipdata.ARvalue_.data()};
+}
+#endif
 
 // Graph-neighbourhood LNS
 // -----------------------
@@ -81,6 +133,17 @@ void HighsPrimalHeuristics::setupDecisionCols() {
     decisioncols = intcols;
     return;
   }
+#ifdef HIGHS_RUST
+  {
+    const LnsRsGraph g = lnsRsGraph(model, mipdata);
+    decisioncols.resize(intcols.size());
+    decisioncols.resize(highs_rs_lns_decision_cols(
+        &g, model.row_lower_.data(), model.row_upper_.data(),
+        reinterpret_cast<const uint8_t*>(model.integrality_.data()),
+        intcols.data(), int(intcols.size()), decisioncols.data()));
+    return;
+  }
+#endif
   auto integral = [](double v) { return std::fabs(v - std::round(v)) <= 1e-9; };
   std::vector<uint8_t> implied(model.num_col_, 0);
   for (HighsInt col : intcols) {
@@ -130,8 +193,15 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   const double feastol = mipdata.feastol;
   const HighsDomain& globaldom = worker.getGlobalDomain();
 
+#ifdef HIGHS_RUST
+  const LnsRsGraph rsGraph = lnsRsGraph(model, mipdata);
+  std::unique_ptr<LnsRs, void (*)(LnsRs*)> rsLns(
+      highs_rs_lns_new(&rsGraph, decisioncols.data(), int(decisioncols.size())),
+      highs_rs_lns_free);
+#else
   std::vector<uint8_t> isDecision(numCol, 0);
   for (HighsInt col : decisioncols) isDecision[col] = 1;
+#endif
 
   // one LP relaxation copy for the whole heuristic; bounds live in a domain
   HighsLpRelaxation lp(worker.getLpRelaxation());
@@ -484,11 +554,13 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
   // Rows with at most this many decision columns: a breadth-first search
   // restricted to them follows chains (e.g. one unit over time) rather
   // than spreading over the coupling rows
+#ifndef HIGHS_RUST
   const HighsInt kShortRow = 4;
   std::vector<HighsInt> rowDecisions(mipsolver.numRow(), 0);
   for (HighsInt col : decisioncols)
     for (HighsInt p = A.start_[col]; p != A.start_[col + 1]; ++p)
       ++rowDecisions[A.index_[p]];
+#endif
 
   // Two neighbourhood types: 0 = BFS over all rows from one seed, 1 = BFS
   // over short rows from as many seeds as needed. Each adapts its size to
@@ -540,9 +612,11 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       return cur[col] <= globaldom.col_lower_[col] ? globaldom.col_upper_[col]
                                                    : globaldom.col_lower_[col];
     };
+#ifndef HIGHS_RUST
     auto binary = [&](HighsInt col) {
       return globaldom.col_upper_[col] - globaldom.col_lower_[col] == 1.0;
     };
+#endif
     // the incumbent's decision columns are fixed in the LP, others get
     // their global bounds
     lp.getLpSolver().changeColsBounds(0, numCol - 1,
@@ -641,16 +715,32 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       for (HighsInt i = 0; i < n; ++i) setCol(cols[i], cur[cols[i]]);
       return false;
     };
+#ifndef HIGHS_RUST
     auto byGain = [](const std::pair<double, HighsInt>& a,
                      const std::pair<double, HighsInt>& b) {
       return a.first > b.first || (a.first == b.first && a.second < b.second);
     };
+#endif
     const HighsInt kPartners = 3;
     bool improved = true;
     while (improved) {
       improved = false;
       // the LP is solved at the incumbent: gains from its reduced costs
       rc = lp.getLpSolver().getSolution().col_dual;
+#ifdef HIGHS_RUST
+      flipCands.resize(highs_rs_lns_flip_candidates(
+          rsLns.get(), cur.data(), globaldom.col_lower_.data(),
+          globaldom.col_upper_.data(), rc.data(), feastol));
+      for (size_t i = 0; i < flipCands.size(); ++i)
+        flipCands[i].second = highs_rs_lns_flip_candidate(rsLns.get(), int(i));
+      auto findPartners = [&](HighsInt j) {
+        partners.resize(highs_rs_lns_find_partners(
+            rsLns.get(), &rsGraph, j, cur.data(), globaldom.col_lower_.data(),
+            globaldom.col_upper_.data(), rc.data()));
+        for (size_t i = 0; i < partners.size(); ++i)
+          partners[i].second = highs_rs_lns_partner(rsLns.get(), int(i));
+      };
+#else
       auto gain = [&](HighsInt col) {
         return flipped(col) > cur[col] ? -rc[col] : rc[col];
       };
@@ -684,6 +774,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                                    }),
                        partners.end());
       };
+#endif
       const size_t kScreenBatch = 32;
       size_t batchEnd = start;
       std::vector<HighsInt> open;
@@ -740,10 +831,15 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     return solves;
   };
 
+#ifdef HIGHS_RUST
+  std::vector<HighsInt> neighbourhood;
+  const uint8_t* inN = highs_rs_lns_in_n(rsLns.get());
+#else
   std::vector<HighsInt> neighbourhood, frontier, next, touchedRows, disagree;
   std::vector<uint8_t> inN(numCol, 0), seenRow(mipsolver.numRow(), 0);
   std::vector<double> promise(numCol, 0.0);
   double promiseTotal = 0;
+#endif
   for (HighsInt it = 0; since < maxStall && it < maxIt; ++it) {
     mipdata.syncConcurrentLns();
     // a helper crosses its incumbent with the main solver's once that is
@@ -757,6 +853,11 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     // the quick search only dives; the deep search tries each type once,
     // then mostly the one closing the most gap per LP iteration recently
     HighsInt type = 3;
+#ifdef HIGHS_RUST
+    if (deep)
+      type = highs_rs_lns_select_type(types.data(), deepTries,
+                                      flipsExhausted());
+#else
     if (deep) {
       // each move once (dives may already be known from the quick search),
       // then the best rate of gap closed per LP iteration plus an
@@ -784,6 +885,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       }
       ++deepTries[type];
     }
+#endif
     const bool dived = type == 3;
     LnsMove& nt = types[type];
     if (type == 2) {
@@ -813,6 +915,16 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
     }
     const HighsInt size = HighsInt(nt.size + 0.5);
 
+#ifdef HIGHS_RUST
+    {
+      const HighsInt* cols;
+      const int n = highs_rs_lns_build(
+          rsLns.get(), &rsGraph, int(type), int(size), deep, inc.data(),
+          relaxationsol.data(), globaldom.col_lower_.data(),
+          globaldom.col_upper_.data(), &randgen, &cols);
+      neighbourhood.assign(cols, cols + n);
+    }
+#else
     auto pickSeed = [&]() {
       // a column whose reduced cost when fixed at the incumbent promises
       // an improvement from flipping it (50%, chosen with probability
@@ -892,6 +1004,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
         frontier.swap(next);
       }
     }
+#endif
 
     // fix everything outside the neighbourhood to the incumbent, warm from
     // the last LP solved, near the incumbent: this leads the search much
@@ -927,6 +1040,11 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       // the reduced cost of a column fixed at the incumbent is the
       // first-order gain from flipping it: remember the promising ones
       const std::vector<double>& rc = lp.getLpSolver().getSolution().col_dual;
+#ifdef HIGHS_RUST
+      highs_rs_lns_update_promise(rsLns.get(), inc.data(),
+                                  globaldom.col_lower_.data(),
+                                  globaldom.col_upper_.data(), rc.data());
+#else
       for (HighsInt col : decisioncols) {
         if (inN[col]) continue;
         double gain = 0;
@@ -940,6 +1058,7 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
       }
       promiseTotal = 0;
       for (HighsInt col : decisioncols) promiseTotal += promise[col];
+#endif
     }
     const bool pruned = !usable(st) || lp.getObjective() >= worker.upper_limit;
     if (!pruned && !dived)

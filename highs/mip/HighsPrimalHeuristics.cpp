@@ -32,6 +32,52 @@
 #define FP_32BIT_VOLATILE
 #endif
 
+#ifdef HIGHS_RUST
+// rust/src/mip/heuristics.rs
+struct HeurRsLp {
+  int num_col;
+  int num_row;
+  const HighsInt* a_start;
+  const HighsInt* a_index;
+  const double* a_value;
+  const double* col_lower;
+  const double* col_upper;
+  const double* col_cost;
+  const double* row_lower;
+  const double* row_upper;
+  int minimize;
+};
+struct HeurRsMipRows {
+  const HighsInt* ar_start;
+  const HighsInt* ar_index;
+  const double* ar_value;
+  const uint8_t* integrality;
+  const HighsInt* uplocks;
+  const HighsInt* downlocks;
+  int maximize;
+  int64_t num_integer_cols;
+};
+extern "C" int highs_rs_zi_round(const HeurRsLp* lp, const HighsInt* intcols,
+                                 int num_int, double feastol, double* x);
+extern "C" int highs_rs_shifting(const HeurRsLp* lp, const HeurRsMipRows* mr,
+                                 double feastol, HighsInt* frac_cols,
+                                 double* frac_vals, int* num_frac,
+                                 HighsRandom* rng, double* x);
+static HeurRsLp heurRsLp(const HighsLp& lp) {
+  return {int(lp.num_col_),
+          int(lp.num_row_),
+          lp.a_matrix_.start_.data(),
+          lp.a_matrix_.index_.data(),
+          lp.a_matrix_.value_.data(),
+          lp.col_lower_.data(),
+          lp.col_upper_.data(),
+          lp.col_cost_.data(),
+          lp.row_lower_.data(),
+          lp.row_upper_.data(),
+          lp.sense_ == ObjSense::kMinimize};
+}
+#endif
+
 HighsPrimalHeuristics::HighsPrimalHeuristics(HighsMipSolver& mipsolver)
     : mipsolver(mipsolver),
       successObservations(0.0),
@@ -1276,6 +1322,46 @@ void HighsPrimalHeuristics::shifting(HighsMipWorker& worker,
                                      const std::vector<double>& relaxationsol) {
   if (relaxationsol.size() != static_cast<size_t>(mipsolver.numCol())) return;
 
+#ifdef HIGHS_RUST
+  if (mipsolver.model_->a_matrix_.isColwise()) {
+    // (the LP relaxation's fractional integers, without copying it)
+    const auto& fracints = worker.getLpRelaxation().getFractionalIntegers();
+    std::vector<HighsInt> frac_cols;
+    std::vector<double> frac_vals;
+    for (const auto& f : fracints) {
+      frac_cols.push_back(f.first);
+      frac_vals.push_back(f.second);
+    }
+    int num_frac = int(frac_cols.size());
+    HighsRandom& rng = mipsolver.mipdata_->parallelLockActive()
+                           ? worker.randgen
+                           : this->randgen;
+    const HighsMipSolverData& mipdata = *mipsolver.mipdata_;
+    const HeurRsLp lp = heurRsLp(*mipsolver.model_);
+    const HeurRsMipRows mr = {
+        mipdata.ARstart_.data(),
+        mipdata.ARindex_.data(),
+        mipdata.ARvalue_.data(),
+        reinterpret_cast<const uint8_t*>(
+            mipsolver.model_->integrality_.data()),
+        mipdata.uplocks.data(),
+        mipdata.downlocks.data(),
+        mipsolver.orig_model_->sense_ == ObjSense::kMaximize,
+        int64_t(mipdata.integer_cols.size())};
+    std::vector<double> sol = relaxationsol;
+    const bool infeasible =
+        highs_rs_shifting(&lp, &mr, mipdata.feastol, frac_cols.data(),
+                          frac_vals.data(), &num_frac, &rng, sol.data());
+    if (infeasible)
+      tryRoundedPoint(worker, sol, kSolutionSourceShifting);
+    else if (num_frac > 0)
+      ziRound(worker, sol);
+    else
+      trySolution(sol, kSolutionSourceShifting, worker);
+    return;
+  }
+#endif
+
   std::vector<double> current_relax_solution = relaxationsol;
   HighsInt t = 0;
   const HighsLp& currentLp = *mipsolver.model_;
@@ -1537,6 +1623,17 @@ void HighsPrimalHeuristics::ziRound(HighsMipWorker& worker,
                                     const std::vector<double>& relaxationsol) {
   // if (mipsolver.submip) return;
   if (relaxationsol.size() != static_cast<size_t>(mipsolver.numCol())) return;
+
+#ifdef HIGHS_RUST
+  if (mipsolver.model_->a_matrix_.isColwise()) {
+    std::vector<double> sol = relaxationsol;
+    const HeurRsLp lp = heurRsLp(*mipsolver.model_);
+    if (highs_rs_zi_round(&lp, intcols.data(), int(intcols.size()),
+                          mipsolver.mipdata_->feastol, sol.data()))
+      trySolution(sol, kSolutionSourceZiRound, worker);
+    return;
+  }
+#endif
 
   std::vector<double> current_relax_solution = relaxationsol;
 
