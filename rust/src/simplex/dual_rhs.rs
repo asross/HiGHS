@@ -29,12 +29,15 @@ impl Primal<'_> {
         let value = self.base_value[i];
         let lower = self.base_lower[i];
         let upper = self.base_upper[i];
-        let mut primal_infeasibility = 0.0;
-        if value < lower - self.tp {
-            primal_infeasibility = lower - value;
+        // Selects rather than branches: which case holds is unpredictable
+        let (below, above) = (lower - value, value - upper);
+        let primal_infeasibility = if value < lower - self.tp {
+            below
         } else if value > upper + self.tp {
-            primal_infeasibility = value - upper;
-        }
+            above
+        } else {
+            0.0
+        };
         if self.squared {
             primal_infeasibility * primal_infeasibility
         } else {
