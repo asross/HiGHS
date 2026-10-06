@@ -143,6 +143,15 @@ impl HVec<'_> {
 }
 
 /// An HVector owned by Rust: setup/clear as in HVectorBase.
+///
+/// Its buffers come from, and on drop go back to, a small per-thread pool:
+/// the solvers set up their work vectors per solve (and per call of e.g.
+/// computeDual), as in the C++, and allocating and zeroing them anew (41
+/// bytes per entry) cost several percent of the dispatch MIPs' many short
+/// LP solves. A vector goes back cleared (HVector::clear, on which the
+/// solvers rely between uses anyway), and the solves leave cwork (the
+/// marks of the hyper-sparse solve) zero, so a reused vector is
+/// indistinguishable from a new one.
 pub struct OwnedHVec {
     pub size: i32,
     pub count: i32,
@@ -157,21 +166,66 @@ pub struct OwnedHVec {
     pub pack_value: Vec<f64>,
 }
 
-impl OwnedHVec {
-    pub fn new(size: i32) -> Self {
-        let n = size as usize;
-        OwnedHVec {
-            size,
-            count: 0,
+/// The buffers of a pooled OwnedHVec, with `array` and `cwork` zero
+struct Buffers {
+    index: Vec<i32>,
+    array: Vec<f64>,
+    cwork: Vec<u8>,
+    iwork: Vec<i32>,
+    pack_index: Vec<i32>,
+    pack_value: Vec<f64>,
+}
+
+impl Buffers {
+    fn new(n: usize) -> Self {
+        Buffers {
             index: vec![0; n],
             array: vec![0.0; n],
             cwork: vec![0; n + 6400],
             iwork: vec![0; n * 4],
+            pack_index: vec![0; n],
+            pack_value: vec![0.0; n],
+        }
+    }
+
+    fn bytes(&self) -> usize {
+        41 * self.array.len() + self.cwork.len()
+    }
+}
+
+/// At most this many vectors, and bytes, are kept per thread (the oldest
+/// go first)
+const POOL_VECTORS: usize = 16;
+const POOL_BYTES: usize = 64 << 20;
+
+thread_local! {
+    static POOL: std::cell::RefCell<Vec<Buffers>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl OwnedHVec {
+    pub fn new(size: i32) -> Self {
+        let n = size as usize;
+        let pooled = POOL
+            .try_with(|p| {
+                let mut p = p.borrow_mut();
+                let i = p.iter().rposition(|b| b.array.len() == n)?;
+                Some(p.remove(i))
+            })
+            .ok()
+            .flatten();
+        let b = pooled.unwrap_or_else(|| Buffers::new(n));
+        OwnedHVec {
+            size,
+            count: 0,
+            index: b.index,
+            array: b.array,
+            cwork: b.cwork,
+            iwork: b.iwork,
             synthetic_tick: 0.0,
             pack_flag: false,
             pack_count: 0,
-            pack_index: vec![0; n],
-            pack_value: vec![0.0; n],
+            pack_index: b.pack_index,
+            pack_value: b.pack_value,
         }
     }
 
@@ -215,6 +269,42 @@ impl OwnedHVec {
             pack_index: &mut self.pack_index,
             pack_value: &mut self.pack_value,
         }
+    }
+}
+
+impl Drop for OwnedHVec {
+    fn drop(&mut self) {
+        let n = self.size.max(0) as usize;
+        let intact = self.array.len() == n
+            && self.index.len() == n
+            && self.cwork.len() == n + 6400
+            && self.iwork.len() == 4 * n
+            && self.pack_index.len() == n
+            && self.pack_value.len() == n;
+        if !intact {
+            return;
+        }
+        self.clear();
+        debug_assert!(self.array.iter().all(|&x| x == 0.0) && self.cwork.iter().all(|&c| c == 0));
+        let b = Buffers {
+            index: std::mem::take(&mut self.index),
+            array: std::mem::take(&mut self.array),
+            cwork: std::mem::take(&mut self.cwork),
+            iwork: std::mem::take(&mut self.iwork),
+            pack_index: std::mem::take(&mut self.pack_index),
+            pack_value: std::mem::take(&mut self.pack_value),
+        };
+        if b.bytes() > POOL_BYTES / 4 {
+            return;
+        }
+        let _ = POOL.try_with(|p| {
+            let mut p = p.borrow_mut();
+            let mut bytes = b.bytes() + p.iter().map(Buffers::bytes).sum::<usize>();
+            while !p.is_empty() && (p.len() >= POOL_VECTORS || bytes > POOL_BYTES) {
+                bytes -= p.remove(0).bytes();
+            }
+            p.push(b);
+        });
     }
 }
 
