@@ -10,6 +10,17 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-06, x86_64 (gcc) on AWS Lambda — see `asross/oopt`
+
+A cross-check off the M1: both builds compiled with **gcc** (the toolchain the
+downstream dispatch solver actually ships, not clang) and run on a real x86_64
+AWS Lambda (4096 MB), over a dispatch-MILP suite. Geomean Rust / C++ **0.945**
+at one thread (18/20 bit-identical) and **0.957** at two — no regressions,
+biggest wins on the LP-heavy instances. One x86 bit-identity divergence remains,
+`dm_small_pert_s1_noramp`, on the newer MIP ports (same class the arm64-only
+`mul_add` fix addressed for the simplex). Full tables + per-solve logs for both
+builds: `asross/oopt` branch `rustport-lambda-2026-10-06`.
+
 ## 2026-10-06, clique table and implications in Rust (8572be192b)
 
 `perf.py --reps 1` (M1, heavily loaded): same path on all 32 cases.
