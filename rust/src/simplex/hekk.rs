@@ -909,9 +909,26 @@ pub fn initialise_partitioned_rowwise_matrix(e: &mut EkkView, x: &CHekk) {
     e.status.has_ar_matrix = true;
 }
 
+thread_local! {
+    /// factor_solve_error's dense work arrays, kept zero between calls:
+    /// it runs at every rebuild, and allocating them anew (num_row and
+    /// num_tot entries) cost ~1% of the dispatch MIPs
+    static SOLVE_ERROR_WORK: std::cell::RefCell<(Vec<bool>, Vec<f64>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
 /// HEkk::factorSolveError: a cheap assessment of factor accuracy, from a
 /// random solution with at most 50 nonzeros
 pub fn factor_solve_error(e: &mut EkkView) -> f64 {
+    let (mut solution_nonzero, mut btran_scattered_rhs) =
+        SOLVE_ERROR_WORK.with(|w| std::mem::take(&mut *w.borrow_mut()));
+    let error = factor_solve_error_with(e, &mut solution_nonzero, &mut btran_scattered_rhs);
+    SOLVE_ERROR_WORK.with(|w| *w.borrow_mut() = (solution_nonzero, btran_scattered_rhs));
+    error
+}
+
+/// factor_solve_error with zero work arrays (left zero on return)
+fn factor_solve_error_with(e: &mut EkkView, solution_nonzero: &mut Vec<bool>, btran_scattered_rhs: &mut Vec<f64>) -> f64 {
     let num_col = e.num_col;
     let num_row = e.num_row;
     let mut btran_rhs = OwnedHVec::new(num_row as i32);
@@ -922,7 +939,7 @@ pub fn factor_solve_error(e: &mut EkkView) -> f64 {
     let solution_num_nz = ideal_solution_num_nz.min((num_row + 1) / 2);
     let mut solution_value: Vec<f64> = Vec::with_capacity(solution_num_nz);
     let mut solution_index: Vec<usize> = Vec::with_capacity(solution_num_nz);
-    let mut solution_nonzero = vec![false; num_row];
+    solution_nonzero.resize(solution_nonzero.len().max(num_row), false);
     loop {
         let i_row = random.integer_below(num_row as i32) as usize;
         if solution_nonzero[i_row] {
@@ -939,7 +956,7 @@ pub fn factor_solve_error(e: &mut EkkView) -> f64 {
             break;
         }
     }
-    let mut btran_scattered_rhs = vec![0.0; num_col + num_row];
+    btran_scattered_rhs.resize(btran_scattered_rhs.len().max(num_col + num_row), 0.0);
     for (&i_row, &value) in solution_index.iter().zip(&solution_value) {
         for i_el in e.ar_p_end[i_row] as usize..e.ar_start[i_row + 1] as usize {
             let i_col = e.ar_index[i_el] as usize;
@@ -958,6 +975,15 @@ pub fn factor_solve_error(e: &mut EkkView) -> f64 {
         btran_rhs.array[i_row] = btran_scattered_rhs[i_col];
         btran_rhs.index[btran_rhs.count as usize] = i_row as i32;
         btran_rhs.count += 1;
+    }
+    // Leave the work arrays zero: only the entries of the solution's rows
+    // were set
+    for &i_row in &solution_index {
+        solution_nonzero[i_row] = false;
+        for i_el in e.ar_p_end[i_row] as usize..e.ar_start[i_row + 1] as usize {
+            btran_scattered_rhs[e.ar_index[i_el] as usize] = 0.0;
+        }
+        btran_scattered_rhs[num_col + i_row] = 0.0;
     }
     let expected_density = solution_num_nz as f64 * *e.col_aq_density;
     ftran_rhs.with(|v| e.ftran(v, expected_density));
