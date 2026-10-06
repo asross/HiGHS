@@ -10,6 +10,16 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-06, clique table and implications in Rust (8572be192b)
+
+`perf.py --reps 1` (M1, heavily loaded): same path on all 32 cases.
+Geomean Rust / C++: MIP 0.948, LP dual 0.805, primal 0.970, IPX 0.963,
+PDLP 0.970, readers 0.393, all 0.818. Against the rust-port HIGHS_RUST
+build at 300 nodes on clique-heavy MIPLIB (air04, air05, qap10,
+assign1-5-8, physiciansched6-2, comp07-2idx, binkar10_1): geomean 0.990
+(qap10 0.835, the rest 0.997-1.037). Instructions rise ~1-2% (the
+callbacks into C++ domain operations), cycles do not.
+
 ## 2026-10-06, path-preserving speedups of the LP kernels (7227d4a032)
 
 A pass over the ported simplex kernels guided by a SIGPROF PC sampler

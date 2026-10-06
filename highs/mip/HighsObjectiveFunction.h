@@ -57,6 +57,10 @@ class HighsObjectiveFunction {
     return cliquePartitionStart.size() - 1;
   }
 
+  const std::vector<HighsInt>& getColToPartition() const {
+    return colToPartition;
+  }
+
   HighsInt getColCliquePartition(HighsInt col) const {
     return colToPartition[col];
   }

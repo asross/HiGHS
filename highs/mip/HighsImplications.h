@@ -16,11 +16,93 @@
 #include "mip/HighsDomain.h"
 #include "mip/HighsDomainChange.h"
 #include "util/HighsHashTree.h"
+#ifdef HIGHS_RUST
+#include "mip/HighsCliqueTable.h"
+#endif
 
 class HighsCliqueTable;
 class HighsLpRelaxation;
 
 class HighsImplications {
+
+#ifdef HIGHS_RUST
+  // The data is Rust's (rust/src/mip/implications.rs); this is a handle
+  highs_rs::Implications* rs_;
+
+ public:
+  struct VarBound {
+    double coef;
+    double constant;
+
+    double minValue() const {
+      return static_cast<double>(static_cast<HighsCDouble>(constant) +
+                                 std::min(coef, 0.0));
+    }
+    double maxValue() const {
+      return static_cast<double>(static_cast<HighsCDouble>(constant) +
+                                 std::max(coef, 0.0));
+    }
+  };
+
+  const HighsMipSolver& mipsolver;
+  HighsRsVec<HighsSubstitution> substitutions;
+  std::function<void(HighsInt, HighsInt, HighsInt, double)>
+      storeLiftingOpportunity;
+
+  explicit HighsImplications(const HighsMipSolver& mipsolver);
+  ~HighsImplications();
+  HighsImplications(const HighsImplications&) = delete;
+  HighsImplications& operator=(const HighsImplications&) = delete;
+
+  constexpr static int64_t calcMaxVarBounds(HighsInt numcol) {
+    return int64_t{5000000} + 10 * static_cast<int64_t>(numcol);
+  };
+
+  HighsInt getNumImplications() const;
+  bool tooManyVarBounds() const;
+
+  void addVUB(HighsInt col, HighsInt vubcol, double vubcoef,
+              double vubconstant);
+  void addVUB(HighsInt col, HighsInt vubcol, double vubcoef, double vubconstant,
+              double colupperbound, bool colisinteger);
+  void addVLB(HighsInt col, HighsInt vlbcol, double vlbcoef,
+              double vlbconstant);
+  void addVLB(HighsInt col, HighsInt vlbcol, double vlbcoef, double vlbconstant,
+              double collowerbound, bool colisinteger);
+
+  void columnTransformed(HighsInt col, double scale, double constant);
+
+  std::pair<HighsInt, VarBound> getBestVub(HighsInt col,
+                                           const HighsSolution& lpSolution,
+                                           double& bestUb,
+                                           const HighsDomain& globaldom) const;
+  std::pair<HighsInt, VarBound> getBestVlb(HighsInt col,
+                                           const HighsSolution& lpSolution,
+                                           double& bestLb,
+                                           const HighsDomain& globaldom) const;
+
+  bool runProbing(HighsInt col, HighsInt& numReductions);
+
+  void rebuild(HighsInt ncols, const std::vector<HighsInt>& cIndex,
+               const std::vector<HighsInt>& rIndex);
+  void buildFrom(const HighsImplications& init);
+
+  void separateImpliedBounds(const HighsLpRelaxation& lpRelaxation,
+                             const std::vector<double>& sol,
+                             HighsCutPool& cutpool, double feastol,
+                             HighsDomain& globaldom, bool thread_safe);
+
+  void cleanupVarbounds(HighsInt col);
+  void cleanupVlb(HighsInt col, HighsInt vlbCol,
+                  HighsImplications::VarBound& vlb, double lb, bool& redundant,
+                  bool& infeasible, bool allowBoundChanges = true) const;
+  void cleanupVub(HighsInt col, HighsInt vubCol,
+                  HighsImplications::VarBound& vub, double ub, bool& redundant,
+                  bool& infeasible, bool allowBoundChanges = true) const;
+
+  void applyImplications(HighsDomain& domain, HighsInt col, HighsInt val);
+};
+#else
   HighsInt nextCleanupCall;
 
   struct Implics {
@@ -193,5 +275,7 @@ class HighsImplications {
 
   void applyImplications(HighsDomain& domain, HighsInt col, HighsInt val);
 };
+
+#endif  // HIGHS_RUST
 
 #endif

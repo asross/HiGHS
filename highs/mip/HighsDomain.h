@@ -26,6 +26,7 @@ class HighsCutPool;
 #include "mip/HighsDomainRustView.h"
 namespace highs_rs {
 struct DomainAccess;
+struct CliqueAccess;
 }
 #endif
 class HighsConflictPool;
@@ -34,6 +35,7 @@ class HighsObjectiveFunction;
 class HighsDomain {
 #ifdef HIGHS_RUST
   friend struct highs_rs::DomainAccess;
+  friend struct highs_rs::CliqueAccess;
 #endif
 
  public:
@@ -337,8 +339,11 @@ class HighsDomain {
   HighsInt infeasible_pos;
 
 #ifdef HIGHS_RUST
-  // the view of this domain passed to the Rust kernels
+  // the view of this domain passed to Rust
   highs_rs::DomainCache rsView_;
+  // the scratch of propagate() (with propRowNumChangedBounds_)
+  std::vector<HighsInt> rsScratchInds_;
+  std::vector<HighsDomainChange> rsScratchBounds_;
 #endif
   void invalidateRustView() {
 #ifdef HIGHS_RUST
@@ -513,7 +518,10 @@ class HighsDomain {
 
   void markPropagateCut(Reason reason);
 
-  void setupObjectivePropagation() { objProp_ = ObjectivePropagation(this); }
+  void setupObjectivePropagation() {
+    invalidateRustView();
+    objProp_ = ObjectivePropagation(this);
+  }
 
   void computeRowActivities();
 

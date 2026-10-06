@@ -5,6 +5,9 @@ use crate::util::fma::ClangFma;
 
 use super::hash::{log2i, pair_hash};
 
+/// Layout of the C++ HighsRandom (one uint64_t), so C++ generators can be
+/// used in place
+#[repr(transparent)]
 #[derive(Clone)]
 pub struct HighsRandom {
     state: u64,

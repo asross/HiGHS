@@ -13,10 +13,23 @@
 void HighsConflictPool::addConflictCut(
     const HighsDomain& domain,
     const std::set<HighsDomain::ConflictSet::LocalDomChg>& reasonSideFrontier) {
+  std::vector<HighsDomainChange> entries;
+  entries.reserve(reasonSideFrontier.size());
+  for (const HighsDomain::ConflictSet::LocalDomChg& domchg :
+       reasonSideFrontier) {
+    assert(domchg.pos >= 0);
+    assert(domchg.pos < (HighsInt)domain.getDomainChangeStack().size());
+    entries.push_back(domchg.domchg);
+  }
+  addConflictCut(domain, entries.data(), entries.size());
+}
+
+void HighsConflictPool::addConflictCut(const HighsDomain& domain,
+                                       const HighsDomainChange* entries,
+                                       HighsInt conflictLen) {
   HighsInt conflictIndex;
   HighsInt start;
   HighsInt end;
-  HighsInt conflictLen = reasonSideFrontier.size();
   std::set<std::pair<HighsInt, HighsInt>>::iterator it;
   if (freeSpaces_.empty() ||
       (it = freeSpaces_.lower_bound(
@@ -59,15 +72,10 @@ void HighsConflictPool::addConflictCut(
   ageDistribution_[ages_[conflictIndex]] += 1;
 
   HighsInt i = start;
-  const std::vector<HighsDomainChange>& domchgStack_ =
-      domain.getDomainChangeStack();
   double feastol = domain.feastol();
-  for (const HighsDomain::ConflictSet::LocalDomChg& domchg :
-       reasonSideFrontier) {
+  for (HighsInt k = 0; k < conflictLen; ++k) {
     assert(i < end);
-    assert(domchg.pos >= 0);
-    assert(domchg.pos < (HighsInt)domchgStack_.size());
-    conflictEntries_[i] = domchg.domchg;
+    conflictEntries_[i] = entries[k];
     if (domain.variableType(conflictEntries_[i].column) ==
         HighsVarType::kContinuous) {
       if (conflictEntries_[i].boundtype == HighsBoundType::kLower)
@@ -87,10 +95,25 @@ void HighsConflictPool::addReconvergenceCut(
     const std::set<HighsDomain::ConflictSet::LocalDomChg>&
         reconvergenceFrontier,
     const HighsDomainChange& reconvergenceDomchg) {
+  std::vector<HighsDomainChange> entries;
+  entries.reserve(reconvergenceFrontier.size());
+  for (const HighsDomain::ConflictSet::LocalDomChg& domchg :
+       reconvergenceFrontier) {
+    assert(domchg.pos >= 0);
+    assert(domchg.pos < (HighsInt)domain.getDomainChangeStack().size());
+    entries.push_back(domchg.domchg);
+  }
+  addReconvergenceCut(domain, entries.data(), entries.size(),
+                      reconvergenceDomchg);
+}
+
+void HighsConflictPool::addReconvergenceCut(
+    const HighsDomain& domain, const HighsDomainChange* entries,
+    HighsInt frontierLen, const HighsDomainChange& reconvergenceDomchg) {
   HighsInt conflictIndex;
   HighsInt start;
   HighsInt end;
-  HighsInt conflictLen = reconvergenceFrontier.size() + 1;
+  HighsInt conflictLen = frontierLen + 1;
   std::set<std::pair<HighsInt, HighsInt>>::iterator it;
   if (freeSpaces_.empty() ||
       (it = freeSpaces_.lower_bound(
@@ -133,17 +156,12 @@ void HighsConflictPool::addReconvergenceCut(
   ageDistribution_[ages_[conflictIndex]] += 1;
 
   HighsInt i = start;
-  const std::vector<HighsDomainChange>& domchgStack_ =
-      domain.getDomainChangeStack();
   assert(i < end);
   conflictEntries_[i++] = domain.flip(reconvergenceDomchg);
   double feastol = domain.feastol();
-  for (const HighsDomain::ConflictSet::LocalDomChg& domchg :
-       reconvergenceFrontier) {
+  for (HighsInt k = 0; k < frontierLen; ++k) {
     assert(i < end);
-    assert(domchg.pos >= 0);
-    assert(domchg.pos < (HighsInt)domchgStack_.size());
-    conflictEntries_[i] = domchg.domchg;
+    conflictEntries_[i] = entries[k];
     if (domain.variableType(conflictEntries_[i].column) ==
         HighsVarType::kContinuous) {
       if (conflictEntries_[i].boundtype == HighsBoundType::kLower)
