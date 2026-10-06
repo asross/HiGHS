@@ -10,6 +10,19 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-06, HPresolve in Rust
+
+Presolve cycles (read+presolve minus read, `write_presolved_model_file`,
+best of 5, M1, loaded) against the same build with the C++ presolve
+(rust-port 45bc2d0bb1): dispatch 080458 0.965, 3c1b60d6 0.964,
+3c1b60d6_wind185 0.958, air05 0.972, co-100 0.82 (3 reps), 80bau3b
+0.97, greenbea 1.06 (0.04 Gcycles). Same paths everywhere: presolve logs
+and presolved models identical on 82 check instances, 35 MIPLIB and 3
+dispatch MILPs (arm64 and x86_64), full solves and 14 MIPLIB at a node
+limit. `perf.py --reps 1` against pure C++ (before the clique/implications
+merge): MIP 0.925, dual simplex 0.739, primal 0.947, IPX 0.928, PDLP
+0.961, readers 0.330, all 0.805, all same path.
+
 ## 2026-10-06, clique table and implications in Rust (8572be192b)
 
 `perf.py --reps 1` (M1, heavily loaded): same path on all 32 cases.

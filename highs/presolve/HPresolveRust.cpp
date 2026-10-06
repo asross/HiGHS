@@ -626,7 +626,8 @@ void cbFinaliseBegin(Cb c, bool first_call, RsSlice<HighsInt>* deleted,
   cliquetable.cleanupFixed(domain);
   if (!first_call) cliquetable.extractCliques(*mipsolver, false);
   cliquetable.runCliqueMerging(domain);
-  x.ints = cliquetable.getDeletedRows();
+  x.ints.assign(cliquetable.getDeletedRows().begin(),
+                cliquetable.getDeletedRows().end());
   cliquetable.getDeletedRows().clear();
   x.ints2.clear();
   for (const auto& ext : cliquetable.getCliqueExtensions()) {
@@ -647,7 +648,7 @@ void cbDomainBounds(Cb c, RsSlice<double>* lower, RsSlice<double>* upper) {
 
 void cbImplSubstitutions(Cb c, RsSlice<HighsSubstitution>* s) {
   const auto& subs = C(c).mipsolver->mipdata_->implications.substitutions;
-  *s = {subs.data(), subs.size()};
+  *s = {subs.begin(), subs.size()};
 }
 
 void cbClearImplSubstitutions(Cb c) {
