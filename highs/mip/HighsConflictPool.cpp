@@ -10,6 +10,78 @@
 
 #include "mip/HighsDomain.h"
 
+#ifdef HIGHS_RUST
+namespace {
+void conflictAdded(void* d, HighsInt conflict) {
+  static_cast<HighsDomain::ConflictPoolPropagation*>(d)->conflictAdded(
+      conflict);
+}
+void conflictDeleted(void* d, HighsInt conflict) {
+  static_cast<HighsDomain::ConflictPoolPropagation*>(d)->conflictDeleted(
+      conflict);
+}
+}  // namespace
+
+HighsConflictPool::HighsConflictPool(HighsInt agelim, HighsInt softlimit)
+    : rs_(highs_rs::highs_rs_conflictpool_new(agelim, softlimit, conflictAdded,
+                                    conflictDeleted)) {}
+
+// the entries of a conflict: continuous bounds relaxed by the tolerance
+static std::vector<HighsDomainChange> relaxedEntries(
+    const HighsDomain& domain, const HighsDomainChange* entries, HighsInt len) {
+  std::vector<HighsDomainChange> relaxed(entries, entries + len);
+  double feastol = domain.feastol();
+  for (HighsDomainChange& e : relaxed) {
+    if (domain.variableType(e.column) == HighsVarType::kContinuous) {
+      if (e.boundtype == HighsBoundType::kLower)
+        e.boundval += feastol;
+      else
+        e.boundval -= feastol;
+    }
+  }
+  return relaxed;
+}
+
+void HighsConflictPool::addConflictCut(const HighsDomain& domain,
+                                       const HighsDomainChange* entries,
+                                       HighsInt len) {
+  std::vector<HighsDomainChange> relaxed = relaxedEntries(domain, entries, len);
+  highs_rs::highs_rs_conflictpool_add(rs_, relaxed.data(), len, nullptr);
+}
+
+void HighsConflictPool::addReconvergenceCut(
+    const HighsDomain& domain, const HighsDomainChange* entries, HighsInt len,
+    const HighsDomainChange& reconvergenceDomchg) {
+  HighsDomainChange flipped = domain.flip(reconvergenceDomchg);
+  std::vector<HighsDomainChange> relaxed = relaxedEntries(domain, entries, len);
+  highs_rs::highs_rs_conflictpool_add(rs_, relaxed.data(), len, &flipped);
+}
+
+void HighsConflictPool::addConflictCut(
+    const HighsDomain& domain,
+    const std::set<HighsDomain::ConflictSet::LocalDomChg>& reasonSideFrontier) {
+  std::vector<HighsDomainChange> entries;
+  entries.reserve(reasonSideFrontier.size());
+  for (const HighsDomain::ConflictSet::LocalDomChg& domchg :
+       reasonSideFrontier)
+    entries.push_back(domchg.domchg);
+  addConflictCut(domain, entries.data(), entries.size());
+}
+
+void HighsConflictPool::addReconvergenceCut(
+    const HighsDomain& domain,
+    const std::set<HighsDomain::ConflictSet::LocalDomChg>&
+        reconvergenceFrontier,
+    const HighsDomainChange& reconvergenceDomchg) {
+  std::vector<HighsDomainChange> entries;
+  entries.reserve(reconvergenceFrontier.size());
+  for (const HighsDomain::ConflictSet::LocalDomChg& domchg :
+       reconvergenceFrontier)
+    entries.push_back(domchg.domchg);
+  addReconvergenceCut(domain, entries.data(), entries.size(),
+                      reconvergenceDomchg);
+}
+#else
 void HighsConflictPool::addConflictCut(
     const HighsDomain& domain,
     const std::set<HighsDomain::ConflictSet::LocalDomChg>& reasonSideFrontier) {
@@ -300,3 +372,4 @@ void HighsConflictPool::syncConflictPool(HighsConflictPool& syncpool) {
   ages_.clear();
   ageResetWhileLocked_.clear();
 }
+#endif  // HIGHS_RUST

@@ -9,6 +9,153 @@
 
 #include "mip/HighsMipSolverData.h"
 
+#ifdef HIGHS_RUST
+#include "mip/HighsCliqueTableRust.h"
+
+namespace highs_rs {
+// Mirror of CRedcost (rust/src/mip/redcost.rs)
+struct Redcost {
+  const CliqueDom* local;
+  const CliqueDom* global;
+  const HighsInt* integral_cols;
+  HighsInt num_integral;
+  const double* redcost;
+  double lp_objective;
+  double upper_limit;
+  double feastol;
+  double epsilon;
+  const ConflictPool* pool;
+  void* ctx;
+  bool (*dual_proof)(void*, const HighsInt**, const double**, HighsInt*,
+                     double*);
+  void (*reconvergence)(void*, HighsDomainChange, const HighsInt*,
+                        const double*, HighsInt, double);
+};
+extern "C" {
+HighsInt highs_rs_redcost_lurking(const RedcostFixing* r, const HighsInt* cols,
+                                  HighsInt ncols, const double* lower,
+                                  const double* upper, HighsInt ncol,
+                                  double* keys, HighsDomainChange* out);
+void highs_rs_redcost_propagate_root(RedcostFixing* r, const CliqueDom* dom,
+                                     const HighsInt* cols, HighsInt ncols,
+                                     double lower_bound, double upper_limit);
+void highs_rs_redcost_add_root(RedcostFixing* r, HighsInt ncol,
+                               const HighsInt* cols, HighsInt ncols,
+                               const double* lower, const double* upper,
+                               const double* redcost, double lp_objective,
+                               double feastol, double lower_bound);
+void highs_rs_redcost_propagate(const Redcost* r);
+}
+}  // namespace highs_rs
+
+std::vector<std::pair<double, HighsDomainChange>>
+HighsRedcostFixing::getLurkingBounds(const HighsMipSolver& mipsolver,
+                                     const HighsDomain& globaldom) const {
+  const std::vector<HighsInt>& cols = mipsolver.mipdata_->integral_cols;
+  HighsInt ncol = globaldom.col_lower_.size();
+  HighsInt n = highs_rs::highs_rs_redcost_lurking(
+      rs_, cols.data(), cols.size(), globaldom.col_lower_.data(),
+      globaldom.col_upper_.data(), ncol, nullptr, nullptr);
+  std::vector<double> keys(n);
+  std::vector<HighsDomainChange> chgs(n);
+  highs_rs::highs_rs_redcost_lurking(rs_, cols.data(), cols.size(),
+                                     globaldom.col_lower_.data(),
+                                     globaldom.col_upper_.data(), ncol,
+                                     keys.data(), chgs.data());
+  std::vector<std::pair<double, HighsDomainChange>> domchgs;
+  domchgs.reserve(n);
+  for (HighsInt i = 0; i != n; ++i) domchgs.emplace_back(keys[i], chgs[i]);
+  return domchgs;
+}
+
+void HighsRedcostFixing::propagateRootRedcost(const HighsMipSolver& mipsolver) {
+  HighsMipSolverData& mipdata = *mipsolver.mipdata_;
+  highs_rs::CliqueDom dom = highs_rs::cliqueDom(mipdata.getDomain());
+  highs_rs::highs_rs_redcost_propagate_root(
+      rs_, &dom, mipdata.integral_cols.data(), mipdata.integral_cols.size(),
+      mipdata.lower_bound, mipdata.upper_limit);
+}
+
+namespace {
+struct RedcostCtx {
+  HighsDomain& localdomain;
+  HighsDomain& globaldom;
+  const HighsLpRelaxation& lp;
+  HighsConflictPool& conflictpool;
+  HighsPseudocost& pseudocost;
+  double upper_limit;
+  std::vector<HighsInt> inds;
+  std::vector<double> vals;
+};
+
+bool redcostDualProof(void* p, const HighsInt** inds, const double** vals,
+                      HighsInt* len, double* rhs) {
+  RedcostCtx& c = *static_cast<RedcostCtx*>(p);
+  if (!c.lp.computeDualProof(c.globaldom, c.upper_limit, c.inds, c.vals, *rhs,
+                             false))
+    return false;
+  *inds = c.inds.data();
+  *vals = c.vals.data();
+  *len = c.inds.size();
+  return true;
+}
+
+void redcostReconvergence(void* p, HighsDomainChange domchg,
+                          const HighsInt* inds, const double* vals,
+                          HighsInt len, double rhs) {
+  RedcostCtx& c = *static_cast<RedcostCtx*>(p);
+  c.localdomain.conflictAnalyzeReconvergence(domchg, inds, vals, len, rhs,
+                                             c.conflictpool, c.globaldom,
+                                             c.pseudocost);
+}
+}  // namespace
+
+void HighsRedcostFixing::propagateRedCost(const HighsMipSolver& mipsolver,
+                                          HighsDomain& localdomain,
+                                          HighsDomain& globaldom,
+                                          const HighsLpRelaxation& lp,
+                                          HighsConflictPool& conflictpool,
+                                          HighsPseudocost& pseudocost,
+                                          double upper_limit) {
+  assert(!localdomain.infeasible());
+  HighsMipSolverData& mipdata = *mipsolver.mipdata_;
+  RedcostCtx ctx{localdomain, globaldom, lp, conflictpool, pseudocost,
+                 upper_limit, {}, {}};
+  highs_rs::CliqueDom local = highs_rs::cliqueDom(localdomain);
+  highs_rs::CliqueDom global = highs_rs::cliqueDom(globaldom);
+  highs_rs::Redcost r;
+  r.local = &local;
+  r.global = &global;
+  r.integral_cols = mipdata.integral_cols.data();
+  r.num_integral = mipdata.integral_cols.size();
+  r.redcost = lp.getSolution().col_dual.data();
+  r.lp_objective = lp.getObjective();
+  r.upper_limit = upper_limit;
+  r.feastol = mipdata.feastol;
+  r.epsilon = mipdata.epsilon;
+  r.pool = conflictpool.rust();
+  r.ctx = &ctx;
+  r.dual_proof = redcostDualProof;
+  r.reconvergence = redcostReconvergence;
+  highs_rs::highs_rs_redcost_propagate(&r);
+}
+
+void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
+                                        const std::vector<double>& lpredcost,
+                                        double lpobjective) {
+  HighsMipSolverData& mipdata = *mipsolver.mipdata_;
+  // Provided domains won't be used (only used for dual proof)
+  mipdata.getLp().computeBasicDegenerateDuals(
+      mipdata.feastol, mipdata.getDomain(), mipdata.getDomain(),
+      mipdata.getConflictPool(), mipdata.getPseudoCost(), false);
+  const HighsDomain& dom = mipdata.getDomain();
+  highs_rs::highs_rs_redcost_add_root(
+      rs_, mipsolver.numCol(), mipdata.integral_cols.data(),
+      mipdata.integral_cols.size(), dom.col_lower_.data(),
+      dom.col_upper_.data(), lpredcost.data(), lpobjective, mipdata.feastol,
+      mipdata.lower_bound);
+}
+#else
 std::vector<std::pair<double, HighsDomainChange>>
 HighsRedcostFixing::getLurkingBounds(const HighsMipSolver& mipsolver,
                                      const HighsDomain& globaldom) const {
@@ -322,3 +469,4 @@ void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
     }
   }
 }
+#endif  // HIGHS_RUST

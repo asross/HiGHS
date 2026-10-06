@@ -9,9 +9,8 @@
 //! by position, is a BinaryHeap of positions (they are unique, so the pop
 //! order is that of the C++ heap). The candidates of an explanation are
 //! sorted by (priority descending, position): unique keys, so the order is
-//! that of the C++ pdqsort. The conflict pool (adding a conflict), the
-//! pseudocosts (conflict scores) and the node queue (number of open nodes
-//! on a column's bound) stay C++, through [`CConflict`]'s functions. Adding
+//! that of the C++ pdqsort. Adding a conflict to the pool goes through
+//! [`CConflict`]'s C++ function. Adding
 //! a conflict resizes the conflict arrays of the domains propagating the
 //! pool, so the C++ refills both views after it, and no view is held across
 //! it here.
@@ -19,6 +18,8 @@
 use super::domain::{max2, CDomain, Dom, DomChg, Reason, INF, LOWER};
 use super::domain::{REASON_BRANCHING, REASON_CONFLICTING_BOUNDS, REASON_MODEL_ROW_LOWER, REASON_MODEL_ROW_UPPER};
 use super::domain::{REASON_OBJECTIVE, REASON_UNKNOWN};
+use super::nodequeue::NodeQueue;
+use super::pseudocost::Pseudocost;
 use crate::ffi::sl;
 use crate::util::cdouble::CDouble;
 use crate::util::fma::ClangFma;
@@ -33,16 +34,11 @@ const REASON_CLIQUE_TABLE: i32 = -5;
 pub struct CConflict {
     local: *const CDomain,
     global: *const CDomain,
-    /// the HighsConflictPool, HighsPseudocost and HighsNodeQueue
+    /// the HighsConflictPool, the pseudocosts and the node queue
     pool: *mut c_void,
-    pseudocost: *mut c_void,
-    nodequeue: *const c_void,
+    pseudocost: *mut Pseudocost,
+    nodequeue: *const NodeQueue,
     num_integral: i32,
-    /// the number of open nodes with a changed lower (up) / upper bound
-    num_nodes: unsafe extern "C" fn(*const c_void, i32, bool) -> i64,
-    increase_conflict_weight: unsafe extern "C" fn(*mut c_void),
-    /// increaseConflictScoreUp (up) / Down
-    increase_conflict_score: unsafe extern "C" fn(*mut c_void, i32, bool),
     /// addConflictCut and addReconvergenceCut (if domchg is not null) of the
     /// frontier's entries, then refills both views
     add_cut: unsafe extern "C" fn(*const CConflict, *const DomChg, i32, *const DomChg),
@@ -105,13 +101,19 @@ impl<'c> ConflictSet<'c> {
     }
 
     fn num_nodes(&self, col: i32, up: bool) -> i64 {
-        // SAFETY: reads the node queue
-        unsafe { (self.c.num_nodes)(self.c.nodequeue, col, up) }
+        // SAFETY: the node queue does not change during the analysis
+        let q = unsafe { &*self.c.nodequeue };
+        if up {
+            q.num_nodes_up(col)
+        } else {
+            q.num_nodes_down(col)
+        }
     }
 
     fn increase_score(&self, col: i32, up: bool) {
-        // SAFETY: changes the pseudocost's conflict scores
-        unsafe { (self.c.increase_conflict_score)(self.c.pseudocost, col, up) };
+        // SAFETY: the pseudocosts are not otherwise borrowed during the
+        // analysis
+        unsafe { (*self.c.pseudocost).increase_conflict_score(col, up) };
     }
 
     fn add_cut(&self, frontier: &Frontier, domchg: Option<&DomChg>) {
@@ -677,8 +679,8 @@ impl<'c> ConflictSet<'c> {
     /// The common part of both conflictAnalysis: conflict scores of the
     /// explanation, then the cuts depth by depth
     fn analyze_resolved(&mut self) {
-        // SAFETY: changes the pseudocost's conflict weight
-        unsafe { (self.c.increase_conflict_weight)(self.c.pseudocost) };
+        // SAFETY: as increase_score
+        unsafe { (*self.c.pseudocost).increase_conflict_weight() };
         for &(_, d) in &self.resolved {
             self.increase_score(d.column, d.boundtype == LOWER);
         }

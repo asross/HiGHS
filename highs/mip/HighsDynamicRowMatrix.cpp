@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <numeric>
 
+#ifndef HIGHS_RUST
+
 HighsDynamicRowMatrix::HighsDynamicRowMatrix(HighsInt ncols) {
   AheadPos_.resize(ncols, -1);
   AheadNeg_.resize(ncols, -1);
@@ -197,3 +199,4 @@ void HighsDynamicRowMatrix::removeRow(HighsInt rowindex) {
   ARrange_[rowindex].first = -1;
   ARrange_[rowindex].second = -1;
 }
+#endif  // HIGHS_RUST

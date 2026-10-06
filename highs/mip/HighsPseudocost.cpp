@@ -9,6 +9,89 @@
 
 #include "mip/HighsMipSolverData.h"
 
+#ifdef HIGHS_RUST
+namespace {
+template <typename T>
+T* mut(const std::vector<T>& v) {
+  return const_cast<T*>(v.data());
+}
+
+highs_rs::PscostInit initArrays(const HighsPseudocostInitialization& init) {
+  highs_rs::PscostInit a;
+  a.pseudocostup = mut(init.pseudocostup);
+  a.pseudocostdown = mut(init.pseudocostdown);
+  a.nsamplesup = mut(init.nsamplesup);
+  a.nsamplesdown = mut(init.nsamplesdown);
+  a.inferencesup = mut(init.inferencesup);
+  a.inferencesdown = mut(init.inferencesdown);
+  a.ninferencesup = mut(init.ninferencesup);
+  a.ninferencesdown = mut(init.ninferencesdown);
+  a.conflictscoreup = mut(init.conflictscoreup);
+  a.conflictscoredown = mut(init.conflictscoredown);
+  a.n = init.pseudocostup.size();
+  a.cost_total = init.cost_total;
+  a.inferences_total = init.inferences_total;
+  a.conflict_avg_score = init.conflict_avg_score;
+  a.nsamplestotal = init.nsamplestotal;
+  a.ninferencestotal = init.ninferencestotal;
+  return a;
+}
+
+void resizeInit(HighsPseudocostInitialization& init, size_t n) {
+  init.pseudocostup.resize(n);
+  init.pseudocostdown.resize(n);
+  init.nsamplesup.resize(n);
+  init.nsamplesdown.resize(n);
+  init.inferencesup.resize(n);
+  init.inferencesdown.resize(n);
+  init.ninferencesup.resize(n);
+  init.ninferencesdown.resize(n);
+  init.conflictscoreup.resize(n);
+  init.conflictscoredown.resize(n);
+}
+
+void exportInit(HighsPseudocostInitialization& init,
+                const highs_rs::Pseudocost* p, HighsInt maxCount,
+                const HighsInt* orig) {
+  highs_rs::PscostInit a = initArrays(init);
+  highs_rs::highs_rs_pscost_export(p, maxCount, orig, &a);
+  init.cost_total = a.cost_total;
+  init.inferences_total = a.inferences_total;
+  init.conflict_avg_score = a.conflict_avg_score;
+  init.nsamplestotal = a.nsamplestotal;
+  init.ninferencestotal = a.ninferencestotal;
+}
+}  // namespace
+
+HighsPseudocost::HighsPseudocost(const HighsMipSolver& mipsolver)
+    : rs_(highs_rs::highs_rs_pscost_new(mipsolver.numCol(),
+                              mipsolver.options_mip_->mip_pscost_minreliable)) {
+  if (mipsolver.pscostinit != nullptr) {
+    std::vector<HighsInt> orig(mipsolver.numCol());
+    for (HighsInt i = 0; i != mipsolver.numCol(); ++i)
+      orig[i] = mipsolver.mipdata_->postSolveStack.getOrigColIndex(i);
+    highs_rs::PscostInit a = initArrays(*mipsolver.pscostinit);
+    highs_rs::highs_rs_pscost_init(rs_, &a, orig.data());
+  }
+}
+
+HighsPseudocostInitialization::HighsPseudocostInitialization(
+    const HighsPseudocost& pscost, HighsInt maxCount) {
+  resizeInit(*this, highs_rs::highs_rs_pscost_geti(pscost.rs_, 6, 0));
+  exportInit(*this, pscost.rs_, maxCount, nullptr);
+}
+
+HighsPseudocostInitialization::HighsPseudocostInitialization(
+    const HighsPseudocost& pscost, HighsInt maxCount,
+    const presolve::HighsPostsolveStack& postsolveStack) {
+  resizeInit(*this, postsolveStack.getOrigNumCol());
+  HighsInt ncols = highs_rs::highs_rs_pscost_geti(pscost.rs_, 6, 0);
+  std::vector<HighsInt> orig(ncols);
+  for (HighsInt i = 0; i != ncols; ++i)
+    orig[i] = postsolveStack.getOrigColIndex(i);
+  exportInit(*this, pscost.rs_, maxCount, orig.data());
+}
+#else
 HighsPseudocost::HighsPseudocost(const HighsMipSolver& mipsolver)
     : pseudocostup(mipsolver.numCol()),
       pseudocostdown(mipsolver.numCol()),
@@ -133,3 +216,4 @@ HighsPseudocostInitialization::HighsPseudocostInitialization(
         pscost.conflictscoredown[i] / pscost.conflict_weight;
   }
 }
+#endif  // HIGHS_RUST

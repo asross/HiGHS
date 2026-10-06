@@ -16,6 +16,65 @@
 #include "mip/HighsMipSolverData.h"
 #include "util/HighsSplay.h"
 
+#ifdef HIGHS_RUST
+HighsNodeQueue::OpenNode HighsNodeQueue::pop(bool bestBound) {
+  highs_rs::PoppedNode p;
+  highs_rs::highs_rs_nodequeue_pop(rs_, bestBound, &p);
+  return OpenNode(std::vector<HighsDomainChange>(
+                      p.domchgstack, p.domchgstack + p.num_domchgs),
+                  std::vector<HighsInt>(p.branchings,
+                                        p.branchings + p.num_branchings),
+                  p.lower_bound, p.estimate, p.depth);
+}
+
+HighsNodeQueue::OpenNode HighsNodeQueue::popBestNode() { return pop(false); }
+
+HighsNodeQueue::OpenNode HighsNodeQueue::popBestBoundNode() {
+  return pop(true);
+}
+
+double HighsNodeQueue::pruneInfeasibleNodes(HighsDomain& globaldomain,
+                                            double feastol) {
+  size_t numchgs;
+
+  HighsCDouble treeweight = 0.0;
+  const HighsInt numCol = globaldomain.col_lower_.size();
+
+  do {
+    if (globaldomain.infeasible()) break;
+
+    numchgs = globaldomain.getDomainChangeStack().size();
+
+    highs_rs::highs_rs_nodequeue_check_global_bounds(
+        rs_, globaldomain.col_lower_.data(), globaldomain.col_upper_.data(),
+        feastol, &treeweight);
+
+    if (numNodes() == 0) break;
+
+    for (HighsInt i = 0; i < numCol; ++i) {
+      double globallb;
+      if (highs_rs::highs_rs_nodequeue_common_bound(rs_, i, true, &globallb) &&
+          globallb > globaldomain.col_lower_[i]) {
+        globaldomain.changeBound(HighsBoundType::kLower, i, globallb,
+                                 HighsDomain::Reason::unspecified());
+        if (globaldomain.infeasible()) break;
+      }
+
+      double globalub;
+      if (highs_rs::highs_rs_nodequeue_common_bound(rs_, i, false, &globalub) &&
+          globalub < globaldomain.col_upper_[i]) {
+        globaldomain.changeBound(HighsBoundType::kUpper, i, globalub,
+                                 HighsDomain::Reason::unspecified());
+        if (globaldomain.infeasible()) break;
+      }
+    }
+
+    globaldomain.propagate();
+  } while (numchgs != globaldomain.getDomainChangeStack().size());
+
+  return double(treeweight);
+}
+#else
 #define ESTIMATE_WEIGHT .5
 #define LOWERBOUND_WEIGHT .5
 
@@ -442,3 +501,4 @@ void HighsNodeQueue::clear() {
     (*this).numCol = nodequeue.numCol;
   }
 }
+#endif  // HIGHS_RUST

@@ -12,9 +12,125 @@
 #include <set>
 #include <vector>
 
+#include "HConfig.h"
 #include "mip/HighsDomain.h"
+#include "mip/HighsRsSpan.h"
 #include "util/HighsInt.h"
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct ConflictPool;
+extern "C" {
+ConflictPool* highs_rs_conflictpool_new(HighsInt agelim, HighsInt softlimit,
+                                        void (*added)(void*, HighsInt),
+                                        void (*deleted)(void*, HighsInt));
+void highs_rs_conflictpool_free(ConflictPool* p);
+const void* highs_rs_conflictpool_data(const ConflictPool* p, int which,
+                                       size_t* len);
+unsigned highs_rs_conflictpool_get(const ConflictPool* p, int which,
+                                   HighsInt i);
+void highs_rs_conflictpool_op(ConflictPool* p, int which, HighsInt i,
+                              void* d);
+void highs_rs_conflictpool_add(ConflictPool* p,
+                               const HighsDomainChange* entries, HighsInt len,
+                               const HighsDomainChange* flipped);
+void highs_rs_conflictpool_add_from_other(ConflictPool* p,
+                                          const HighsDomainChange* entries,
+                                          HighsInt len);
+void highs_rs_conflictpool_sync(ConflictPool* p, ConflictPool* sync);
+}
+}  // namespace highs_rs
+
+// The pool is Rust's (rust/src/mip/conflictpool.rs); this class is a handle
+class HighsConflictPool {
+  highs_rs::ConflictPool* rs_;
+
+  void op(int which, HighsInt i = 0, void* d = nullptr) {
+    highs_rs::highs_rs_conflictpool_op(rs_, which, i, d);
+  }
+  template <typename T>
+  HighsRsSpan<T> data(int which) const {
+    size_t n;
+    const void* p = highs_rs::highs_rs_conflictpool_data(rs_, which, &n);
+    return HighsRsSpan<T>{static_cast<const T*>(p), n};
+  }
+
+ public:
+  HighsConflictPool(HighsInt agelim, HighsInt softlimit);
+  HighsConflictPool(const HighsConflictPool&) = delete;
+  HighsConflictPool& operator=(const HighsConflictPool&) = delete;
+  HighsConflictPool(HighsConflictPool&& other) : rs_(other.rs_) {
+    other.rs_ = nullptr;
+  }
+  HighsConflictPool& operator=(HighsConflictPool&& other) {
+    std::swap(rs_, other.rs_);
+    return *this;
+  }
+  ~HighsConflictPool() { highs_rs::highs_rs_conflictpool_free(rs_); }
+
+  highs_rs::ConflictPool* rust() const { return rs_; }
+
+  void addConflictCut(const HighsDomain& domain,
+                      const std::set<HighsDomain::ConflictSet::LocalDomChg>&
+                          reasonSideFrontier);
+
+  void addReconvergenceCut(
+      const HighsDomain& domain,
+      const std::set<HighsDomain::ConflictSet::LocalDomChg>&
+          reconvergenceFrontier,
+      const HighsDomainChange& reconvergenceDomchg);
+
+  void addConflictCut(const HighsDomain& domain,
+                      const HighsDomainChange* entries, HighsInt len);
+
+  void addReconvergenceCut(const HighsDomain& domain,
+                           const HighsDomainChange* entries, HighsInt len,
+                           const HighsDomainChange& reconvergenceDomchg);
+
+  void removeConflict(HighsInt conflict) { op(4, conflict); }
+
+  void performAging(bool thread_safe = false) { op(3, thread_safe); }
+
+  void addConflictFromOtherPool(const HighsDomainChange* conflictEntries,
+                                HighsInt conflictLen) {
+    highs_rs::highs_rs_conflictpool_add_from_other(rs_, conflictEntries, conflictLen);
+  }
+
+  void syncConflictPool(HighsConflictPool& syncpool) {
+    highs_rs::highs_rs_conflictpool_sync(rs_, syncpool.rs_);
+  }
+
+  void resetAge(HighsInt conflict) { op(0, conflict); }
+
+  void setAgeLimit(HighsInt agelim) { op(1, agelim); }
+
+  unsigned getModificationCount(HighsInt cut) const {
+    return highs_rs::highs_rs_conflictpool_get(rs_, 1, cut);
+  }
+
+  void addPropagationDomain(HighsDomain::ConflictPoolPropagation* domain) {
+    op(5, 0, domain);
+  }
+
+  void removePropagationDomain(HighsDomain::ConflictPoolPropagation* domain) {
+    op(6, 0, domain);
+  }
+
+  HighsRsSpan<HighsDomainChange> getConflictEntryVector() const {
+    return data<HighsDomainChange>(0);
+  }
+
+  HighsRsSpan<std::pair<HighsInt, HighsInt>> getConflictRanges() const {
+    return data<std::pair<HighsInt, HighsInt>>(1);
+  }
+
+  HighsInt getNumConflicts() const {
+    return highs_rs::highs_rs_conflictpool_get(rs_, 0, 0);
+  }
+
+  void setAgeLock(const bool ageLock) { op(2, ageLock); }
+};
+#else
 class HighsConflictPool {
  private:
   HighsInt agelim_;
@@ -129,5 +245,7 @@ class HighsConflictPool {
 
   void setAgeLock(const bool ageLock) { age_lock_ = ageLock; }
 };
+
+#endif  // HIGHS_RUST
 
 #endif

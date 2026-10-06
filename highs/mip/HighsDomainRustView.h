@@ -78,8 +78,7 @@ struct ConfProp {
   DSlice<void> watched;  // WatchedLiteral
   DSlice<uint8_t> conflict_flag;
   void* propagate_conflict_inds;  // std::vector<HighsInt>*
-  const void* entries;            // const std::vector<HighsDomainChange>*
-  const void* ranges;  // const std::vector<std::pair<HighsInt, HighsInt>>*
+  void* pool;                     // highs_rs::ConflictPool*
 };
 
 // Mirror of CObjProp: the ObjectivePropagation
