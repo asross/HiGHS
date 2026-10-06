@@ -145,6 +145,27 @@ view. Still C++: changeBound, backtrack, the domain change stack,
 objective propagation (its red-black trees), conflict propagation and
 analysis, and the clique table and implications that changeBound calls.
 
+## The clique table and implications (MIP)
+
+HighsCliqueTable and HighsImplications are Rust-owned (mip/clique.rs,
+implications.rs); the C++ classes hold a handle (HighsCliqueTable.cpp and
+HighsImplications.cpp under HIGHS_RUST, struct layouts in
+HighsCliqueTableRust.h). Their vectors that C++ reads and clears
+(substitutions, deleted rows, clique extensions) are `HighsRsVec` views
+into the Rust vectors; the generator and the neighbourhood query counter
+are used in place. The domain and the rest of the MIP solver (node
+queue, pseudocosts, cut pool, the other table) are C++ callbacks
+(`CDom`, `CMip`, `CImp`), with column bounds read through raw pointers.
+A bound change re-enters addImplications/applyImplications, which only
+read; the methods that change bounds hold no Rust borrow of the table
+across a callback (`Ctx`, `ICtx`; see clique.rs). queryNeighbourhood is
+serial (the C++ may split it over threads; its result is the same).
+clang contracts `rhs -= val * bound` (extractCliques), `x * coef +
+constant` and `1 + coef * coef` (getBestVub/Vlb), `m * c - f` and
+`-m * a + t` (strengthenVarBound) and `s0 * v0 + s1 * v1` (implied bound
+cuts). Debug-solution checks run only for the public addVUB/addVLB and
+addClique.
+
 ## Postsolve
 
 The undo side of HighsPostsolveStack runs in Rust (rust/src/presolve/

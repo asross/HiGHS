@@ -26,6 +26,7 @@ class HighsCutPool;
 #include "mip/HighsDomainRustView.h"
 namespace highs_rs {
 struct DomainAccess;
+struct CliqueAccess;
 }
 #endif
 class HighsConflictPool;
@@ -34,6 +35,7 @@ class HighsObjectiveFunction;
 class HighsDomain {
 #ifdef HIGHS_RUST
   friend struct highs_rs::DomainAccess;
+  friend struct highs_rs::CliqueAccess;
 #endif
 
  public:

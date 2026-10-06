@@ -11,6 +11,8 @@
 #include "mip/HighsCliqueTable.h"
 #include "mip/HighsMipSolverData.h"
 #include "mip/MipTimer.h"
+#ifndef HIGHS_RUST
+
 
 bool HighsImplications::computeImplications(HighsInt col, bool val) {
   HighsDomain& globaldomain = mipsolver.mipdata_->getDomain();
@@ -914,3 +916,312 @@ void HighsImplications::applyImplications(HighsDomain& domain,
     }
   }
 }
+
+#else  // HIGHS_RUST
+
+// The implications are Rust's (rust/src/mip/implications.rs); these are
+// the handle's methods and the callbacks into the MIP solver.
+
+#include "mip/HighsCliqueTableRust.h"
+
+namespace highs_rs {
+static_assert(sizeof(HighsSubstitution) == 24 &&
+                  sizeof(std::pair<HighsInt, double>) == 16 &&
+                  sizeof(HighsImplications::VarBound) == 16,
+              "Substitution, FracInt, VarBound layouts");
+
+namespace {
+struct ImpCtx {
+  HighsImplications* self;
+  const HighsMipSolver* mip;
+  HighsCutPool* cutpool;
+};
+ImpCtx& impOf(void* p) { return *static_cast<ImpCtx*>(p); }
+HighsDomain& impGlobal(void* p) {
+  return impOf(p).mip->mipdata_->getDomain();
+}
+int64_t impCbNodesDown(void* p, HighsInt col) {
+  return impOf(p).mip->mipdata_->nodequeue.numNodesDown(col);
+}
+int64_t impCbNodesUp(void* p, HighsInt col) {
+  return impOf(p).mip->mipdata_->nodequeue.numNodesUp(col);
+}
+void impCbLiftingBegin(void* p) {
+  HighsDomain& globaldomain = impGlobal(p);
+  assert(globaldomain.getRedundantRows().size() == 0);
+  if (impOf(p).self->storeLiftingOpportunity != nullptr)
+    globaldomain.setRecordRedundantRows(true);
+}
+void impCbLiftingStore(void* p, HighsInt col, bool val) {
+  HighsDomain& globaldomain = impGlobal(p);
+  auto& store = impOf(p).self->storeLiftingOpportunity;
+  if (store != nullptr) {
+    for (const auto& elm : globaldomain.getRedundantRows())
+      store(elm.key(), col, val ? 1 : 0,
+            (val ? -1 : 1) * globaldomain.getRedundantRowValue(elm.key()));
+    globaldomain.clearRedundantRows();
+    globaldomain.setRecordRedundantRows(false);
+  }
+}
+HighsInt impCbDomchgReason(void* p, HighsInt k, HighsInt* index) {
+  const HighsDomain::Reason& r = impGlobal(p).getDomainChangeReason()[k];
+  *index = r.index;
+  return r.type;
+}
+size_t impCbChangedColsLen(void* p) {
+  return impGlobal(p).getChangedCols().size();
+}
+void impCbBacktrack(void* p, size_t changedend) {
+  HighsDomain& globaldomain = impGlobal(p);
+  globaldomain.backtrack();
+  globaldomain.clearChangedCols(changedend);
+}
+void impCbVertexInfeasible(void* p, HighsInt col, HighsInt val) {
+  impOf(p).mip->mipdata_->cliquetable.vertexInfeasible(impGlobal(p), col,
+                                                       val);
+}
+void impCbInference(void* p, HighsInt col, HighsInt n, bool val) {
+  impOf(p).mip->mipdata_->getPseudoCost().addInferenceObservation(col, n, val);
+}
+HighsInt impCbCliqueNumEntries(void* p) {
+  return impOf(p).mip->mipdata_->cliquetable.getNumEntries();
+}
+void impCbAddClique2(void* p, ClqVar* clique) {
+  impOf(p).mip->mipdata_->cliquetable.addClique(*impOf(p).mip, clique, 2);
+}
+bool impCbCliqueSubstituted(void* p, HighsInt col) {
+  return impOf(p).mip->mipdata_->cliquetable.getSubstitution(col) != nullptr;
+}
+bool impCbParallelLock(void* p) {
+  return impOf(p).mip->mipdata_->parallelLockActive();
+}
+bool impCbCliqueIsFull(void* p) {
+  return impOf(p).mip->mipdata_->cliquetable.isFull();
+}
+int64_t* impCbCliqueNumQueries(void* p) {
+  return &impOf(p).mip->mipdata_->cliquetable.numNeighbourhoodQueries;
+}
+void impCbRunCliqueMerging(void* p) {
+  impOf(p).mip->mipdata_->cliquetable.runCliqueMerging(impGlobal(p));
+}
+HighsInt impCbEntriesAfterFirstPresolve(void* p) {
+  return impOf(p).mip->mipdata_->numCliqueEntriesAfterFirstPresolve;
+}
+void impCbProbingClock(void* p, bool start) {
+  if (start)
+    impOf(p).mip->profiling_->start(kMipClockProbingImplications);
+  else
+    impOf(p).mip->profiling_->stop(kMipClockProbingImplications);
+}
+void impCbAddCut(void* p, HighsInt* inds, double* vals, HighsInt len,
+                 double rhs, bool integral, bool propagate) {
+  impOf(p).cutpool->addCut(*impOf(p).mip, inds, vals, len, rhs, integral,
+                           propagate, false);
+}
+
+ImplicsHost implicsHost(ImpCtx& ctx) {
+  const HighsMipSolver& mipsolver = *ctx.mip;
+  ImplicsHost h;
+  h.ctx = &ctx;
+  h.feastol = mipsolver.mipdata_->feastol;
+  h.epsilon = mipsolver.mipdata_->epsilon;
+  h.num_nonzero = mipsolver.numNonzero();
+  h.num_nodes_down = impCbNodesDown;
+  h.num_nodes_up = impCbNodesUp;
+  h.lifting_begin = impCbLiftingBegin;
+  h.lifting_store = impCbLiftingStore;
+  h.domchg_reason = impCbDomchgReason;
+  h.changed_cols_len = impCbChangedColsLen;
+  h.backtrack = impCbBacktrack;
+  h.vertex_infeasible = impCbVertexInfeasible;
+  h.add_inference_observation = impCbInference;
+  h.clique_num_entries = impCbCliqueNumEntries;
+  h.add_clique2 = impCbAddClique2;
+  h.clique_substituted = impCbCliqueSubstituted;
+  h.parallel_lock_active = impCbParallelLock;
+  h.clique_is_full = impCbCliqueIsFull;
+  h.clique_num_queries = impCbCliqueNumQueries;
+  h.run_clique_merging = impCbRunCliqueMerging;
+  h.num_clique_entries_after_first_presolve = impCbEntriesAfterFirstPresolve;
+  h.probing_clock = impCbProbingClock;
+  h.add_cut = impCbAddCut;
+  return h;
+}
+}  // namespace
+}  // namespace highs_rs
+
+HighsImplications::HighsImplications(const HighsMipSolver& mipsolver)
+    : rs_(highs_rs::highs_rs_implics_new(mipsolver.numCol(),
+                                         mipsolver.numNonzero())),
+      mipsolver(mipsolver),
+      substitutions(rs_, 0, highs_rs::highs_rs_implics_vec,
+                    highs_rs::highs_rs_implics_vec_clear) {}
+
+HighsImplications::~HighsImplications() {
+  highs_rs::highs_rs_implics_free(rs_);
+}
+
+HighsInt HighsImplications::getNumImplications() const {
+  return static_cast<HighsInt>(highs_rs::highs_rs_implics_get(rs_, 0));
+}
+
+bool HighsImplications::tooManyVarBounds() const {
+  return highs_rs::highs_rs_implics_get(rs_, 1);
+}
+
+void HighsImplications::addVUB(HighsInt col, HighsInt vubcol, double vubcoef,
+                               double vubconstant) {
+  addVUB(col, vubcol, vubcoef, vubconstant,
+         mipsolver.mipdata_->getDomain().col_upper_[col],
+         mipsolver.isColIntegral(col));
+}
+
+void HighsImplications::addVUB(HighsInt col, HighsInt vubcol, double vubcoef,
+                               double vubconstant, double colupperbound,
+                               bool colisintegral) {
+  assert(std::abs(vubcoef) != kHighsInf || std::abs(vubconstant) != kHighsInf);
+  // (the C++ checks after the early returns; a derived bound is valid)
+  mipsolver.mipdata_->debugSolution.checkVub(col, vubcol, vubcoef, vubconstant);
+  highs_rs::highs_rs_implics_add_vb(rs_, false, col, vubcol, vubcoef,
+                                    vubconstant, colupperbound, colisintegral,
+                                    mipsolver.mipdata_->feastol);
+}
+
+void HighsImplications::addVLB(HighsInt col, HighsInt vlbcol, double vlbcoef,
+                               double vlbconstant) {
+  addVLB(col, vlbcol, vlbcoef, vlbconstant,
+         mipsolver.mipdata_->getDomain().col_lower_[col],
+         mipsolver.isColIntegral(col));
+}
+
+void HighsImplications::addVLB(HighsInt col, HighsInt vlbcol, double vlbcoef,
+                               double vlbconstant, double collowerbound,
+                               bool colisintegral) {
+  assert(std::abs(vlbcoef) != kHighsInf || std::abs(vlbconstant) != kHighsInf);
+  mipsolver.mipdata_->debugSolution.checkVlb(col, vlbcol, vlbcoef, vlbconstant);
+  highs_rs::highs_rs_implics_add_vb(rs_, true, col, vlbcol, vlbcoef,
+                                    vlbconstant, collowerbound, colisintegral,
+                                    mipsolver.mipdata_->feastol);
+}
+
+void HighsImplications::columnTransformed(HighsInt col, double scale,
+                                          double constant) {
+  highs_rs::highs_rs_implics_column_transformed(rs_, col, scale, constant);
+}
+
+static std::pair<HighsInt, HighsImplications::VarBound> implicsBestVb(
+    const HighsImplications& self, highs_rs::Implications* rs, bool vlb,
+    HighsInt col, const HighsSolution& lpSolution, double& bound,
+    const HighsDomain& globaldom) {
+  highs_rs::ImpCtx ctx{const_cast<HighsImplications*>(&self), &self.mipsolver,
+                       nullptr};
+  highs_rs::ImplicsHost h = highs_rs::implicsHost(ctx);
+  highs_rs::CliqueDom d =
+      highs_rs::cliqueDom(const_cast<HighsDomain&>(globaldom));
+  assert(lpSolution.col_dual.size() >= lpSolution.col_value.size());
+  highs_rs::ImplicsVarBound vb;
+  HighsInt c = highs_rs::highs_rs_implics_best_vb(
+      rs, vlb, &h, &d, col, lpSolution.col_value.data(),
+      lpSolution.col_dual.data(), lpSolution.col_value.size(), &bound, &vb);
+  return {c, HighsImplications::VarBound{vb.coef, vb.constant}};
+}
+
+std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVub(
+    HighsInt col, const HighsSolution& lpSolution, double& bestUb,
+    const HighsDomain& globaldom) const {
+  return implicsBestVb(*this, rs_, false, col, lpSolution, bestUb, globaldom);
+}
+
+std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVlb(
+    HighsInt col, const HighsSolution& lpSolution, double& bestLb,
+    const HighsDomain& globaldom) const {
+  return implicsBestVb(*this, rs_, true, col, lpSolution, bestLb, globaldom);
+}
+
+bool HighsImplications::runProbing(HighsInt col, HighsInt& numReductions) {
+  highs_rs::ImpCtx ctx{this, &mipsolver, nullptr};
+  highs_rs::ImplicsHost h = highs_rs::implicsHost(ctx);
+  highs_rs::CliqueDom g = highs_rs::cliqueDom(mipsolver.mipdata_->getDomain());
+  return highs_rs::highs_rs_implics_run_probing(rs_, &g, &h, col,
+                                                &numReductions);
+}
+
+void HighsImplications::rebuild(HighsInt ncols,
+                                const std::vector<HighsInt>& orig2reducedcol,
+                                const std::vector<HighsInt>& orig2reducedrow) {
+  std::vector<uint8_t> transformable(ncols);
+  for (HighsInt col = 0; col != ncols; ++col)
+    transformable[col] =
+        mipsolver.mipdata_->postSolveStack.isColLinearlyTransformable(col);
+  highs_rs::CliqueDom g = highs_rs::cliqueDom(mipsolver.mipdata_->getDomain());
+  highs_rs::highs_rs_implics_rebuild(rs_, &g, ncols, orig2reducedcol.data(),
+                                     orig2reducedcol.size(),
+                                     transformable.data());
+}
+
+void HighsImplications::buildFrom(const HighsImplications& init) {
+  highs_rs::CliqueDom g = highs_rs::cliqueDom(mipsolver.mipdata_->getDomain());
+  assert(g.num_col == mipsolver.numCol());
+  highs_rs::highs_rs_implics_build_from(rs_, &g, init.rs_);
+}
+
+void HighsImplications::separateImpliedBounds(
+    const HighsLpRelaxation& lpRelaxation, const std::vector<double>& sol,
+    HighsCutPool& cutpool, double feastol, HighsDomain& globaldom,
+    bool thread_safe) {
+  highs_rs::ImpCtx ctx{this, &mipsolver, &cutpool};
+  highs_rs::ImplicsHost h = highs_rs::implicsHost(ctx);
+  highs_rs::CliqueDom g = highs_rs::cliqueDom(mipsolver.mipdata_->getDomain());
+  highs_rs::CliqueDom d = highs_rs::cliqueDom(globaldom);
+  const auto& fracints = lpRelaxation.getFractionalIntegers();
+  highs_rs::highs_rs_implics_separate(rs_, &g, &h, &d, fracints.data(),
+                                      fracints.size(), sol.data(), sol.size(),
+                                      feastol, thread_safe);
+}
+
+void HighsImplications::cleanupVarbounds(HighsInt col) {
+  highs_rs::ImpCtx ctx{this, &mipsolver, nullptr};
+  highs_rs::ImplicsHost h = highs_rs::implicsHost(ctx);
+  highs_rs::CliqueDom g = highs_rs::cliqueDom(mipsolver.mipdata_->getDomain());
+  highs_rs::highs_rs_implics_cleanup_varbounds(rs_, &g, &h, col);
+}
+
+static void implicsCleanupVb(const HighsMipSolver& mipsolver, bool vlb,
+                             HighsInt col, HighsInt vbCol,
+                             HighsImplications::VarBound& vb, double bound,
+                             bool& redundant, bool& infeasible,
+                             bool allowBoundChanges) {
+  highs_rs::CliqueDom g = highs_rs::cliqueDom(mipsolver.mipdata_->getDomain());
+  highs_rs::ImplicsVarBound v{vb.coef, vb.constant};
+  highs_rs::highs_rs_implics_cleanup_vb(
+      vlb, &g, mipsolver.mipdata_->feastol, mipsolver.mipdata_->epsilon, col,
+      vbCol, &v, bound, allowBoundChanges, &redundant, &infeasible);
+  vb.coef = v.coef;
+  vb.constant = v.constant;
+}
+
+void HighsImplications::cleanupVlb(HighsInt col, HighsInt vlbCol,
+                                   HighsImplications::VarBound& vlb, double lb,
+                                   bool& redundant, bool& infeasible,
+                                   bool allowBoundChanges) const {
+  implicsCleanupVb(mipsolver, true, col, vlbCol, vlb, lb, redundant,
+                   infeasible, allowBoundChanges);
+}
+
+void HighsImplications::cleanupVub(HighsInt col, HighsInt vubCol,
+                                   HighsImplications::VarBound& vub, double ub,
+                                   bool& redundant, bool& infeasible,
+                                   bool allowBoundChanges) const {
+  implicsCleanupVb(mipsolver, false, col, vubCol, vub, ub, redundant,
+                   infeasible, allowBoundChanges);
+}
+
+void HighsImplications::applyImplications(HighsDomain& domain,
+                                          const HighsInt col,
+                                          const HighsInt val) {
+  assert(domain.isFixed(col));
+  highs_rs::CliqueDom d = highs_rs::cliqueDom(domain);
+  highs_rs::highs_rs_implics_apply(rs_, &d, col, val);
+}
+
+#endif  // HIGHS_RUST

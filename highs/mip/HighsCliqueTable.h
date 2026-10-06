@@ -26,6 +26,49 @@ namespace presolve {
 class HighsPostsolveStack;
 }
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct CliqueTable;
+struct Implications;
+}  // namespace highs_rs
+
+/// A vector of a Rust-owned table (clique table, implications), read and
+/// cleared in place like the std::vector it replaces
+template <typename T>
+class HighsRsVec {
+  void* owner_;
+  int which_;
+  void* (*get_)(void*, int, size_t*);
+  void (*clear_)(void*, int);
+
+ public:
+  template <typename Owner>
+  HighsRsVec(Owner* owner, int which, void* (*get)(Owner*, int, size_t*),
+             void (*clear)(Owner*, int))
+      : owner_(owner),
+        which_(which),
+        get_(reinterpret_cast<void* (*)(void*, int, size_t*)>(get)),
+        clear_(reinterpret_cast<void (*)(void*, int)>(clear)) {}
+  T* begin() const {
+    size_t n;
+    return static_cast<T*>(get_(owner_, which_, &n));
+  }
+  T* end() const {
+    size_t n;
+    T* p = static_cast<T*>(get_(owner_, which_, &n));
+    return p + n;
+  }
+  size_t size() const {
+    size_t n;
+    get_(owner_, which_, &n);
+    return n;
+  }
+  bool empty() const { return size() == 0; }
+  T& operator[](size_t i) const { return begin()[i]; }
+  void clear() { clear_(owner_, which_); }
+};
+#endif
+
 class HighsCliqueTable {
  public:
   struct CliqueVar {
@@ -65,6 +108,101 @@ class HighsCliqueTable {
     HighsInt substcol;
     CliqueVar replace;
   };
+
+#ifdef HIGHS_RUST
+  // The table is Rust's (rust/src/mip/clique.rs); this class is a handle
+ private:
+  highs_rs::CliqueTable* rs_;
+
+ public:
+  HighsRsVec<Substitution> substitutions_;
+  HighsRsVec<HighsInt> deletedrows_;
+  HighsRsVec<std::pair<HighsInt, CliqueVar>> cliqueextensions_;
+  int64_t& numNeighbourhoodQueries;
+
+  explicit HighsCliqueTable(HighsInt ncols);
+  ~HighsCliqueTable();
+  HighsCliqueTable(const HighsCliqueTable&) = delete;
+  HighsCliqueTable& operator=(const HighsCliqueTable&) = delete;
+
+  highs_rs::CliqueTable* rust() const { return rs_; }
+
+  void setPresolveFlag(bool inPresolve);
+  bool getPresolveFlag() const;
+  HighsInt getNumEntries() const;
+  HighsRandom& getRandgen();
+  int64_t& getNumNeighbourhoodQueries() { return numNeighbourhoodQueries; }
+
+  void doAddClique(const CliqueVar* cliquevars, HighsInt numcliquevars,
+                   bool equality = false, HighsInt origin = kHighsIInf);
+  void addClique(const HighsMipSolver& mipsolver, CliqueVar* cliquevars,
+                 HighsInt numcliquevars, bool equality = false,
+                 HighsInt origin = kHighsIInf);
+  void removeClique(HighsInt cliqueid);
+  void resolveSubstitution(CliqueVar& v) const;
+  void resolveSubstitution(HighsInt& col, double& val, double& rhs) const;
+
+  HighsRsVec<HighsInt>& getDeletedRows() { return deletedrows_; }
+  HighsRsVec<Substitution>& getSubstitutions() { return substitutions_; }
+  const HighsRsVec<Substitution>& getSubstitutions() const {
+    return substitutions_;
+  }
+  const Substitution* getSubstitution(HighsInt col) const;
+  HighsRsVec<std::pair<HighsInt, CliqueVar>>& getCliqueExtensions() {
+    return cliqueextensions_;
+  }
+
+  void setMaxEntries(HighsInt numNz);
+  void setMinEntriesForParallelism(HighsInt minEntriesForParallelism);
+  bool isFull() const;
+  HighsInt getNumFixings() const;
+
+  void cliquePartition(std::vector<CliqueVar>& clqVars,
+                       std::vector<HighsInt>& partitionStart);
+  void cliquePartition(const std::vector<double>& objective,
+                       std::vector<CliqueVar>& clqVars,
+                       std::vector<HighsInt>& partitionStart);
+  bool foundCover(HighsDomain& globaldom, CliqueVar v1, CliqueVar v2);
+  void extractCliques(HighsMipSolver& mipsolver, bool transformRows = true);
+  void extractCliquesFromCut(const HighsMipSolver& mipsolver,
+                             const HighsInt* inds, const double* vals,
+                             HighsInt len, double rhs);
+  void extractObjCliques(HighsMipSolver& mipsolver);
+  void vertexInfeasible(HighsDomain& globaldom, HighsInt col, HighsInt val);
+
+  bool haveCommonClique(CliqueVar v1, CliqueVar v2);
+  bool haveCommonClique(int64_t& numQueries, CliqueVar v1, CliqueVar v2) const;
+  std::pair<const CliqueVar*, HighsInt> findCommonClique(CliqueVar v1,
+                                                         CliqueVar v2);
+
+  void separateCliques(const HighsMipSolver& mipsolver,
+                       const std::vector<double>& sol, HighsCutPool& cutpool,
+                       double feastol, HighsRandom& randgen,
+                       int64_t& localNumNeighbourhoodQueries);
+  std::vector<std::vector<CliqueVar>> computeMaximalCliques(
+      const std::vector<CliqueVar>& vars, double feastol);
+
+  void cleanupFixed(HighsDomain& globaldom);
+  void addImplications(HighsDomain& domain, HighsInt col, HighsInt val);
+  HighsInt getNumImplications(HighsInt col) const;
+  HighsInt getNumImplications(HighsInt col, bool val) const;
+  void runCliqueMerging(HighsDomain& globaldomain);
+
+  void rebuild(HighsInt ncols,
+               const presolve::HighsPostsolveStack& postSolveStack,
+               const HighsDomain& globaldomain,
+               const std::vector<HighsInt>& cIndex,
+               const std::vector<HighsInt>& rIndex);
+  void buildFrom(const HighsLp* origModel, const HighsCliqueTable& init);
+
+  HighsInt numCliques() const;
+  HighsInt numCliques(CliqueVar v) const;
+  HighsInt numCliques(HighsInt col, bool val) const {
+    return numCliques(CliqueVar(col, val));
+  }
+  void setAllowParallel(const bool allowParallel);
+};
+#else
 
  private:
   std::vector<CliqueVar> cliqueentries;
@@ -336,5 +474,6 @@ class HighsCliqueTable {
     this->allowParallel = allowParallel;
   }
 };
+#endif  // HIGHS_RUST
 
 #endif
