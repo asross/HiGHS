@@ -2,4 +2,5 @@
 //! (postsolve.rs); HPresolve and the recording of reductions stay C++.
 
 mod ffi;
+pub mod hpresolve;
 pub mod postsolve;

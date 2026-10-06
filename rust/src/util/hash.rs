@@ -241,7 +241,7 @@ pub fn hash_bytes(bytes: &[u8]) -> u64 {
 }
 
 /// A trivially copyable value with the byte layout of its C++ counterpart
-/// (tuples: libc++ layout, members in order; padding-free types only).
+/// (padding-free types only; see the 3-tuple impl for std::tuple layouts).
 pub trait Pod: Copy {
     const SIZE: usize;
     fn write(&self, out: &mut [u8]);
@@ -267,12 +267,22 @@ impl<A: Pod, B: Pod> Pod for (A, B) {
     }
 }
 
+/// std::tuple<A, B, D> (2-tuples here stand for std::pair, the same in
+/// every C++ library). libc++ lays out a tuple's members in order,
+/// libstdc++ in reverse.
 impl<A: Pod, B: Pod, D: Pod> Pod for (A, B, D) {
     const SIZE: usize = A::SIZE + B::SIZE + D::SIZE;
+    #[cfg(not(feature = "libstdcxx"))]
     fn write(&self, out: &mut [u8]) {
         self.0.write(out);
         self.1.write(&mut out[A::SIZE..]);
         self.2.write(&mut out[A::SIZE + B::SIZE..]);
+    }
+    #[cfg(feature = "libstdcxx")]
+    fn write(&self, out: &mut [u8]) {
+        self.2.write(out);
+        self.1.write(&mut out[D::SIZE..]);
+        self.0.write(&mut out[D::SIZE + B::SIZE..]);
     }
 }
 

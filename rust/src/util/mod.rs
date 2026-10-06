@@ -7,6 +7,8 @@ pub mod hash;
 pub mod hash_table;
 pub mod hash_tree;
 pub mod hset;
+pub mod linear_sum_bounds;
+pub mod splay;
 pub mod printf;
 pub mod random;
 pub mod sparse_vector_sum;

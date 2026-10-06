@@ -218,7 +218,9 @@ fn hash_table_matches_cpp() {
     for (_, v) in vt.iter() {
         h.mix(*v as u64);
     }
-    assert_eq!(h.0, 3235967778451609503);
+    // std::tuple keys: libc++ (clang) / libstdc++ (gcc) layouts
+    let expected = if cfg!(feature = "libstdcxx") { 9046469657274242895 } else { 3235967778451609503 };
+    assert_eq!(h.0, expected);
 }
 
 #[test]
