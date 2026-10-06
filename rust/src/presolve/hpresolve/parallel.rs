@@ -9,6 +9,22 @@
 use super::*;
 use crate::util::hash::{double_hash_code, sparse_combine};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// The keys are hash values already: use them as they are
+#[derive(Default)]
+struct IdHasher(u64);
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, _: &[u8]) {
+        unreachable!()
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = v;
+    }
+}
 
 const MERGE_PARALLEL_COLS: i32 = 0;
 const DOMINANCE_COL_TO_UPPER: i32 = 1;
@@ -19,13 +35,10 @@ const DOMINANCE_DUPLICATE_COL_TO_LOWER: i32 = 4;
 /// The buckets of one hash value, and the visited ones
 #[derive(Default)]
 struct Buckets {
-    groups: HashMap<u64, Vec<i32>>,
+    groups: HashMap<u64, Vec<i32>, BuildHasherDefault<IdHasher>>,
 }
 
 impl Buckets {
-    fn group(&self, h: u64) -> Vec<i32> {
-        self.groups.get(&h).cloned().unwrap_or_default()
-    }
     /// emplace_hint(last, h, v): last is the index in the group of the last
     /// visited element, None for end()
     fn emplace_hint(&mut self, h: u64, last: Option<usize>, v: i32) {
@@ -51,7 +64,7 @@ impl Presolve<'_> {
         let small = self.opt.small_matrix_value;
         let mut row_max: Vec<(f64, i32)> = vec![(0.0, 0); self.rowsize.len()];
         let mut col_max: Vec<(f64, i32)> = vec![(0.0, 0); self.colsize.len()];
-        let mut num_row_singletons: HashMap<i32, i32> = HashMap::new();
+        let mut num_row_singletons: Vec<i32> = vec![0; self.rowsize.len()];
         let nnz = self.a_value.len();
         let mut row_hashes: Vec<u64> = self.rowsize.iter().map(|&s| s as i64 as u64).collect();
         let mut col_hashes: Vec<u64> = self.colsize.iter().map(|&s| s as i64 as u64).collect();
@@ -65,7 +78,7 @@ impl Presolve<'_> {
             if self.colsize[ac] == 1 {
                 col_max[ac].0 = self.a_value[i];
                 row_hashes[ar] = row_hashes[ar].wrapping_sub(1);
-                *num_row_singletons.entry(ar as i32).or_insert(0) += 1;
+                num_row_singletons[ar] += 1;
                 continue;
             }
             let abs_val = self.a_value[i].abs();
@@ -112,7 +125,7 @@ impl Presolve<'_> {
                 continue;
             }
             let h = col_hashes[iu];
-            let group = buckets.group(h);
+            let group: &[i32] = buckets.groups.get(&h).map_or(&[], |g| g.as_slice());
             let mut last: Option<usize> = None;
             let mut del_col = -1;
 
@@ -290,10 +303,10 @@ impl Presolve<'_> {
                     continue;
                 }
 
-                let dec_singleton = |s: &Self, m: &mut HashMap<i32, i32>, x: i32| {
+                let dec_singleton = |s: &Self, m: &mut Vec<i32>, x: i32| {
                     if s.colsize[x as usize] == 1 {
                         let row = s.a_row[s.colhead[x as usize] as usize];
-                        *m.entry(row).or_insert(0) -= 1;
+                        m[row as usize] -= 1;
                     }
                 };
                 match reduction_case {
@@ -402,9 +415,9 @@ impl Presolve<'_> {
                 continue;
             }
             let h = row_hashes[iu];
-            let group = buckets.group(h);
+            let group: &[i32] = buckets.groups.get(&h).map_or(&[], |g| g.as_slice());
             let mut last: Option<usize> = None;
-            let get_num_singletons = |m: &HashMap<i32, i32>, row: i32| *m.get(&row).unwrap_or(&0);
+            let get_num_singletons = |m: &Vec<i32>, row: i32| m[row as usize];
             let num_singleton = get_num_singletons(&num_row_singletons, i);
             if lp_basis && num_singleton != 0 {
                 continue;

@@ -225,14 +225,90 @@ impl Lifting {
 /// A preorder walk of a row's splay tree (HighsTripletTreeSlicePreOrder);
 /// the bodies of the loops do not change the tree they walk
 pub(crate) struct PreOrder {
-    stack: Vec<i32>,
+    stack: SStack,
     cur: i32,
+}
+
+/// std::set<HighsInt> as a sorted vector (the sets are small)
+#[derive(Clone, Default)]
+pub(crate) struct SortedSet(Vec<i32>);
+
+impl SortedSet {
+    #[inline]
+    pub fn insert(&mut self, v: i32) {
+        if let Err(i) = self.0.binary_search(&v) {
+            self.0.insert(i, v);
+        }
+    }
+    #[inline]
+    pub fn remove(&mut self, v: &i32) {
+        if let Ok(i) = self.0.binary_search(v) {
+            self.0.remove(i);
+        }
+    }
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    #[inline]
+    pub fn iter(&self) -> std::slice::Iter<'_, i32> {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a SortedSet {
+    type Item = &'a i32;
+    type IntoIter = std::slice::Iter<'a, i32>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+/// from an increasing sequence
+impl FromIterator<i32> for SortedSet {
+    fn from_iter<I: IntoIterator<Item = i32>>(it: I) -> Self {
+        SortedSet(it.into_iter().collect())
+    }
+}
+
+/// A stack of tree nodes without allocation for the usual depths
+pub(crate) struct SStack {
+    buf: [i32; 32],
+    len: usize,
+    spill: Vec<i32>,
+}
+
+impl SStack {
+    #[inline]
+    pub fn new() -> Self {
+        SStack { buf: [0; 32], len: 0, spill: Vec::new() }
+    }
+    #[inline]
+    pub fn push(&mut self, v: i32) {
+        if self.len < 32 {
+            self.buf[self.len] = v;
+            self.len += 1;
+        } else {
+            self.spill.push(v);
+        }
+    }
+    #[inline]
+    pub fn pop(&mut self) -> Option<i32> {
+        if let Some(v) = self.spill.pop() {
+            Some(v)
+        } else if self.len > 0 {
+            self.len -= 1;
+            Some(self.buf[self.len])
+        } else {
+            None
+        }
+    }
 }
 
 impl PreOrder {
     #[inline]
     pub fn new(root: i32) -> Self {
-        PreOrder { stack: Vec::new(), cur: root }
+        PreOrder { stack: SStack::new(), cur: root }
     }
     #[inline]
     pub fn next(&mut self, left: &[i32], right: &[i32]) -> Option<usize> {
@@ -394,8 +470,8 @@ pub struct Presolve<'h> {
     pub(crate) impl_row_dual_upper: Vec<f64>,
     pub(crate) row_dual_lower_source: Vec<i32>,
     pub(crate) row_dual_upper_source: Vec<i32>,
-    pub(crate) col_impl_source_by_row: Vec<BTreeSet<i32>>,
-    pub(crate) impl_row_dual_source_by_col: Vec<BTreeSet<i32>>,
+    pub(crate) col_impl_source_by_row: Vec<SortedSet>,
+    pub(crate) impl_row_dual_source_by_col: Vec<SortedSet>,
 
     pub(crate) implied_row_bounds: LinearSumBounds,
     pub(crate) implied_dual_row_bounds: LinearSumBounds,
@@ -1511,7 +1587,7 @@ pub(crate) fn in_order_positions(root: i32, left: &[i32], right: &[i32], buf: &m
         }
         n += 1;
     };
-    let mut stack: Vec<i32> = Vec::with_capacity(16);
+    let mut stack = SStack::new();
     stack.push(-1);
     let mut cur = root;
     while left[cur as usize] != -1 {

@@ -145,6 +145,30 @@ view. Still C++: changeBound, backtrack, the domain change stack,
 objective propagation (its red-black trees), conflict propagation and
 analysis, and the clique table and implications that changeBound calls.
 
+## Presolve (HPresolve)
+
+HPresolve runs in Rust (rust/src/presolve/hpresolve) for LP and MIP
+presolve and the MIP restarts; HPresolve.cpp is compiled only without
+HIGHS_RUST, and HPresolveRust.cpp keeps okSetInput/run as a wrapper.
+Rust owns the presolve state and a copy of the model, written back to the
+C++ HighsLp (`sync_model`) before C++ reads it (shrinkProblem's MIP
+rebuilds, probing, the end of run). Reductions are recorded in Rust in
+the HighsDataStack layout (record.rs) and appended to the C++ stack by
+`flush` (HighsPostsolveStack::rustAppend); the index maps are mirrored.
+Still C++ behind `Host` callbacks: logging, the timer, the presolve rule
+analysis setup, the HFactor of the dependent equations, and the MIP
+clique table, implications, domain and pools, including the probing loop
+of runProbing and the solution enumeration of enumerateSolutions (the
+other agents' ports can replace these callbacks). Orders that depend on
+containers are emulated: the libc++ unordered_multimap buckets of
+detectParallelRowsAndCols keep their key groups (emplace_hint inserts
+before the last visited element), the lifting opportunities' unordered_map
+iterates in reverse order of first insertion (one bucket per row), the
+std::sets are sorted vectors / BTreeSet, and `rowpositions` keeps stale
+entries past its length as the C++ vector does (loops over a stored row
+read it live while nested reductions store other rows). Note: the
+emulation is of libc++; a libstdc++ C++ build may order these differently.
+
 ## Postsolve
 
 The undo side of HighsPostsolveStack runs in Rust (rust/src/presolve/
