@@ -31,6 +31,57 @@ neos17, nu25-pr12, neos-911970, gen-ip002, pk1, air05, dispatch 080458;
 graph LNS at mip_rel_gap 0.01, 200 nodes, log_dev_level 1 (LNS lines and
 incumbents): hard_10-03_1340, 3c1b60d6, 3c1b60d6_wind185, 080458 (clang),
 hard_10-03_1340, 3c1b60d6 (gcc).
+## 2026-10-07, presolve probing and enumeration loops in Rust
+
+runProbing's loop and enumerateSolutions in Rust (probing.rs,
+enumeration.rs), merged with the search core and heuristics. M1, loaded
+(load 20-100), so cycles are rough. Same path everywhere: presolve logs
+(log_dev_level 1, rule logging) and presolved models identical on 82 check
+instances, the MIPLIB set and 3 dispatch MILPs against clang, gcc/libstdc++
+and x86_64 C++ builds (a time limit must not be reached: the loaded C++
+once hit it in co-100's probing).
+
+- Presolve cycles (read+presolve minus read, best of 3) against rust-port
+  before this port and the merge: dispatch 080458 1.55 -> 1.42 G (0.915),
+  3c1b60d6 0.984, 3c1b60d6_wind185 0.991, air05 1.000, nu25-pr12 1.05
+  (0.2 G, noise). The probing loop itself was never the cost (the probes
+  were Rust already); the gain is the crossings per probe and per
+  enumerated branch.
+- Full solves (cyc.py 2, against pure C++ clang): air05 0.943, neos17
+  0.872, nu25-pr12 0.739, neos-911970 0.904, gen-ip002 0.821, dispatch
+  080458 0.908; geomean 0.862, same path.
+- `perf.py --reps 1`: clang all 0.819 (MIP 0.882), gcc/libstdc++ all
+  0.824 (MIP 0.864), 32/32 same path on both.
+
+## 2026-10-07, symmetry detection, orbitopes and orbital fixing
+
+HighsSymmetry in Rust (presolve/symmetry.rs, on top of rust-port with the
+search core and heuristics); see PORTING.md. M1, heavily loaded (load
+20-55), 1 rep, so cycles are rough. Symmetric instances, `cyc.py 2` with
+mip_max_nodes 60 (same path on all):
+
+| Case | Symmetry | C++ | Rust | Rust / C++ |
+|---|---|---|---|---|
+| neos-3004026-krka | 64 generators | 29.44G | 29.23G | 0.993 |
+| neos-1456979 | 4 generators | 110.19G | 107.05G | 0.971 |
+| fastxgemm-n2r6s0t2 | 39 generators | 21.13G | 20.24G | 0.958 |
+| ns1208400 | 1 full orbitope (764 cols) | 121.19G | 111.60G | 0.921 |
+
+Same nodes and LP iterations also at 500 nodes (clang: krka, fastxgemm,
+neos-1456979, ns1208400; gcc/libstdc++: krka, fastxgemm, neos-1456979),
+at 60 nodes on graph20-20-1rand (orbitope; clang, gcc, x86_64) and
+ns1208400 (gcc), and on x86_64 (Rosetta) on krka, neos-1456979 and
+fastxgemm. `perf.py --reps 1`: all cases same path.
+
+| Group | Geomean Rust / C++ |
+|---|---|
+| MIP | 0.863 |
+| LP dual simplex | 0.799 |
+| LP primal simplex | 0.983 |
+| IPM (IPX) | 0.989 |
+| PDLP | 0.936 |
+| Read model (time_limit 0) | 0.388 |
+| **All** | **0.837** |
 
 ## 2026-10-07, primal heuristics: feasibility jump, ziRound, shifting, graph LNS
 

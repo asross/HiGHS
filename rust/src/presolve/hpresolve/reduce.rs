@@ -10,7 +10,7 @@ impl Presolve<'_> {
     pub(crate) fn transform_column(&mut self, col: i32, scale: f64, constant: f64) -> R {
         let c = col as usize;
         if self.mip.is_some() {
-            self.host.implications_column_transformed(col, scale, constant);
+            self.implications().column_transformed(col, scale, constant);
         }
         self.ps.linear_transform(col, scale, constant);
 

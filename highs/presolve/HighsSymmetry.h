@@ -15,8 +15,10 @@
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <vector>
 
+#include "HConfig.h"
 #include "lp_data/HighsLp.h"
 #include "util/HighsDisjointSets.h"
 #include "util/HighsHash.h"
@@ -54,6 +56,72 @@ class HighsMatrixColoring {
 class HighsDomain;
 class HighsCliqueTable;
 struct HighsSymmetries;
+
+#ifdef HIGHS_RUST
+// The Rust port (rust/src/presolve/symmetry.rs) owns the symmetries and the
+// detection; these are thin wrappers.
+namespace highs_rs {
+struct Symmetries;
+struct SymmetryDetection;
+}  // namespace highs_rs
+
+// unused by the Rust port, which keeps its own work space
+struct StabilizerOrbitWorkspace {};
+
+struct StabilizerOrbits {
+  std::vector<HighsInt> orbitCols;
+  std::vector<HighsInt> orbitStarts;
+  std::vector<HighsInt> stabilizedCols;
+  const HighsSymmetries* symmetries;
+
+  HighsInt orbitalFixing(HighsDomain& domain) const;
+
+  bool isStabilized(HighsInt col) const;
+};
+
+struct HighsSymmetries {
+  struct Free {
+    void operator()(highs_rs::Symmetries* s) const;
+  };
+  std::unique_ptr<highs_rs::Symmetries, Free> rs;
+  HighsInt numPerms = 0;
+  HighsInt numGenerators = 0;
+
+  HighsSymmetries();
+  void clear();
+
+  HighsInt getColumnPosition(HighsInt col) const;
+  HighsInt numOrbitopes() const;
+  HighsInt numOrbitopeColumns() const;
+  void determineOrbitopeTypes(HighsCliqueTable& cliquetable);
+
+  HighsInt propagateOrbitopes(HighsDomain& domain) const;
+
+  HighsInt getBranchingColumn(const std::vector<double>& colLower,
+                              const std::vector<double>& colUpper,
+                              HighsInt col) const;
+
+  std::shared_ptr<const StabilizerOrbits> computeStabilizerOrbits(
+      const HighsDomain& localdom, StabilizerOrbitWorkspace& workspace);
+};
+
+class HighsSymmetryDetection {
+  struct Free {
+    void operator()(highs_rs::SymmetryDetection* d) const;
+  };
+  std::unique_ptr<highs_rs::SymmetryDetection, Free> rs;
+
+ public:
+  HighsSymmetryDetection();
+
+  void loadModelAsGraph(const HighsLp& model, double epsilon);
+
+  bool initializeDetection();
+
+  void run(HighsSymmetries& symmetries);
+};
+
+#else
 struct StabilizerOrbitWorkspace {
   std::vector<HighsInt> orbitPartition;
   std::vector<HighsInt> orbitSize;
@@ -132,6 +200,15 @@ struct HighsSymmetries {
   HighsInt numGenerators = 0;
 
   void clear();
+  HighsInt getColumnPosition(HighsInt col) const {
+    return columnPosition[col];
+  }
+  HighsInt numOrbitopes() const { return orbitopes.size(); }
+  HighsInt numOrbitopeColumns() const { return columnToOrbitope.size(); }
+  void determineOrbitopeTypes(HighsCliqueTable& cliquetable) {
+    for (HighsOrbitopeMatrix& orbitope : orbitopes)
+      orbitope.determineOrbitopeType(cliquetable);
+  }
   void mergeOrbits(HighsInt col1, HighsInt col2,
                    std::vector<HighsInt>& orbitPartition,
                    std::vector<HighsInt>& orbitSize,
@@ -302,5 +379,7 @@ class HighsSymmetryDetection {
 
   void run(HighsSymmetries& symmetries);
 };
+
+#endif  // HIGHS_RUST
 
 #endif

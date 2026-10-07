@@ -877,7 +877,7 @@ void HighsSearch::installNode(HighsNodeQueue::OpenNode&& node) {
     const auto& domchgstack = localdom.getDomainChangeStack();
     for (HighsInt i : localdom.getBranchingPositions()) {
       HighsInt col = domchgstack[i].column;
-      if (getSymmetries().columnPosition[col] == -1) continue;
+      if (getSymmetries().getColumnPosition(col) == -1) continue;
 
       if (!getDomain().isBinary(col) ||
           (domchgstack[i].boundtype == HighsBoundType::kLower &&
@@ -2351,7 +2351,7 @@ struct SearchAccess {
     return boxShared(s(p).mipsolver.mipdata_->globalOrbits);
   }
   static HighsInt columnPosition(void* p, HighsInt col) {
-    return s(p).getSymmetries().columnPosition[col];
+    return s(p).getSymmetries().getColumnPosition(col);
   }
   static void* computeStabilizerOrbits(void* p) {
     return boxShared(s(p).getSymmetries().computeStabilizerOrbits(

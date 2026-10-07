@@ -295,10 +295,18 @@ rebuilds, probing, the end of run). Reductions are recorded in Rust in
 the HighsDataStack layout (record.rs) and appended to the C++ stack by
 `flush` (HighsPostsolveStack::rustAppend); the index maps are mirrored.
 Still C++ behind `Host` callbacks: logging, the timer, the presolve rule
-analysis setup, the HFactor of the dependent equations, and the MIP
-clique table, implications, domain and pools, including the probing loop
-of runProbing and the solution enumeration of enumerateSolutions (the
-other agents' ports can replace these callbacks). Orders that depend on
+analysis setup, the HFactor of the dependent equations, and the C++ parts
+of the MIP solver: the domain and clique setup of prepareProbing
+(setupDomainPropagation, extractCliques), the start of finaliseProbing
+(cleanupFixed, runCliqueMerging), the cut pool, the lifting opportunities
+of probing (storeLiftingOpportunity) and the glue of
+HighsImplications::runProbing. The probing loop of runProbing (probing.rs)
+and the enumeration of enumerateSolutions (enumeration.rs) run in Rust on
+the Rust clique table and implications (handles passed in `MipInfo`,
+borrowed only between calls into C++) and on the global domain through
+its view (`mip_env`: HighsDomain::rsView_, fetched after prepareProbing,
+since shrinkProblem reassigns the domain); the binaries' and rows' sort
+keys are distinct, so any sort gives pdqsort's order. Orders that depend on
 containers are emulated: the libc++ unordered_multimap buckets of
 detectParallelRowsAndCols keep their key groups (emplace_hint inserts
 before the last visited element in libc++, after it in libstdc++: with
@@ -324,6 +332,27 @@ stack, so thread_safe undoPrimal needs no copy. C++ resizes the solution
 and basis vectors to the original space; Rust does the rest. The fused
 products in plain double are `x - a*d` of ForcingRow, `x + s*y` and
 `v - s*y` of DuplicateColumn, and `x + s*y` of transformToPresolvedSpace.
+
+## Symmetry detection (HighsSymmetry)
+
+HighsSymmetryDetection, HighsSymmetries, the orbitopes and the stabilizer
+orbits run in Rust (rust/src/presolve/symmetry.rs); under HIGHS_RUST the
+C++ classes hold a handle (HighsSymmetry.cpp, symmetry_ffi.rs) and
+StabilizerOrbits keeps its three vectors, copied from Rust, for HighsSearch.
+The detection task still runs on the C++ task scheduler: Rust polls
+`checkInterrupt` through a callback at each leave and returns, and C++
+rethrows HighsTask::Interrupt; the result depends only on the model (no
+time or work limit, only the 64e6 / columns generator cap), so not on
+thread timing. Orbital fixing and orbitopal propagation reach the domain
+through `SymDom` (the clique table's CDom plus the model bounds of
+isGlobalBinary, the branching positions and markInfeasible); orbitope
+types query the Rust clique table directly. No standard-library variant is
+needed: the hash tables (also the std::tuple-keyed leave graphs) are only
+searched, never iterated, so their layout only changes hash values; the
+refinement queue holds distinct cells, so any min-heap pops them in the
+same order; libc++ and libstdc++ share std::partition's two-ended
+algorithm; and the sorts with ties use the pdqsort port (whose heapsort
+fallback switches with `libstdcxx`).
 
 ## Primal heuristics (MIP)
 

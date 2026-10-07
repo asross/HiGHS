@@ -51,6 +51,8 @@ class HighsImplications {
 
   explicit HighsImplications(const HighsMipSolver& mipsolver);
   ~HighsImplications();
+
+  highs_rs::Implications* rust() const { return rs_; }
   HighsImplications(const HighsImplications&) = delete;
   HighsImplications& operator=(const HighsImplications&) = delete;
 
