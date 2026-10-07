@@ -565,23 +565,11 @@ Still C++ in lp_data: Highs.cpp and HighsInterface.cpp outside the above
 (run()'s file handling, the model passing, getStandardFormLp,
 completeSolutionFromDiscreteAssignment, callSolveMip's post-processing, the API
 wrappers that only call other Highs methods, getDualRay / getPrimalRay's
-re-solves, setBasis, the IIS, ill-conditioning and multiobjective
-solves), HighsModelUtils.cpp (solution file writers), HMPSIO/FilereaderLp
-writers, writeRangingFile, HighsIis.cpp, the remaining HighsLpUtils.cpp
-(solution/basis file reading and writing, LP reporting, getSubVectors),
-and the rest of app/.
+re-solves, setBasis on an alien basis, the IIS, ill-conditioning and
+multiobjective solves), writeRangingFile, HighsIis.cpp, solution and basis
+file reading (readSolutionFile, readBasisFile), LP reporting and
+getSubVectors in HighsLpUtils.cpp, and the rest of app/ (main, --version,
+loadOptions). The writers (writers.rs, io/model_write.rs) and options,
+info and command-line parsing (options.rs, info.rs, options_cli.rs) are
+Rust, see above.
 
-sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls, with no
-arithmetic of their own worth moving across the FFI; they now call the
-Rust LP relaxation through its C++ handle. Porting them means a callback
-per HighsSearch / HighsDomain step (the local domains are C++), which is
-left for when the domain's C++ class goes.
-
-handling of HighsSolution.cpp, and the rest of app/.
-
-HighsOptions.cpp and HighsInfo.cpp (option setting, files, reports),
-HighsRanging.cpp (with the ranging file), HighsIis.cpp, the remaining
-HighsLpUtils.cpp (semi variables, user scaling, solution and basis file
-reading: istream parsing that fills C++ name hashes, LP reporting,
-vector edits), the IPX solution conversions and basis handling of
-HighsSolution.cpp, and app/.
