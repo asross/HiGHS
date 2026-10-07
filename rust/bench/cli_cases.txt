@@ -1,0 +1,98 @@
+
+--help
+-h
+-h extra
+--help=foo
+-vh
+-hv
+-v
+--version
+--notice
+--version=false $I/afiro.mps
+--version=abc $I/afiro.mps
+--version= $I/afiro.mps
+-v=1
+$I/afiro.mps
+--model_file $I/afiro.mps
+--model_file=$I/afiro.mps
+--model_file
+nofile.mps
+$I/afiro.mps $I/adlittle.mps
+$I/afiro.mps a b c
+--threads abc $I/afiro.mps
+--threads
+--threads 2 --threads 3 $I/afiro.mps
+--threads -1 $I/afiro.mps
+--threads=0x10 $I/afiro.mps
+--threads 010 $I/afiro.mps
+--threads " 5" $I/afiro.mps
+--threads "5 " $I/afiro.mps
+--threads 1_000 $I/afiro.mps
+--threads 1'0 $I/afiro.mps
+--threads true $I/afiro.mps
+--threads "" $I/afiro.mps
+--threads 99999999999 $I/afiro.mps
+--threads 0b11 $I/afiro.mps
+--threads 0o17 $I/afiro.mps
+--threads 1e3 $I/afiro.mps
+--threads --presolve on $I/afiro.mps
+--time_limit 1e3 $I/afiro.mps
+--time_limit inf $I/afiro.mps
+--time_limit nan $I/afiro.mps
+--time_limit -1 $I/afiro.mps
+--time_limit 0x1p3 $I/afiro.mps
+--time_limit abc $I/afiro.mps
+--time_limit "1 " $I/afiro.mps
+--time_limit 1_0 $I/afiro.mps
+--time_limit "" $I/afiro.mps
+--time_limit 0 $I/afiro.mps
+--random_seed 5 $I/afiro.mps
+--random_seed -5 $I/afiro.mps
+--random_seed=12345678901 $I/afiro.mps
+--presolve off $I/afiro.mps
+--presolve On $I/afiro.mps
+--presolve maybe $I/afiro.mps
+--presolve "" $I/afiro.mps
+--solver ipm $I/afiro.mps
+--solver ipx $I/afiro.mps
+--solver hipo $I/afiro.mps
+--solver pdlp $I/afiro.mps
+--solver bad $I/afiro.mps
+--parallel on $I/afiro.mps
+--run_crossover choose --solver ipm $I/adlittle.mps
+--run_crossover off --solver ipm $I/adlittle.mps
+--ranging on $I/afiro.mps
+--ranging maybe $I/afiro.mps
+--options_file $C/sample_options_file $I/afiro.mps
+--options_file $I/WithInf.set $I/afiro.mps
+--options_file $C/hipo_test_option_files/hipo_options_0 $I/afiro.mps
+--options_file nonexist.set $I/afiro.mps
+--options_file $I $I/afiro.mps
+--options_file bad.set $I/afiro.mps
+--options_file dev.set $I/afiro.mps
+--options_file quiet.set $I/afiro.mps
+--options_file logfile.set $I/afiro.mps
+--unknown $I/afiro.mps
+-x $I/afiro.mps
+-- $I/afiro.mps
+$I/afiro.mps --
+-- -v
+""
+-
+-5
+--solution_file sol.txt $I/afiro.mps
+--write_model_file m.mps $I/afiro.mps
+--write_basis_file b.bas $I/afiro.mps
+--read_basis_file nonexist $I/afiro.mps
+--read_solution_file nonexist $I/afiro.mps
+--read_basis_file $I $I/afiro.mps
+--write_basis_file b.bas --solution_file s.sol --ranging on --presolve off $I/adlittle.mps
+$I/egout.mps
+--presolve off $I/flugpl.mps
+--time_limit 0.0001 $I/egout.mps
+$I/qptestnw.lp
+--options_file dev.set $I/egout.mps
+--model_file $I/afiro.mps $I/adlittle.mps
+--model_file $I/afiro.mps --model_file $I/adlittle.mps
+--write_presolved_model_file
+--options_file presolved.set $I/afiro.mps

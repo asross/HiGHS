@@ -398,10 +398,28 @@ HighsLp::objectiveValue and computeObjectiveValue are `dot_blocked` by 4,
 the quadratic term of the dual objective by 8 (rounded products, fused
 tail), and `dobj += bound * dual` and `+= 0.5 * quad` are fused.
 
+Options and info (options.rs, info.rs, glue in HighsOptionsRust.cpp):
+the logic of HighsOptions.cpp, HighsInfo.cpp and io/LoadOptions.cpp
+(finding, checking, setting from bool/int/double/string with every
+validation message, getting, resetting, passing, reporting in the full,
+markdown and minimal formats, reading options files, HighsInfo's
+invalidate/equal, getInfoValue, writeInfo). The records stay in the C++
+headers (HighsOptions and HighsInfo are public API, read by highspy and
+the C API); each call passes Rust a table of views of them
+(`COptionRecord`: name, description, bounds, defaults, a pointer to the
+value field) built from `records`. Rust writes bool, int and double values
+through the pointers and strings through a C++ callback; highsOpenLogFile
+and HiPO's availability stay C++ callbacks. sscanf's %d, atoi and atof are
+mirrored (strtol saturated to 64 bits, truncated to 32). The one
+difference: a non-numeric value for an integer option logs (at
+log_dev_level > 0) the conversion's result as 0 where the C++ prints
+sscanf's uninitialised variables. `rust/bench/options_compare.sh` builds
+options_driver.cpp against both libraries and diffs its output and files;
+`cli_compare.sh` diffs the app on the command lines of cli_cases.txt.
+
 Still C++ in lp_data: Highs.cpp and HighsInterface.cpp (run /
 optimizeModel orchestration, presolve/postsolve calls, the cleanup solve,
 basis handling, model modification), HighsSolve.cpp (solveLp dispatch),
-HighsOptions.cpp and HighsInfo.cpp (option setting, files, reports),
 HighsModelUtils.cpp (solution file writers), HMPSIO/FilereaderLp writers,
 HighsRanging.cpp, HighsIis.cpp, the remaining HighsLpUtils.cpp (semi
 variables, user scaling, solution/basis file reading and writing, LP

@@ -44,6 +44,8 @@ void highsOpenLogFile(HighsLogOptions& log_options,
   option.assignvalue(log_file);
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsOptionsRust.cpp, rust/src/lp_data/options.rs)
 static std::string optionEntryTypeToString(const HighsOptionType type) {
   if (type == HighsOptionType::kBool) {
     return "bool";
@@ -1153,12 +1155,15 @@ void reportOption(FILE* file, const HighsLogOptions& log_options,
   }
 }
 
+#endif
+
 void HighsOptions::setLogOptions() {
   this->log_options.output_flag = &this->output_flag;
   this->log_options.log_to_console = &this->log_to_console;
   this->log_options.log_dev_level = &this->log_dev_level;
 }
 
+#ifndef HIGHS_RUST
 void warnSolverInvalid(const HighsOptions& options,
                        const std::string& problem_type) {
   highsLogUser(options.log_options, HighsLogType::kWarning,
@@ -1179,3 +1184,4 @@ bool solverValidForQp(const std::string& solver) {
   return solver == kHighsChooseString || solver == kQpAsmString ||
          solver == kIpmString || solver == kHipoString;
 }
+#endif
