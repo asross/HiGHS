@@ -8,6 +8,14 @@
 /**@file ../app/RunHighs.cpp
  * @brief HiGHS main
  */
+#include "HConfig.h"
+
+#ifdef HIGHS_RUST
+// main and loadOptions are Rust (rust/src/lp_data/app.rs); the Highs
+// instance and the loaded options are lp_data/HighsAppRust.cpp's
+extern "C" int highs_app_main(int argc, char** argv);
+int main(int argc, char** argv) { return highs_app_main(argc, argv); }
+#else
 #include <cstdio>  // For fclose
 
 #include "Highs.h"
@@ -55,35 +63,6 @@ int main(int argc, char** argv) {
   // When loading the options file, any messages are reported using
   // the default HighsLogOptions
 
-#ifdef HIGHS_RUST
-  std::string message;
-  int exit_code = 0;
-  switch (parseCommandLine(argc, argv, cmd_options, message, exit_code)) {
-    case HighsCommandLineParse::kHelp:
-      std::cout << message << std::endl;
-      return runHighsReturn(highs, 0);
-    case HighsCommandLineParse::kExtras:
-      std::cout << message << std::endl;
-      std::cout << "Multiple files not supported." << std::endl;
-      return runHighsReturn(highs, HighsStatus::kError);
-    case HighsCommandLineParse::kArgumentMismatch:
-      std::cout << message << std::endl;
-      std::cout << "Too many arguments provided. Please provide only one."
-                << std::endl;
-      return runHighsReturn(highs, HighsStatus::kError);
-    case HighsCommandLineParse::kParseError:
-      std::cout << message << std::endl;
-      // CLI::App::exit's message
-      std::cerr << message << "\nRun with --help for more information.\n"
-                << std::flush;
-      return runHighsReturn(highs, exit_code);
-    default:
-      break;
-  }
-
-  if (!loadOptions(log_options, cmd_options, loaded_options))
-    return runHighsReturn(highs, HighsStatus::kError);
-#else
   CLI::App app{""};
   argv = app.ensure_utf8(argv);
 
@@ -122,7 +101,6 @@ int main(int argc, char** argv) {
 
   if (!loadOptions(app, log_options, cmd_options, loaded_options))
     return runHighsReturn(highs, HighsStatus::kError);
-#endif
 
   // Open the app log file - unless output_flag is false, to avoid
   // creating an empty file. It does nothing if its name is "".
@@ -175,3 +153,4 @@ int main(int argc, char** argv) {
 
   return runHighsReturn(highs, run_status);
 }
+#endif

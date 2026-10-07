@@ -1104,3 +1104,153 @@ pub unsafe extern "C" fn highs_rs_write_basis_file(
     let mut o = Out::new(Some(&*out));
     write_basis_file(&mut o, &(*model).view(), &basis(&*b));
 }
+
+/// kRangingValueToStringTolerance
+const RANGING_TOL: f64 = 1e-13;
+
+/// HighsRanging's records for writeRangingFile: (value, objective) of
+/// col_cost_up, col_cost_dn, col_bound_up, col_bound_dn, row_bound_up and
+/// row_bound_dn
+pub struct Ranging<'a> {
+    pub valid: bool,
+    pub rec: [(&'a [f64], &'a [f64]); 6],
+}
+
+/// `%-10.4g `
+fn g10(b: &mut Vec<u8>, v: f64) {
+    let mut t = Vec::new();
+    g(&mut t, v, 4);
+    pad(b, &t, 10, true);
+    b.push(b' ');
+}
+
+/// `%6d   %4s  `
+fn ranging_head(b: &mut Vec<u8>, i: usize, status: &[u8]) {
+    let mut t = Vec::new();
+    int(&mut t, i as i64);
+    pad(b, &t, 6, false);
+    b.extend_from_slice(b"   ");
+    pad(b, status, 4, false);
+    b.extend_from_slice(b"  ");
+}
+
+/// `%-s %s %s %s %s\n` of highsDoubleToString's
+fn ranging_raw(b: &mut Vec<u8>, name: &[u8], v: [f64; 4]) {
+    b.extend_from_slice(name);
+    for x in v {
+        b.push(b' ');
+        double_to_string(b, x, RANGING_TOL);
+    }
+    b.push(b'\n');
+}
+
+/// writeRangingFile (fprintf's to the file, not highsFprintfString)
+pub fn write_ranging_file(
+    out: &mut Out,
+    m: &Model,
+    objective: f64,
+    basis: &Basis,
+    sol: &Solution,
+    r: &Ranging,
+    pretty: bool,
+) {
+    if !r.valid {
+        out.s(b"None\n").line();
+        return;
+    }
+    out.s(b"Valid\n").line();
+    out.s(b"Objective ");
+    double_to_string(&mut out.buf, objective, RANGING_TOL);
+    out.s(b"\n").line();
+    let [cost_up, cost_dn, col_up, col_dn, row_up, row_dn] = r.rec;
+    if pretty {
+        out.s(b"\n                                            Cost ranging\nColumn Status  DownObj    Down                  Value                 Up         UpObj      Name\n");
+    } else {
+        out.s(b"\n# Cost ranging\n");
+    }
+    out.line();
+    for i in 0..m.num_col {
+        let b = &mut out.buf;
+        if pretty {
+            ranging_head(b, i, status_str(basis.col_status[i], m.col_lower[i], m.col_upper[i]));
+            g10(b, cost_dn.1[i]);
+            g10(b, cost_dn.0[i]);
+            b.extend_from_slice(b"           ");
+            g10(b, m.col_cost[i]);
+            b.extend_from_slice(b"           ");
+            g10(b, cost_up.0[i]);
+            g10(b, cost_up.1[i]);
+            b.extend_from_slice(m.col_names[i]);
+            b.push(b'\n');
+        } else {
+            ranging_raw(b, m.col_names[i], [cost_dn.1[i], cost_dn.0[i], cost_up.0[i], cost_up.1[i]]);
+        }
+        out.line();
+    }
+    if pretty {
+        out.s(b"\n                                            Bound ranging\nColumn Status  DownObj    Down       Lower      Value      Upper      Up         UpObj      Name\n");
+    } else {
+        out.s(b"\n# Bound ranging\n# Columns\n");
+    }
+    out.line();
+    let parts = [
+        (m.num_col, &m.col_names, m.col_lower, m.col_upper, sol.col_value, basis.col_status, col_dn, col_up),
+        (m.num_row, &m.row_names, m.row_lower, m.row_upper, sol.row_value, basis.row_status, row_dn, row_up),
+    ];
+    for (k, (n, names, lower, upper, value, status, dn, up)) in parts.into_iter().enumerate() {
+        if k == 1 {
+            if pretty {
+                out.s(b"                                            Bound ranging\n   Row Status  DownObj    Down       Lower      Value      Upper      Up         UpObj      Name\n");
+            } else {
+                out.s(b"# Rows\n");
+            }
+            out.line();
+        }
+        for i in 0..n {
+            let b = &mut out.buf;
+            if pretty {
+                ranging_head(b, i, status_str(status[i], lower[i], upper[i]));
+                for x in [dn.1[i], dn.0[i], lower[i], value[i], upper[i], up.0[i], up.1[i]] {
+                    g10(b, x);
+                }
+                b.extend_from_slice(names[i]);
+                b.push(b'\n');
+            } else {
+                ranging_raw(b, names[i], [dn.1[i], dn.0[i], up.0[i], up.1[i]]);
+            }
+            out.line();
+        }
+    }
+}
+
+/// What C++ passes for writeRangingFile: the records' value and
+/// objective arrays in `Ranging`'s order
+#[repr(C)]
+pub struct CRangingFile {
+    pub valid: bool,
+    pub pretty: bool,
+    pub objective: f64,
+    pub rec: [RsMut<f64>; 12],
+}
+
+/// writeRangingFile
+///
+/// # Safety
+/// The pointers must be valid, as C++ passes them
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_write_ranging_file(
+    out: *const COut,
+    model: *const CWriteModel,
+    sol: *const CSolution,
+    b: *const CBasis,
+    r: *const CRangingFile,
+) {
+    let r = &*r;
+    let rec = |k: usize| (r.rec[2 * k].get(), r.rec[2 * k + 1].get());
+    let ranging = Ranging {
+        valid: r.valid,
+        rec: [rec(0), rec(1), rec(2), rec(3), rec(4), rec(5)],
+    };
+    let mut o = Out::new(Some(&*out));
+    write_ranging_file(&mut o, &(*model).view(), r.objective, &basis(&*b), &solution(&*sol), &ranging, r.pretty);
+}

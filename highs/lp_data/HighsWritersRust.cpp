@@ -21,6 +21,7 @@
 #include "io/HighsIO.h"
 #include "lp_data/HighsLpUtils.h"
 #include "lp_data/HighsModelUtils.h"
+#include "lp_data/HighsRanging.h"
 #include "lp_data/HighsSolution.h"
 
 namespace {
@@ -157,6 +158,43 @@ void highs_rs_write_primal_solution(const RsOut* out, HighsInt num_col,
 void highs_rs_write_objective_value(const RsOut* out, double v);
 void highs_rs_write_basis_file(const RsOut* out, const RsWriteModel* model,
                                const RsBasis* basis);
+// writers.rs: CRangingFile
+struct RsRangingFile {
+  bool valid, pretty;
+  double objective;
+  RsMut<double> rec[12];
+};
+void highs_rs_write_ranging_file(const RsOut* out, const RsWriteModel* model,
+                                 const RsSolution* sol, const RsBasis* basis,
+                                 const RsRangingFile* r);
+}
+
+void writeRangingFile(FILE* file, const HighsLp& lp,
+                      const double objective_function_value,
+                      const HighsBasis& basis, const HighsSolution& solution,
+                      const HighsRanging& ranging, const HighsInt style) {
+  assert(!ranging.valid ||
+         lp.col_names_.size() == static_cast<size_t>(lp.num_col_));
+  assert(!ranging.valid ||
+         lp.row_names_.size() == static_cast<size_t>(lp.num_row_));
+  RsRangingFile r;
+  r.valid = ranging.valid;
+  r.pretty = style == kSolutionStylePretty;
+  r.objective = objective_function_value;
+  const HighsRangingRecord* recs[6] = {
+      &ranging.col_cost_up,  &ranging.col_cost_dn,  &ranging.col_bound_up,
+      &ranging.col_bound_dn, &ranging.row_bound_up, &ranging.row_bound_dn};
+  for (int k = 0; k < 6; k++) {
+    r.rec[2 * k] = rsMut(recs[k]->value_);
+    r.rec[2 * k + 1] = rsMut(recs[k]->objective_);
+  }
+  // No messages: the log options are not read
+  static const HighsLogOptions no_log{};
+  const WriteModel m(lp, nullptr, nullptr, lp.objective_name_);
+  const RsOut out = rsOut(file, no_log, false);
+  const RsSolution sol = rsSolution(solution);
+  const RsBasis b = rsBasis(basis);
+  highs_rs_write_ranging_file(&out, &m.v, &sol, &b, &r);
 }
 
 // Writes a solution file style, or a part of one (kPart*); returns

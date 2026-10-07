@@ -543,4 +543,178 @@ void HighsLp::unapplyMods() {
                         rsMut(this->integrality_));
   this->mods_.clear();
 }
+
+// getSubVectors and getSubVectorsTranspose (rust/src/lp_data/edit.rs)
+extern "C" void highs_rs_get_sub_vectors(
+    bool transpose, const RsIndexCollection* ic, HighsInt data_dim,
+    const double* const* data,
+    RsMut<HighsInt> m_start, RsMut<HighsInt> m_index, RsMut<double> m_value,
+    double* const* out_data, HighsInt* out_start, HighsInt* out_index,
+    double* out_value, HighsInt* num_sub_vector, HighsInt* num_nz);
+
+static void rsGetSubVectors(
+    const bool transpose, const HighsIndexCollection& index_collection,
+    const HighsInt data_dim, const double* data0, const double* data1, const double* data2,
+    const HighsSparseMatrix& matrix, HighsInt& num_sub_vector,
+    double* sub_vector_data0, double* sub_vector_data1,
+    double* sub_vector_data2, HighsInt& sub_matrix_num_nz,
+    HighsInt* sub_matrix_start, HighsInt* sub_matrix_index,
+    double* sub_matrix_value) {
+  if (data0 == nullptr) assert(sub_vector_data0 == nullptr);
+  assert(ok(index_collection));
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  const double* data[3] = {data0, data1, data2};
+  double* out[3] = {sub_vector_data0, sub_vector_data1, sub_vector_data2};
+  highs_rs_get_sub_vectors(transpose, &ic, data_dim, data, rsMut(matrix.start_),
+                           rsMut(matrix.index_), rsMut(matrix.value_), out,
+                           sub_matrix_start, sub_matrix_index,
+                           sub_matrix_value, &num_sub_vector,
+                           &sub_matrix_num_nz);
+}
+
+void getSubVectors(const HighsIndexCollection& index_collection,
+                   const HighsInt data_dim, const double* data0,
+                   const double* data1, const double* data2,
+                   const HighsSparseMatrix& matrix, HighsInt& num_sub_vector,
+                   double* sub_vector_data0, double* sub_vector_data1,
+                   double* sub_vector_data2, HighsInt& sub_matrix_num_nz,
+                   HighsInt* sub_matrix_start, HighsInt* sub_matrix_index,
+                   double* sub_matrix_value) {
+  rsGetSubVectors(false, index_collection, data_dim, data0, data1, data2, matrix,
+                  num_sub_vector, sub_vector_data0, sub_vector_data1,
+                  sub_vector_data2, sub_matrix_num_nz, sub_matrix_start,
+                  sub_matrix_index, sub_matrix_value);
+}
+
+void getSubVectorsTranspose(const HighsIndexCollection& index_collection,
+                            const HighsInt data_dim, const double* data0,
+                            const double* data1, const double* data2,
+                            const HighsSparseMatrix& matrix,
+                            HighsInt& num_sub_vector, double* sub_vector_data0,
+                            double* sub_vector_data1, double* sub_vector_data2,
+                            HighsInt& sub_matrix_num_nz,
+                            HighsInt* sub_matrix_start,
+                            HighsInt* sub_matrix_index,
+                            double* sub_matrix_value) {
+  rsGetSubVectors(true, index_collection, data_dim, data0, data1, data2, matrix,
+                  num_sub_vector, sub_vector_data0, sub_vector_data1,
+                  sub_vector_data2, sub_matrix_num_nz, sub_matrix_start,
+                  sub_matrix_index, sub_matrix_value);
+}
+
+// Solution and basis file reading (rust/src/lp_data/readers.rs)
+namespace {
+// readers.rs: CNames
+struct RsNames {
+  void* ctx;
+  int (*op)(void* ctx, int code, const char* name, size_t len);
+  bool have_col, have_row;
+};
+// readers.rs: CRead
+struct RsRead {
+  RsLog log;
+  RsNames names;
+  RsMut<uint8_t> filename;
+  bool* basis_valid;
+  RsMut<uint8_t> col_status, row_status;
+};
+// readers.rs: CReadSolution
+struct RsReadSolution {
+  bool style_sparse, colwise;
+  RsMut<HighsInt> a_start, a_index;
+  RsMut<double> a_value;
+  bool* value_valid;
+  RsMut<double> col_value, col_dual, row_value, row_dual;
+};
+
+// Forms the name hashes there are names for (op 0), or looks up a column
+// (1) or row (2) name: its index, kHashIsDuplicate, or -2 if not found
+int rsNamesOp(void* ctx, int code, const char* name, size_t len) {
+  HighsLp& lp = *static_cast<HighsLp*>(ctx);
+  const bool have_col_names =
+      lp.col_names_.size() == static_cast<size_t>(lp.num_col_);
+  const bool have_row_names =
+      lp.row_names_.size() == static_cast<size_t>(lp.num_row_);
+  if (code == 0) {
+    if (have_col_names && !lp.col_hash_.name2index.size())
+      lp.col_hash_.form(lp.col_names_);
+    if (have_row_names && !lp.row_hash_.name2index.size())
+      lp.row_hash_.form(lp.row_names_);
+    return 0;
+  }
+  const auto& name2index =
+      code == 1 ? lp.col_hash_.name2index : lp.row_hash_.name2index;
+  auto search = name2index.find(std::string(name, len));
+  return search == name2index.end() ? -2 : search->second;
+}
+
+RsRead rsRead(const HighsLogOptions& log_options, HighsLp& lp,
+              HighsBasis& basis, const std::string& filename) {
+  return {rsLog(log_options),
+          {&lp, rsNamesOp,
+           lp.col_names_.size() == static_cast<size_t>(lp.num_col_),
+           lp.row_names_.size() == static_cast<size_t>(lp.num_row_)},
+          {reinterpret_cast<uint8_t*>(const_cast<char*>(filename.data())),
+           filename.size()},
+          &basis.valid,
+          rsMut(static_cast<const std::vector<HighsBasisStatus>&>(
+              basis.col_status)),
+          rsMut(static_cast<const std::vector<HighsBasisStatus>&>(
+              basis.row_status))};
+}
+}  // namespace
+
+extern "C" {
+int highs_rs_read_basis_file(const RsRead* r);
+int highs_rs_read_solution_file(const RsRead* r, const RsReadSolution* s);
+}
+
+HighsStatus readBasisFile(const HighsLogOptions& log_options, HighsLp& lp,
+                          HighsBasis& basis, const std::string& filename) {
+  const RsRead r = rsRead(log_options, lp, basis, filename);
+  return HighsStatus(highs_rs_read_basis_file(&r));
+}
+
+HighsStatus readSolutionFile(const std::string& filename,
+                             const HighsOptions& options, HighsLp& lp,
+                             HighsBasis& basis, HighsSolution& solution,
+                             const HighsInt style) {
+  const HighsLogOptions& log_options = options.log_options;
+  if (style != kSolutionStyleRaw && style != kSolutionStyleSparse) {
+    highsLogUser(log_options, HighsLogType::kError,
+                 "readSolutionFile: Cannot read file of style %d\n",
+                 (int)style);
+    return HighsStatus::kError;
+  }
+  HighsSolution read_solution = solution;
+  HighsBasis read_basis = basis;
+  read_solution.clear();
+  read_basis.clear();
+  read_solution.col_value.resize(lp.num_col_);
+  read_solution.row_value.resize(lp.num_row_);
+  read_solution.col_dual.resize(lp.num_col_);
+  read_solution.row_dual.resize(lp.num_row_);
+  read_basis.col_status.resize(lp.num_col_);
+  read_basis.row_status.resize(lp.num_row_);
+  const RsRead r = rsRead(log_options, lp, read_basis, filename);
+  const HighsSparseMatrix& a = lp.a_matrix_;
+  const RsReadSolution s = {style == kSolutionStyleSparse,
+                            a.isColwise(),
+                            rsMut(a.start_),
+                            rsMut(a.index_),
+                            rsMut(a.value_),
+                            &read_solution.value_valid,
+                            rsMut(read_solution.col_value),
+                            rsMut(read_solution.col_dual),
+                            rsMut(read_solution.row_value),
+                            rsMut(read_solution.row_dual)};
+  // -2: readSolutionFileErrorReturn; otherwise readSolutionFileReturn's
+  // status, the read solution and basis taken when kOk
+  const int status = highs_rs_read_solution_file(&r, &s);
+  if (status == -2) return HighsStatus::kError;
+  if (HighsStatus(status) != HighsStatus::kOk) return HighsStatus(status);
+  solution = read_solution;
+  basis = read_basis;
+  return HighsStatus::kOk;
+}
 #endif

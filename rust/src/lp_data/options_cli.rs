@@ -8,7 +8,7 @@
 //! settings (HiGHS's CLI11 indents description words starting with `"`).
 //! Arguments are bytes, as in C.
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::c_char;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -71,9 +71,9 @@ const OPTS: [Opt; 18] = [
     Opt { names: "-h,--help", kind: Kind::Flag, desc: "Print help" },
 ];
 const MODEL_FILE: usize = 0;
-const THREADS: usize = 10;
-const TIME_LIMIT: usize = 12;
-const RANDOM_SEED: usize = 13;
+pub const THREADS: usize = 10;
+pub const TIME_LIMIT: usize = 12;
+pub const RANDOM_SEED: usize = 13;
 const VERSION: usize = 15;
 const NOTICE: usize = 16;
 const HELP: usize = 17;
@@ -590,65 +590,6 @@ fn help(program: &[u8]) -> Vec<u8> {
     }
     out.extend(s.into_bytes());
     out
-}
-
-/// The parse for C++: HighsCommandLineOptions's strings go through
-/// `set(ctx, field, ...)` (field: the option's index; 100 the message);
-/// returns 0 parsed, 1 help, 2 extras, 3 argument mismatch, 4 other
-/// parse error (exit code in `out`)
-#[repr(C)]
-pub struct CCommandLine {
-    pub version: bool,
-    pub notice: bool,
-    pub time_limit: f64,
-    pub random_seed: i32,
-    pub threads: i32,
-    pub count_threads: i32,
-    pub count_time_limit: i32,
-    pub count_random_seed: i32,
-    pub exit_code: i32,
-}
-
-/// # Safety
-/// `argv` holds `argc` NUL-terminated strings; `out` is writable; `set`
-/// takes `ctx`
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_parse_command_line(
-    argc: i32,
-    argv: *const *const c_char,
-    out: *mut CCommandLine,
-    ctx: *mut c_void,
-    set: unsafe extern "C" fn(*mut c_void, i32, *const u8, usize),
-) -> i32 {
-    let args: Vec<Vec<u8>> = (0..argc.max(0) as usize).map(|k| CStr::from_ptr(*argv.add(k)).to_bytes().to_vec()).collect();
-    let program = args.first().cloned().unwrap_or_default();
-    let mut c = CommandLine::default();
-    let outcome = parse(args.get(1..).unwrap_or(&[]), &program, &mut c);
-    let out = &mut *out;
-    out.version = c.version;
-    out.notice = c.notice;
-    out.time_limit = c.time_limit;
-    out.random_seed = c.random_seed;
-    out.threads = c.threads;
-    out.count_threads = c.count[THREADS] as i32;
-    out.count_time_limit = c.count[TIME_LIMIT] as i32;
-    out.count_random_seed = c.count[RANDOM_SEED] as i32;
-    out.exit_code = 0;
-    for (k, s) in c.strings.iter().enumerate() {
-        set(ctx, k as i32, s.as_ptr(), s.len());
-    }
-    let (kind, msg) = match outcome {
-        Outcome::Ok => (0, Vec::new()),
-        Outcome::Help(m) => (1, m),
-        Outcome::Extras(m) => (2, m),
-        Outcome::Mismatch(m) => (3, m),
-        Outcome::Error(m, code) => {
-            out.exit_code = code;
-            (4, m)
-        }
-    };
-    set(ctx, 100, msg.as_ptr(), msg.len());
-    kind
 }
 
 #[cfg(test)]
