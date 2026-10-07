@@ -10,6 +10,28 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, presolve probing and enumeration loops in Rust
+
+runProbing's loop and enumerateSolutions in Rust (probing.rs,
+enumeration.rs), merged with the search core and heuristics. M1, loaded
+(load 20-100), so cycles are rough. Same path everywhere: presolve logs
+(log_dev_level 1, rule logging) and presolved models identical on 82 check
+instances, the MIPLIB set and 3 dispatch MILPs against clang, gcc/libstdc++
+and x86_64 C++ builds (a time limit must not be reached: the loaded C++
+once hit it in co-100's probing).
+
+- Presolve cycles (read+presolve minus read, best of 3) against rust-port
+  before this port and the merge: dispatch 080458 1.55 -> 1.42 G (0.915),
+  3c1b60d6 0.984, 3c1b60d6_wind185 0.991, air05 1.000, nu25-pr12 1.05
+  (0.2 G, noise). The probing loop itself was never the cost (the probes
+  were Rust already); the gain is the crossings per probe and per
+  enumerated branch.
+- Full solves (cyc.py 2, against pure C++ clang): air05 0.943, neos17
+  0.872, nu25-pr12 0.739, neos-911970 0.904, gen-ip002 0.821, dispatch
+  080458 0.908; geomean 0.862, same path.
+- `perf.py --reps 1`: clang all 0.819 (MIP 0.882), gcc/libstdc++ all
+  0.824 (MIP 0.864), 32/32 same path on both.
+
 ## 2026-10-07, primal heuristics: feasibility jump, ziRound, shifting, graph LNS
 
 Feasibility jump in Rust (mip/feasjump.rs), ziRound and shifting
