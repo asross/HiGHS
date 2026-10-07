@@ -9,6 +9,15 @@ copyright notice and attribution kept; README states it is a Rust port of
 HiGHS, bit-compatible with HiGHS v1.15. Until then development continues
 on the `rust-port` branch here.
 
+**Crestline's scope** (decided 2026-10-07): not ported, left out of
+Crestline: HiPO (needs BLAS/METIS; IPX covers IPM) and HiPDLP (cuPDLP is
+ported), SIP/PAMI parallel simplex (simplex_strategy 2/3), iCrash,
+multi-objective solves, debug/analysis-only code (simplex analysis
+reports, test_kkt, HighsDebugSol, debug checks), the C API and the
+C#/Fortran/Julia shims (Crestline exposes a Rust API; Python bindings
+maybe later), and the fixed-format MPS reader (free MPS and LP only).
+Kept: everything else, including IIS and the QP solver.
+
 Bottom-up, one subsystem at a time, always shippable. The C++ build with
 `-DHIGHS_RUST=ON` calls the Rust code for every ported piece; without it, the
 original C++ runs. The C++ of a ported piece is deleted only once the Rust is
