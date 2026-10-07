@@ -354,6 +354,15 @@ struct HighsMipSolverData {
     HighsLpRelaxation::Status sepaStatus = HighsLpRelaxation::Status::kNotSet;
   };
   std::unique_ptr<RsRootCtx> rsRoot_;
+  // the locals of performRestart, run in Rust
+  struct RsRestartCtx {
+    HighsBasis root_basis;
+    HighsPseudocostInitialization pscostinit;
+    RsRestartCtx(const HighsPseudocost& pscost, HighsInt maxCount,
+                 const presolve::HighsPostsolveStack& postsolveStack)
+        : pscostinit(pscost, maxCount, postsolveStack) {}
+  };
+  std::unique_ptr<RsRestartCtx> rsRestart_;
   // the task group of HighsMipSolver::run, run in Rust
   struct RsRunCtx {
     highs::parallel::TaskGroup tg;

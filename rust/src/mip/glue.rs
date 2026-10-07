@@ -142,10 +142,6 @@ pub struct CMipFns {
     // HighsMipSolver(Data) and the worker
     pub check_limits: unsafe extern "C" fn(P) -> bool,
     pub update_lower_bound: unsafe extern "C" fn(P, f64),
-    /// addIncumbent / trySolution, through the worker when the parallel
-    /// lock is active (returns the C++ result)
-    pub add_incumbent: unsafe extern "C" fn(P, P, *const f64, i32, f64, i32) -> bool,
-    pub try_solution: unsafe extern "C" fn(P, P, *const f64, i32, i32) -> bool,
     pub parallel_lock_active: unsafe extern "C" fn(P) -> bool,
     pub num_workers: unsafe extern "C" fn(P) -> i32,
     /// fills the worker's view
@@ -193,6 +189,25 @@ pub struct CMipFns {
     pub max_submip_level: unsafe extern "C" fn(P) -> i32,
     pub sync_concurrent_lns: unsafe extern "C" fn(P),
     pub crossover_with_main: unsafe extern "C" fn(P, P),
+    /// the data and size of the solver's vector `which` (setup::vptr), or
+    /// null
+    pub vec_ptr: unsafe extern "C" fn(P, i32, *mut i32) -> *const c_void,
+    /// sets the basis `which` (setup::basis): its statuses and flags
+    /// (valid, alien, useful)
+    pub set_basis: unsafe extern "C" fn(P, i32, *const u8, i32, *const u8, i32, bool, bool, bool),
+    /// with no data: callbackActive(type); otherwise the callback's data_out
+    /// set from the CallbackOut (setup.rs) and callbackAction(type, the
+    /// message of the given length) (returns the interrupt)
+    pub callback: unsafe extern "C" fn(P, i32, *const super::setup::CallbackOut, *const u8, i32) -> bool,
+    /// the solver's worker k
+    pub worker: unsafe extern "C" fn(P, i32) -> P,
+    /// the worker's buffered solution j (false if none)
+    pub worker_solution: unsafe extern "C" fn(P, i32, *mut super::workers::WorkerSol) -> bool,
+    /// a solution buffered by the worker
+    pub worker_push_solution: unsafe extern "C" fn(P, *const f64, i32, f64, i32),
+    /// the worker's scratch solution: col_value = sol, primal postsolve
+    /// (thread safe) and row values; its vectors to the view
+    pub worker_scratch: unsafe extern "C" fn(P, P, *const f64, i32, *mut ScratchView),
 }
 
 static FNS: AtomicPtr<CMipFns> = AtomicPtr::new(std::ptr::null_mut());
@@ -308,6 +323,13 @@ pub struct MipOptions {
     /// the output_flag option (the log options' flag is output_flag)
     pub output_flag_option: bool,
     pub mip_max_stall_nodes: i32,
+    pub small_matrix_value: f64,
+    pub mip_heuristic_effort: f64,
+    pub mip_report_level: i32,
+    pub restart_presolve_reduction_limit: i32,
+    pub presolve_reduction_limit: i32,
+    pub mip_detect_symmetry: bool,
+    pub mip_improving_solution_save: bool,
 }
 
 /// The original model (for solutions in the original space)
@@ -322,6 +344,9 @@ pub struct OrigModel {
     pub row_lower: *const StdVec<f64>,
     pub row_upper: *const StdVec<f64>,
     pub integrality: *const StdVec<u8>,
+    pub a_start: *const StdVec<i32>,
+    pub a_index: *const StdVec<i32>,
+    pub a_value: *const StdVec<f64>,
 }
 
 /// HighsMipSolver's solution fields
@@ -472,6 +497,8 @@ pub struct WorkerData {
     pub randgen: *mut HighsRandom,
     pub globaldom: P,
     pub lp: P,
+    pub upper_bound: *mut f64,
+    pub optimality_limit: *mut f64,
 }
 
 /// A HighsMipWorker
@@ -488,6 +515,8 @@ impl Worker {
             randgen: std::ptr::null_mut(),
             globaldom: std::ptr::null_mut(),
             lp: std::ptr::null_mut(),
+            upper_bound: std::ptr::null_mut(),
+            optimality_limit: std::ptr::null_mut(),
         };
         c!(worker_view, p, &mut d);
         Worker { p, d }
@@ -779,12 +808,12 @@ impl Drop for SearchH {
 /// addIncumbent of the heuristics (through the worker under the parallel
 /// lock)
 pub fn add_incumbent(m: &MipData, w: &Worker, sol: &[f64], obj: f64, source: i32) -> bool {
-    c!(add_incumbent, m.mipsolver, w.p, sol.as_ptr(), sol.len() as i32, obj, source)
+    m.add_incumbent_any(w, sol, obj, source)
 }
 
 /// trySolution of the heuristics
 pub fn try_solution(m: &MipData, w: &Worker, sol: &[f64], source: i32) -> bool {
-    c!(try_solution, m.mipsolver, w.p, sol.as_ptr(), sol.len() as i32, source)
+    m.try_solution_any(w, sol, source)
 }
 
 /// The sub-MIP run of solveSubMip (see CMipFns::sub_mip)
@@ -860,8 +889,24 @@ pub unsafe fn refill(m: *mut MipData) {
     c!(refill, (*m).mipsolver, m)
 }
 
+/// A MipData freshly filled for the solver of `m` (after its model
+/// changed), for use while `m` is borrowed
+pub fn fresh(m: &MipData) -> MipData {
+    let mut out = std::mem::MaybeUninit::<MipData>::uninit();
+    // SAFETY: refill writes every field of the MipData
+    unsafe {
+        (fns().refill)(m.mipsolver, out.as_mut_ptr());
+        out.assume_init()
+    }
+}
+
 /// Sets HighsMipSolverData's double vector `which`
 pub fn set_vec(m: &MipData, which: i32, v: &[f64]) {
+    c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
+}
+
+/// Sets HighsMipSolverData's byte vector `which`
+pub fn set_bytes(m: &MipData, which: i32, v: &[u8]) {
     c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
 }
 

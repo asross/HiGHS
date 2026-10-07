@@ -33,6 +33,7 @@ pub mod status {
 pub mod src {
     pub const NONE: i32 = -1;
     pub const EVALUATE_NODE: i32 = 11;
+    pub const USER_SOLUTION: i32 = 13;
     pub const EMPTY_MIP: i32 = 8;
     pub const TRIVIAL_L: i32 = 16;
     pub const TRIVIAL_P: i32 = 17;
@@ -51,10 +52,6 @@ pub mod op {
     /// is reached, 2: lns_target_reached_, 3: the terminator stopped this
     /// instance
     pub const LIMIT_FLAGS: i32 = 1;
-    /// the MIP interrupt callback (true: interrupt)
-    pub const USER_INTERRUPT: i32 = 2;
-    /// the MIP logging callback
-    pub const LOGGING_CALLBACK: i32 = 3;
     /// getCutPool().getNumCuts()
     pub const NUM_CUTS: i32 = 4;
     /// getConflictPool().getNumConflicts()
@@ -65,12 +62,6 @@ pub mod op {
     pub const OBJ_INT_SCALE: i32 = 7;
     /// cliquetable.getSubstitutions().size()
     pub const NUM_SUBSTITUTIONS: i32 = 8;
-    /// mipsolver.callback_ has the MIP solution callback active
-    pub const SOLUTION_CALLBACK_ACTIVE: i32 = 9;
-    /// MIP solution callback with the scratch solution, objective x
-    pub const SOLUTION_CALLBACK: i32 = 10;
-    /// saveReportMipSolution(x)
-    pub const SAVE_REPORT_SOLUTION: i32 = 11;
     /// the concurrent helper pool: offer the incumbent with objective x
     pub const CONCURRENT_OFFER: i32 = 12;
     /// the helper's main solver's lower bound is above x: target reached
@@ -103,7 +94,8 @@ pub mod op {
     pub const SOLUTION_EMPTY: i32 = 25;
 }
 
-/// HighsMipSolverData's vectors that Rust sets (CMipFns::set_vec)
+/// HighsMipSolverData's vectors that Rust sets (CMipFns::set_vec): doubles
+/// (0-2, 20-), integers (3-10), bytes (30)
 pub mod vec {
     pub const INCUMBENT: i32 = 0;
     pub const FIRSTLPSOL: i32 = 1;
@@ -112,6 +104,15 @@ pub mod vec {
     pub const INTEGER_COLS: i32 = 4;
     pub const IMPLINT_COLS: i32 = 5;
     pub const CONTINUOUS_COLS: i32 = 6;
+    pub const AR_START: i32 = 7;
+    pub const AR_INDEX: i32 = 8;
+    pub const UPLOCKS: i32 = 9;
+    pub const DOWNLOCKS: i32 = 10;
+    /// doubles
+    pub const AR_VALUE: i32 = 20;
+    pub const MAX_ABS_ROW_COEF: i32 = 21;
+    /// bytes
+    pub const ROW_INTEGRAL: i32 = 30;
 }
 
 /// std::min / std::max
@@ -352,7 +353,7 @@ impl MipData {
             return true;
         }
         // possible user interrupt
-        if !self.submip && !self.parallel_lock_active() && self.op(op::USER_INTERRUPT, None, 0, 0.0) != 0.0 {
+        if !self.submip && !self.parallel_lock_active() && self.user_interrupt() {
             if self.modelstatus() == status::NOTSET {
                 crate::log_dev!(self.log, LogType::Info, "User interrupt\n");
                 self.set_modelstatus(status::INTERRUPT);
@@ -565,7 +566,7 @@ impl MipData {
             );
         }
         // possibly interrupt from the MIP logging callback
-        self.op(op::LOGGING_CALLBACK, None, 0, 0.0);
+        self.logging_callback();
     }
 
     /// checkSolution
@@ -602,25 +603,34 @@ impl MipData {
 
     /// trySolution
     pub fn try_solution_rs(&self, solution: &[f64], solution_source: i32) -> bool {
+        match self.checked_objective(solution) {
+            Some(obj) => self.add_incumbent_rs(solution, obj, solution_source, true, false),
+            None => false,
+        }
+    }
+
+    /// The bound, integrality and row checks of trySolution: the objective
+    /// if they pass
+    pub fn checked_objective(&self, solution: &[f64]) -> Option<f64> {
         if solution.len() != self.num_col as usize {
-            return false;
+            return None;
         }
         let feastol = self.feastol();
         let (lo, up, intg, cost) = (self.col_lower(), self.col_upper(), self.integrality(), self.col_cost());
         let mut obj = CDouble::from(0.0);
         for i in 0..self.num_col as usize {
             if solution[i] < lo[i] - feastol || solution[i] > up[i] + feastol {
-                return false;
+                return None;
             }
             if intg[i] == 1 && fractionality(solution[i]) > feastol {
-                return false;
+                return None;
             }
             obj += cost[i] * solution[i];
         }
         if !self.rows_feasible_double(solution) {
-            return false;
+            return None;
         }
-        self.add_incumbent_rs(solution, obj.to_f64(), solution_source, true, false)
+        Some(obj.to_f64())
     }
 
     /// solutionRowFeasible (row activities in double-double)
@@ -837,8 +847,8 @@ impl MipData {
         let sense = if self.orig_maximize { -1.0 } else { 1.0 };
         let transformed_solobj = (quad_obj * sense - self.offset).to_f64();
         // possible MIP solution callback
-        if !self.submip && feasible && self.op(op::SOLUTION_CALLBACK_ACTIVE, None, 0, 0.0) != 0.0 {
-            self.op(op::SOLUTION_CALLBACK, None, 0, objective_value);
+        if !self.submip && feasible && self.callback_active(super::setup::cb::MIP_SOLUTION) {
+            self.solution_callback(objective_value);
         }
         // the repaired solution may have a worse objective than the stored
         // one
@@ -882,7 +892,7 @@ impl MipData {
         is_user_solution: bool,
     ) -> bool {
         let execute_mip_solution_callback =
-            !is_user_solution && !self.submip && self.op(op::SOLUTION_CALLBACK_ACTIVE, None, 0, 0.0) != 0.0;
+            !is_user_solution && !self.submip && self.callback_active(super::setup::cb::MIP_SOLUTION);
         let possibly_store_as_new_incumbent = solobj < self.sc().upper_bound;
         let get_transformed_solution = possibly_store_as_new_incumbent || execute_mip_solution_callback;
         let transformed_solobj = if get_transformed_solution {
@@ -909,7 +919,7 @@ impl MipData {
             }
             let new_upper_limit = self.compute_new_upper_limit(solobj, 0.0, 0.0);
             if !is_user_solution && !self.submip {
-                self.op(op::SAVE_REPORT_SOLUTION, None, 0, new_upper_limit);
+                self.save_report_mip_solution(new_upper_limit);
             }
             if new_upper_limit < sc.upper_limit {
                 sc.num_improving_sols += 1;

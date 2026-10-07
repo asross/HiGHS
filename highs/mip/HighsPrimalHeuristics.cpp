@@ -203,20 +203,6 @@ static bool checkLimits(void* m) { return mip(m).mipdata_->checkLimits(); }
 static void updateLowerBound(void* m, double lb) {
   mip(m).mipdata_->updateLowerBound(lb);
 }
-static bool addIncumbent(void* m, void* w, const double* sol, HighsInt n,
-                         double obj, int source) {
-  std::vector<double> v(sol, sol + n);
-  if (mip(m).mipdata_->parallelLockActive())
-    return wk(w).addIncumbent(v, obj, source);
-  return mip(m).mipdata_->addIncumbent(v, obj, source);
-}
-static bool trySolution(void* m, void* w, const double* sol, HighsInt n,
-                        int source) {
-  std::vector<double> v(sol, sol + n);
-  if (mip(m).mipdata_->parallelLockActive())
-    return wk(w).trySolution(v, source);
-  return mip(m).mipdata_->trySolution(v, source);
-}
 static bool parallelLockActive(void* m) {
   return mip(m).mipdata_->parallelLockActive();
 }
@@ -228,6 +214,8 @@ static void workerView(void* w, MipWorkerData* d) {
   d->randgen = &worker.randgen;
   d->globaldom = &worker.getGlobalDomain();
   d->lp = &worker.getLpRelaxation();
+  d->upper_bound = &worker.upper_bound;
+  d->optimality_limit = &worker.optimality_limit;
 }
 
 // HighsPrimalHeuristics::solveSubMip's run of the sub-MIP
@@ -453,12 +441,6 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       if (profiling->mip_) (void)0;
       d.startAnalyticCenterComputation(ctx->tg);
       return 0;
-    case 111:
-      d.finishAnalyticCenterComputation(ctx->tg);
-      return 0;
-    case 112:
-      d.finishSymmetryDetection(ctx->tg, ctx->symData);
-      return 0;
     case 113:
       if (i < 0)
         d.getLp().setIterationLimit();
@@ -476,10 +458,6 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       return 0;
     case 117:
       return d.getDomain().getObjectiveLowerBound();
-    case 118:
-      d.queryExternalSolution(ms.solution_objective_,
-                              ExternalMipSolutionQueryOrigin(i));
-      return 0;
     case 119:
       // check if only root presolve is allowed
       if (d.firstrootbasis.valid)
@@ -597,18 +575,10 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
         d.concurrent_lns->mainQuickDone = true;
       }
       return 0;
-    case 133:
-      d.performRestart();
-      return 0;
     case 134:
       return d.importRootCuts(wk(w));
     case 135:
       d.publishRootCuts();
-      return 0;
-    case 136:
-      if (!ms.submip && ms.callback_->user_callback &&
-          ms.callback_->callbackActive(kCallbackMipGetCutPool))
-        ms.callbackGetCutPool();
       return 0;
     case 137:
       d.nodequeue.emplaceNode(
@@ -670,20 +640,6 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
         return 4;
       if (d.terminatorActive() && d.terminatorTerminated()) return 8;
       return 0;
-    case 2:
-      if (!ms.callback_->user_callback) return 0;
-      ms.callback_->clearHighsCallbackOutput();
-      return d.interruptFromCallbackWithData(kCallbackMipInterrupt,
-                                             ms.solution_objective_,
-                                             "MIP check limits");
-    case 3: {
-      ms.callback_->clearHighsCallbackOutput();
-      const bool interrupt = d.interruptFromCallbackWithData(
-          kCallbackMipLogging, ms.solution_objective_, "MIP logging");
-      assert(!interrupt);
-      (void)interrupt;
-      return 0;
-    }
     case 4:
       return d.getCutPool().getNumCuts();
     case 5:
@@ -694,22 +650,6 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
       return d.objectiveFunction.integralScale();
     case 8:
       return d.cliquetable.getSubstitutions().size();
-    case 9:
-      return ms.callback_->user_callback
-                 ? ms.callback_->active[kCallbackMipSolution]
-                 : false;
-    case 10: {
-      ms.callback_->clearHighsCallbackOutput();
-      ms.callback_->data_out.mip_solution = d.rsScratch_.col_value;
-      const bool interrupt = d.interruptFromCallbackWithData(
-          kCallbackMipSolution, x, "Feasible solution");
-      assert(!interrupt);
-      (void)interrupt;
-      return 0;
-    }
-    case 11:
-      d.saveReportMipSolution(x);
-      return 0;
     case 12:
       ms.concurrent_lns_->offer(d.incumbent, x);
       return 0;
@@ -831,17 +771,32 @@ static std::vector<HighsInt>& intVecRef(HighsMipSolverData& d, int which) {
       return d.integer_cols;
     case 5:
       return d.implint_cols;
-    default:
+    case 6:
       return d.continuous_cols;
+    case 7:
+      return d.ARstart_;
+    case 8:
+      return d.ARindex_;
+    case 9:
+      return d.uplocks;
+    default:
+      return d.downlocks;
   }
 }
+// mip_data.rs mod vec: doubles 0-2 and 20-21, integers 3-10, bytes 30
 static void setVec(void* m, int which, const void* data, HighsInt n) {
   HighsMipSolverData& d = *mip(m).mipdata_;
-  if (which <= 2) {
+  if (which <= 2 || which == 20 || which == 21) {
     const double* x = static_cast<const double*>(data);
-    std::vector<double>& v =
-        which == 0 ? d.incumbent : which == 1 ? d.firstlpsol : d.rootlpsol;
+    std::vector<double>& v = which == 0    ? d.incumbent
+                             : which == 1  ? d.firstlpsol
+                             : which == 2  ? d.rootlpsol
+                             : which == 20 ? d.ARvalue_
+                                           : d.maxAbsRowCoef;
     v.assign(x, x + n);
+  } else if (which == 30) {
+    const uint8_t* x = static_cast<const uint8_t*>(data);
+    d.rowintegral.assign(x, x + n);
   } else {
     const HighsInt* x = static_cast<const HighsInt*>(data);
     intVecRef(d, which).assign(x, x + n);
@@ -899,8 +854,6 @@ static const MipFns fns = {
     searchSetLp,
     checkLimits,
     updateLowerBound,
-    addIncumbent,
-    trySolution,
     parallelLockActive,
     numWorkers,
     workerView,
@@ -917,6 +870,13 @@ static const MipFns fns = {
     mipMaxSubmipLevel,
     syncConcurrentLns,
     crossoverWithMain,
+    mipVecPtr,
+    mipSetBasis,
+    mipCallback,
+    mipWorker,
+    mipWorkerSolution,
+    mipWorkerPushSolution,
+    mipWorkerScratch,
 };
 }  // namespace mipglue
 
@@ -972,7 +932,9 @@ MipData mipData(const HighsMipSolver& mipsolver) {
   const HighsLp& orig = *mipsolver.orig_model_;
   m.orig = {orig.num_col_,     orig.num_row_,    orig.offset_,
             &orig.col_cost_,   &orig.col_lower_, &orig.col_upper_,
-            &orig.row_lower_,  &orig.row_upper_, &orig.integrality_};
+            &orig.row_lower_,  &orig.row_upper_, &orig.integrality_,
+            &orig.a_matrix_.start_, &orig.a_matrix_.index_,
+            &orig.a_matrix_.value_};
   const HighsOptions& o = *mipsolver.options_mip_;
   m.opts.objective_bound = o.objective_bound;
   m.opts.objective_target = o.objective_target;
@@ -997,6 +959,13 @@ MipData mipData(const HighsMipSolver& mipsolver) {
   m.opts.run_feasibility_jump = o.mip_heuristic_run_feasibility_jump;
   m.opts.output_flag_option = o.output_flag;
   m.opts.mip_max_stall_nodes = o.mip_max_stall_nodes;
+  m.opts.small_matrix_value = o.small_matrix_value;
+  m.opts.mip_heuristic_effort = o.mip_heuristic_effort;
+  m.opts.mip_report_level = o.mip_report_level;
+  m.opts.restart_presolve_reduction_limit = o.restart_presolve_reduction_limit;
+  m.opts.presolve_reduction_limit = o.presolve_reduction_limit;
+  m.opts.mip_detect_symmetry = o.mip_detect_symmetry;
+  m.opts.mip_improving_solution_save = o.mip_improving_solution_save;
   return m;
 }
 }  // namespace highs_rs

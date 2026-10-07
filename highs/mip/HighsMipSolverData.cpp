@@ -95,6 +95,361 @@ HighsMipSolverData::HighsMipSolverData(HighsMipSolver& mipsolver)
   cliquetable.setAllowParallel(!mipsolver.submip);
 }
 
+
+#ifdef HIGHS_RUST
+// The C++ side of rust/src/mip/setup.rs: init, presolve, setup, the
+// restart, the end of the root node's tasks and the user callbacks
+namespace highs_rs {
+double mipSetupOp(void* m, int which, void* w, int64_t i, double x) {
+  HighsMipSolver& ms = *static_cast<HighsMipSolver*>(m);
+  HighsMipSolverData& d = *ms.mipdata_;
+  (void)w;
+  (void)x;
+  switch (which) {
+    case 300:
+      d.postSolveStack.initializeIndexMaps(ms.numRow(), ms.numCol());
+      ms.orig_model_ = ms.model_;
+      return 0;
+    case 301:
+      if (ms.clqtableinit)
+        d.cliquetable.buildFrom(ms.orig_model_, *ms.clqtableinit);
+      d.cliquetable.setMinEntriesForParallelism(
+          highs::parallel::num_threads() > 1
+              ? ms.options_mip_->mip_min_cliquetable_entries_for_parallelism
+              : kHighsIInf);
+      if (ms.implicinit) d.implications.buildFrom(*ms.implicinit);
+      return 0;
+    case 302:
+      if (i == 0)
+        ms.timer_.start(ms.timer_.presolve_clock);
+      else
+        ms.timer_.stop(ms.timer_.presolve_clock);
+      return 0;
+    case 303: {
+      presolve::HPresolve presolve;
+      if (!presolve.okSetInput(ms, HighsInt(i))) {
+        ms.modelstatus_ = HighsModelStatus::kMemoryLimit;
+        d.presolve_status = HighsPresolveStatus::kOutOfMemory;
+      } else {
+        ms.modelstatus_ = presolve.run(d.postSolveStack);
+        d.presolve_status = presolve.getPresolveStatus();
+      }
+      return 0;
+    }
+    case 304:
+      reportPresolveReductions(ms.options_mip_->log_options, d.presolve_status,
+                               *ms.orig_model_, *ms.model_);
+      return 0;
+    case 305:
+      d.getLp().setSolvedFirstLp(false);
+      return 0;
+    case 306:
+      d.incumbent = d.postSolveStack.getReducedPrimalSolution(ms.solution_);
+      return 0;
+    case 307:
+      d.redcostfixing = HighsRedcostFixing();
+      d.getPseudoCost() = HighsPseudocost(ms);
+      return 0;
+    case 308:
+      d.objectiveFunction.setupCliquePartition(d.getDomain(), d.cliquetable);
+      d.getDomain().setupObjectivePropagation();
+      d.getDomain().computeRowActivities();
+      d.getDomain().propagate();
+      return 0;
+    case 309:
+      for (HighsInt col : d.getDomain().getChangedCols())
+        d.implications.cleanupVarbounds(col);
+      d.getDomain().clearChangedCols();
+      return 0;
+    case 310:
+      d.getLp().getLpSolver().setOptionValue("presolve", kHighsOffString);
+      return 0;
+    case 311:
+      d.objectiveFunction.checkIntegrality(d.epsilon);
+      return 0;
+    case 312:
+      d.heuristics.setupIntCols();
+      return 0;
+    case 313:
+      d.analyticCenterStatus = HighsModelStatus::kNotset;
+      d.analyticCenter.clear();
+      d.symmetries.clear();
+      return 0;
+    case 314:
+      return d.cliquetable.getNumEntries();
+    case 315:
+      return highs::parallel::num_threads();
+    case 316:
+      return std::thread::hardware_concurrency();
+    case 317:
+      d.rsRestart_.reset(new HighsMipSolverData::RsRestartCtx(
+          d.getPseudoCost(), ms.options_mip_->mip_pscost_minreliable,
+          d.postSolveStack));
+      ms.pscostinit = &d.rsRestart_->pscostinit;
+      return 0;
+    case 318:
+      // the solver's pointers into the restart's locals
+      if (ms.rootbasis == &d.rsRestart_->root_basis) ms.rootbasis = nullptr;
+      ms.pscostinit = nullptr;
+      d.rsRestart_.reset();
+      return 0;
+    case 319:
+      if (d.concurrent_lns) d.concurrent_lns->independent = false;
+      d.syncConcurrentLns();
+      d.stopConcurrentLns();
+      return 0;
+    case 320: {
+      const HighsInt numCuts = HighsInt(i);
+      if (numCuts > 0) d.postSolveStack.appendCutsToModel(numCuts);
+      auto integrality = std::move(d.presolvedModel.integrality_);
+      double offset = d.presolvedModel.offset_;
+      d.presolvedModel = d.getLp().getLp();
+      d.presolvedModel.offset_ = offset;
+      d.presolvedModel.integrality_ = std::move(integrality);
+      return 0;
+    }
+    case 321:
+      d.globalOrbits.reset();
+      return 0;
+    case 322:
+      if (i == 1) return d.postSolveStack.getOrigNumCol();
+      if (i == 2) return d.postSolveStack.getOrigNumRow();
+      return HighsInt(d.postSolveStack.numReductions());
+    case 323:
+      d.postSolveStack.removeCutsFromModel(HighsInt(i));
+      return 0;
+    case 324:
+      // the master worker on the solver's pools, domain and pseudocosts
+      if (!d.workers.empty()) {
+        HighsMipWorker& w0 = d.workers[0];
+        w0.setCutPool(&d.getCutPool());
+        w0.setConflictPool(&d.getConflictPool());
+        w0.setGlobalDomain(&d.getDomain());
+        w0.setPseudocost(&d.getPseudoCost());
+        w0.upper_bound = d.upper_bound;
+        w0.upper_limit = d.upper_limit;
+        w0.optimality_limit = d.optimality_limit;
+      }
+      return 0;
+    case 325:
+      d.rsRoot_->tg.sync();
+      return 0;
+    case 326:
+      return int(d.analyticCenterStatus);
+    case 327: {
+      HighsMipSolverData::RsRootCtx& ctx = *d.rsRoot_;
+      ctx.tg.sync();
+      d.symmetries = std::move(ctx.symData->symmetries);
+      return ctx.symData->detectionTime;
+    }
+    case 328:
+      switch (i) {
+        case 0:
+          return d.symmetries.numGenerators;
+        case 1:
+          return d.symmetries.numPerms;
+        case 2:
+          return d.symmetries.numOrbitopes();
+        default:
+          return d.symmetries.numOrbitopeColumns();
+      }
+    case 329:
+      d.rsRoot_->symData.reset();
+      d.symmetries.determineOrbitopeTypes(d.cliquetable);
+      if (d.symmetries.numPerms != 0) {
+        StabilizerOrbitWorkspace workspace;
+        d.globalOrbits =
+            d.symmetries.computeStabilizerOrbits(d.getDomain(), workspace);
+      }
+      return 0;
+    case 330: {
+      HighsObjectiveSolution record;
+      record.objective = ms.solution_objective_;
+      record.col_value = ms.solution_;
+      ms.saved_objective_and_solution_.push_back(record);
+      return 0;
+    }
+    case 331: {
+      FILE* file = ms.improving_solution_file_;
+      if (file) {
+        writeLpObjective(file, ms.options_mip_->log_options, *ms.orig_model_,
+                         ms.solution_);
+        writePrimalSolution(
+            file, ms.options_mip_->log_options, *ms.orig_model_, ms.solution_,
+            ms.options_mip_->mip_improving_solution_report_sparse);
+      }
+      return 0;
+    }
+    case 332:
+      d.rsScratch_.col_value = d.postSolveStack.getReducedPrimalSolution(
+          ms.callback_->data_in.user_solution);
+      return 0;
+    case 333:
+      if (i == 0) return bool(ms.callback_->user_callback);
+      return ms.callback_->data_in.user_has_solution;
+    case 334:
+      return ms.model_ == &d.presolvedModel;
+    case 335:
+      d.getPseudoCost() = HighsPseudocost(ms);
+      return 0;
+    case 336:
+      d.getDomain() = HighsDomain(ms);
+      d.getDomain().computeRowActivities();
+      return 0;
+    case 337: {
+      ms.callback_->clearHighsCallbackOutput();
+      HighsCallbackOutput& data_out = ms.callback_->data_out;
+      HighsSparseMatrix cut_matrix;
+      d.getLp().getCutPool(data_out.cutpool_num_col, data_out.cutpool_num_cut,
+                           data_out.cutpool_lower, data_out.cutpool_upper,
+                           cut_matrix);
+      // take ownership
+      data_out.cutpool_start = std::move(cut_matrix.start_);
+      data_out.cutpool_index = std::move(cut_matrix.index_);
+      data_out.cutpool_value = std::move(cut_matrix.value_);
+      return 0;
+    }
+    // workers.rs
+    case 400:
+      d.workers[i].solutions_.clear();
+      return 0;
+    case 401:
+      d.cliquetable.cleanupFixed(d.getDomain());
+      return 0;
+    case 402: {
+      // the end of resetGlobalDomain's doResetWorkerDomain: resetting the
+      // local domain cannot be done in parallel (changes the propagation
+      // domains of the main pool)
+      HighsMipWorker& worker = d.workers[i];
+      worker.getGlobalDomain().setDomainChangeStack(
+          std::vector<HighsDomainChange>());
+      worker.search_ptr_->resetLocalDomain();
+      worker.getGlobalDomain().clearChangedCols();
+      return 0;
+    }
+    case 403:
+      ms.setParallelLock(i != 0);
+      return 0;
+  }
+  assert(false);
+  return 0;
+}
+
+void* mipWorker(void* m, HighsInt k) {
+  return &static_cast<HighsMipSolver*>(m)->mipdata_->workers[k];
+}
+
+bool mipWorkerSolution(void* w, HighsInt j, MipWorkerSol* s) {
+  HighsMipWorker& worker = *static_cast<HighsMipWorker*>(w);
+  if (size_t(j) >= worker.solutions_.size()) return false;
+  const auto& sol = worker.solutions_[j];
+  s->x = std::get<0>(sol).data();
+  s->n = std::get<0>(sol).size();
+  s->obj = std::get<1>(sol);
+  s->source = std::get<2>(sol);
+  return true;
+}
+
+void mipWorkerPushSolution(void* w, const double* x, HighsInt n, double obj,
+                           int source) {
+  static_cast<HighsMipWorker*>(w)->solutions_.emplace_back(
+      std::vector<double>(x, x + n), obj, source);
+}
+
+void mipWorkerScratch(void* m, void* w, const double* x, HighsInt n,
+                      MipScratchView* v) {
+  const HighsMipSolver& ms = *static_cast<HighsMipSolver*>(m);
+  HighsSolution& solution = static_cast<HighsMipWorker*>(w)->rsScratch_;
+  solution = HighsSolution();
+  solution.col_value.assign(x, x + n);
+  solution.value_valid = true;
+  // primal postsolve to the original column values, and the row values
+  ms.mipdata_->postSolveStack.undoPrimal(*ms.options_mip_, solution, -1, true);
+  HighsStatus return_status = calculateRowValuesQuad(*ms.orig_model_, solution);
+  if (kAllowDeveloperAssert) assert(return_status == HighsStatus::kOk);
+  (void)return_status;
+  v->col = solution.col_value.data();
+  v->ncol = solution.col_value.size();
+  v->row = solution.row_value.data();
+  v->nrow = solution.row_value.size();
+}
+
+template <typename T>
+static const void* vecData(const std::vector<T>& v, HighsInt* n) {
+  *n = v.size();
+  return v.data();
+}
+
+const void* mipVecPtr(void* m, int which, HighsInt* n) {
+  HighsMipSolver& ms = *static_cast<HighsMipSolver*>(m);
+  HighsMipSolverData& d = *ms.mipdata_;
+  switch (which) {
+    case 0:
+      return vecData(d.firstrootbasis.col_status, n);
+    case 1:
+      return vecData(d.firstrootbasis.row_status, n);
+    case 2:
+      return ms.rootbasis ? vecData(ms.rootbasis->col_status, n) : nullptr;
+    case 3:
+      return ms.rootbasis ? vecData(ms.rootbasis->row_status, n) : nullptr;
+    case 4:
+      *n = d.postSolveStack.getOrigColsIndexSize();
+      return d.postSolveStack.getOrigColsIndex();
+    case 5:
+      *n = d.postSolveStack.getOrigRowsIndexSize();
+      return d.postSolveStack.getOrigRowsIndex();
+    case 6:
+      return vecData(ms.callback_->data_in.user_solution, n);
+    case 7:
+      return vecData(d.rsScratch_.col_value, n);
+  }
+  assert(false);
+  return nullptr;
+}
+
+void mipSetBasis(void* m, int which, const uint8_t* col, HighsInt ncol,
+                 const uint8_t* row, HighsInt nrow, bool valid, bool alien,
+                 bool useful) {
+  HighsMipSolver& ms = *static_cast<HighsMipSolver*>(m);
+  HighsMipSolverData& d = *ms.mipdata_;
+  HighsBasis& b = which == 0 ? d.firstrootbasis : d.rsRestart_->root_basis;
+  const HighsBasisStatus* c = reinterpret_cast<const HighsBasisStatus*>(col);
+  const HighsBasisStatus* r = reinterpret_cast<const HighsBasisStatus*>(row);
+  b.col_status.assign(c, c + ncol);
+  b.row_status.assign(r, r + nrow);
+  b.valid = valid;
+  b.alien = alien;
+  b.useful = useful;
+  if (which == 1) ms.rootbasis = &b;
+}
+
+bool mipCallback(void* m, int type, const MipCallbackOut* out,
+                 const char* message, HighsInt len) {
+  HighsMipSolver& ms = *static_cast<HighsMipSolver*>(m);
+  HighsCallback& cb = *ms.callback_;
+  if (!out) return cb.callbackActive(type);
+  assert(!ms.submip);
+  if (out->clear_output) cb.clearHighsCallbackOutput();
+  if (out->solution == 1)
+    cb.data_out.mip_solution = ms.solution_;
+  else if (out->solution == 2)
+    cb.data_out.mip_solution = ms.mipdata_->rsScratch_.col_value;
+  cb.data_out.running_time = out->running_time;
+  cb.data_out.objective_function_value = out->objective_function_value;
+  cb.data_out.mip_node_count = out->mip_node_count;
+  cb.data_out.mip_total_lp_iterations = out->mip_total_lp_iterations;
+  cb.data_out.mip_primal_bound = out->mip_primal_bound;
+  cb.data_out.mip_dual_bound = out->mip_dual_bound;
+  cb.data_out.mip_gap = out->mip_gap;
+  if (out->external_solution_query_origin >= 0)
+    cb.data_out.external_solution_query_origin =
+        ExternalMipSolutionQueryOrigin(out->external_solution_query_origin);
+  if (out->clear_input) cb.clearHighsCallbackInput();
+  return cb.callbackAction(type, std::string(message, len));
+}
+}  // namespace highs_rs
+#endif
+
 std::string HighsMipSolverData::solutionSourceToString(
     const int solution_source, const bool code) const {
   if (solution_source == kSolutionSourceNone) {
@@ -529,6 +884,7 @@ void HighsMipSolverData::startAnalyticCenterComputation(
   });
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::finishAnalyticCenterComputation(
     const highs::parallel::TaskGroup& taskGroup) {
   if (mipsolver.profiling_->mip_) {
@@ -582,6 +938,7 @@ void HighsMipSolverData::finishAnalyticCenterComputation(
     if (mipsolver.mipdata_->getDomain().infeasible()) return;
   }
 }
+#endif  // HIGHS_RUST
 
 void HighsMipSolverData::startSymmetryDetection(
     const highs::parallel::TaskGroup& taskGroup,
@@ -602,6 +959,7 @@ void HighsMipSolverData::startSymmetryDetection(
     symData.reset();
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::finishSymmetryDetection(
     const highs::parallel::TaskGroup& taskGroup,
     std::unique_ptr<SymmetryDetectionData>& symData) {
@@ -646,6 +1004,7 @@ void HighsMipSolverData::finishSymmetryDetection(
     globalOrbits = symmetries.computeStabilizerOrbits(getDomain(), workspace);
   }
 }
+#endif  // HIGHS_RUST
 
 double HighsMipSolverData::limitsToGap(const double use_lower_bound,
                                        const double use_upper_bound, double& lb,
@@ -819,6 +1178,7 @@ void HighsMipSolverData::removeFixedIndices() {
       continuous_cols.end());
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::init() {
   postSolveStack.initializeIndexMaps(mipsolver.numRow(), mipsolver.numCol());
   mipsolver.orig_model_ = mipsolver.model_;
@@ -877,7 +1237,9 @@ void HighsMipSolverData::init() {
   else
     dispfreq = 100;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::runMipPresolve(
     const HighsInt presolve_reduction_limit) {
   mipsolver.timer_.start(mipsolver.timer_.presolve_clock);
@@ -897,7 +1259,9 @@ void HighsMipSolverData::runMipPresolve(
                              presolve_status, *mipsolver.orig_model_,
                              *mipsolver.model_);
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::runSetup() {
   const HighsLp& model = *mipsolver.model_;
 
@@ -1225,6 +1589,7 @@ void HighsMipSolverData::runSetup() {
     highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
                  "\n");
 }
+#endif  // HIGHS_RUST
 
 double HighsMipSolverData::transformNewIntegerFeasibleSolution(
     const std::vector<double>& sol,
@@ -1396,6 +1761,7 @@ double HighsMipSolverData::percentageInactiveIntegers() const {
                     numintegercols);
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::performRestart() {
   // the helper's solutions would be for the model before the restart
   if (concurrent_lns) concurrent_lns->independent = false;
@@ -1551,7 +1917,9 @@ void HighsMipSolverData::performRestart() {
   if (mipsolver.rootbasis == &root_basis) mipsolver.rootbasis = nullptr;
   mipsolver.pscostinit = nullptr;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::basisTransfer() {
   // if a root basis is given, construct a basis for the root LP from
   // in the reduced problem space after presolving
@@ -1577,6 +1945,7 @@ void HighsMipSolverData::basisTransfer() {
     }
   }
 }
+#endif  // HIGHS_RUST
 
 const std::vector<double>& HighsMipSolverData::getSolution() const {
   return incumbent;
@@ -3054,6 +3423,7 @@ bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
   return false;
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::checkObjIntegrality() {
   objectiveFunction.checkIntegrality(epsilon);
   if (objectiveFunction.isIntegral() && numRestarts == 0) {
@@ -3062,8 +3432,16 @@ void HighsMipSolverData::checkObjIntegrality() {
                  objectiveFunction.integralScale());
   }
 }
+#endif  // HIGHS_RUST
 
 void HighsMipSolverData::setupDomainPropagation() {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    highs_rs::highs_rs_mip_setup_domain_propagation(highs_rs::mipFns(), &rsm);
+    return;
+  }
+#endif
   const HighsLp& model = *mipsolver.model_;
   highsSparseTranspose(model.num_row_, model.num_col_, model.a_matrix_.start_,
                        model.a_matrix_.index_, model.a_matrix_.value_, ARstart_,
@@ -3088,6 +3466,7 @@ void HighsMipSolverData::setupDomainPropagation() {
   getDomain().computeRowActivities();
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::saveReportMipSolution(const double new_upper_limit) {
   const bool non_improving = new_upper_limit >= upper_limit;
   if (mipsolver.submip) return;
@@ -3120,6 +3499,7 @@ void HighsMipSolverData::saveReportMipSolution(const double new_upper_limit) {
         mipsolver.options_mip_->mip_improving_solution_report_sparse);
   }
 }
+#endif  // HIGHS_RUST
 
 void HighsMipSolverData::limitsToBounds(double& dual_bound,
                                         double& primal_bound,
@@ -3163,6 +3543,7 @@ void HighsMipSolverData::updateLowerBound(double new_lower_bound,
 // incumbent value (mipsolver.solution_objective_) is not right for
 // callback_type = kCallbackMipSolution
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::setCallbackDataOut(
     const double mipsolver_objective_value) const {
   double dual_bound;
@@ -3179,7 +3560,9 @@ void HighsMipSolverData::setCallbackDataOut(
   mipsolver.callback_->data_out.mip_dual_bound = dual_bound;
   mipsolver.callback_->data_out.mip_gap = mip_rel_gap;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 bool HighsMipSolverData::interruptFromCallbackWithData(
     const int callback_type, const double mipsolver_objective_value,
     const std::string message) const {
@@ -3188,7 +3571,9 @@ bool HighsMipSolverData::interruptFromCallbackWithData(
   setCallbackDataOut(mipsolver_objective_value);
   return mipsolver.callback_->callbackAction(callback_type, message);
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::queryExternalSolution(
     const double mipsolver_objective_value,
     const ExternalMipSolutionQueryOrigin external_solution_query_origin) {
@@ -3254,6 +3639,7 @@ void HighsMipSolverData::queryExternalSolution(
     }
   }
 }
+#endif  // HIGHS_RUST
 
 HighsInt HighsMipSolverData::terminatorConcurrency() const {
   return mipsolver.terminator_.num_instance;

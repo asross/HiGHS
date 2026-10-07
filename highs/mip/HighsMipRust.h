@@ -78,6 +78,16 @@ struct MipWorkerData {
   void* randgen;
   void* globaldom;
   void* lp;
+  double* upper_bound;
+  double* optimality_limit;
+};
+
+// workers.rs WorkerSol
+struct MipWorkerSol {
+  const double* x;
+  HighsInt n;
+  double obj;
+  int source;
 };
 
 // glue.rs MipOptions
@@ -105,6 +115,13 @@ struct MipOptions {
   bool run_feasibility_jump;
   bool output_flag_option;
   HighsInt mip_max_stall_nodes;
+  double small_matrix_value;
+  double mip_heuristic_effort;
+  HighsInt mip_report_level;
+  HighsInt restart_presolve_reduction_limit;
+  HighsInt presolve_reduction_limit;
+  bool mip_detect_symmetry;
+  bool mip_improving_solution_save;
 };
 
 // glue.rs OrigModel
@@ -118,6 +135,9 @@ struct MipOrigModel {
   const std::vector<double>* row_lower;
   const std::vector<double>* row_upper;
   const std::vector<HighsVarType>* integrality;
+  const std::vector<HighsInt>* a_start;
+  const std::vector<HighsInt>* a_index;
+  const std::vector<double>* a_value;
 };
 
 // glue.rs SolutionPtrs
@@ -135,6 +155,21 @@ struct MipScratchView {
   HighsInt ncol;
   const double* row;
   HighsInt nrow;
+};
+
+// setup.rs CallbackOut
+struct MipCallbackOut {
+  double running_time;
+  double objective_function_value;
+  int64_t mip_node_count;
+  int64_t mip_total_lp_iterations;
+  double mip_primal_bound;
+  double mip_dual_bound;
+  double mip_gap;
+  int external_solution_query_origin;
+  bool clear_output;
+  bool clear_input;
+  int solution;
 };
 
 // glue.rs MipData: HighsMipSolverData and its model in place
@@ -223,8 +258,6 @@ struct MipFns {
   void (*search_set_lp)(void*, void*);
   bool (*check_limits)(void*);
   void (*update_lower_bound)(void*, double);
-  bool (*add_incumbent)(void*, void*, const double*, HighsInt, double, int);
-  bool (*try_solution)(void*, void*, const double*, HighsInt, int);
   bool (*parallel_lock_active)(void*);
   HighsInt (*num_workers)(void*);
   void (*worker_view)(void*, MipWorkerData*);
@@ -243,6 +276,15 @@ struct MipFns {
   HighsInt (*max_submip_level)(void*);
   void (*sync_concurrent_lns)(void*);
   void (*crossover_with_main)(void*, void*);
+  const void* (*vec_ptr)(void*, int, HighsInt*);
+  void (*set_basis)(void*, int, const uint8_t*, HighsInt, const uint8_t*,
+                    HighsInt, bool, bool, bool);
+  bool (*callback)(void*, int, const MipCallbackOut*, const char*, HighsInt);
+  void* (*worker)(void*, HighsInt);
+  bool (*worker_solution)(void*, HighsInt, MipWorkerSol*);
+  void (*worker_push_solution)(void*, const double*, HighsInt, double, int);
+  void (*worker_scratch)(void*, void*, const double*, HighsInt,
+                         MipScratchView*);
 };
 
 // The functions (HighsPrimalHeuristics.cpp) and the solver's data
@@ -256,6 +298,20 @@ void mipRunProcessNodes(void* m, const HighsInt* idx, HighsInt n,
 void mipSetCleanupResult(void* m, const void* r);
 const char* mipModelName(void* m, HighsInt* n);
 HighsInt mipMaxSubmipLevel(void* m);
+// the setup's operations (HighsMipSolverData.cpp)
+double mipSetupOp(void* m, int which, void* w, int64_t i, double x);
+const void* mipVecPtr(void* m, int which, HighsInt* n);
+void mipSetBasis(void* m, int which, const uint8_t* col, HighsInt ncol,
+                 const uint8_t* row, HighsInt nrow, bool valid, bool alien,
+                 bool useful);
+bool mipCallback(void* m, int type, const MipCallbackOut* out,
+                 const char* message, HighsInt len);
+void* mipWorker(void* m, HighsInt k);
+bool mipWorkerSolution(void* w, HighsInt j, MipWorkerSol* s);
+void mipWorkerPushSolution(void* w, const double* x, HighsInt n, double obj,
+                           int source);
+void mipWorkerScratch(void* m, void* w, const double* x, HighsInt n,
+                      MipScratchView* v);
 
 extern "C" {
 Heuristics* highs_rs_heur_new(HighsInt seed);
@@ -307,6 +363,12 @@ void highs_rs_mip_evaluate_root_node(const MipFns* f, MipData* m,
 void highs_rs_mip_run(const MipFns* f, MipData* m);
 void highs_rs_mip_cleanup_solve(const MipFns* f, const MipData* m);
 void highs_rs_mip_process_node(const MipFns* f, const void* ctx, int i);
+void highs_rs_mip_setup_domain_propagation(const MipFns* f, const MipData* m);
+bool highs_rs_worker_solution(const MipFns* f, const MipData* m, void* w,
+                              const double* sol, HighsInt n, double obj,
+                              int source, bool try_solution);
+void highs_rs_mip_presolve_only(const MipFns* f, const MipData* m,
+                                HighsInt limit);
 void highs_rs_heur_graph_lns(Heuristics* h, const MipFns* f, const MipData* m,
                              void* worker, const double* x, HighsInt n,
                              bool deep, int64_t max_lp_iters);

@@ -120,19 +120,10 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
   HighsProfiling* profiling = ms.profiling_;
   const bool lockActive = d.parallelLockActive();
   switch (which) {
-    case 200:
-      d.init();
-      return 0;
-    case 201:
-      d.runMipPresolve(ms.options_mip_->presolve_reduction_limit);
-      return 0;
     case 202:
       highsLogUser(ms.options_mip_->log_options, HighsLogType::kInfo,
                    "Presolve: %s\n",
                    utilModelStatusToString(ms.modelstatus_).c_str());
-      return 0;
-    case 203:
-      d.runSetup();
       return 0;
     case 204:
       d.workers.emplace_back(ms, &d.getLp(), &d.getDomain(), &d.getCutPool(),
@@ -220,15 +211,6 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
       worker.nodequeue.setNumCol(ms.numCol());
       return 0;
     }
-    case 214:
-      // note: the upper bound / limit of the workers is updated by
-      // addIncumbent
-      for (HighsMipWorker& worker : d.workers) {
-        for (auto& sol : worker.solutions_)
-          d.addIncumbent(std::get<0>(sol), std::get<1>(sol), std::get<2>(sol));
-        worker.solutions_.clear();
-      }
-      return 0;
     case 215:
       if (!d.hasMultipleWorkers() || lockActive) return 0;
       for (HighsInt k = 0; k < i; ++k) {
@@ -238,47 +220,6 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
       d.getCutPool().performAging();
       d.getConflictPool().performAging();
       return 0;
-    case 216:
-      if (!d.hasMultipleWorkers()) return 0;
-      for (HighsInt k = 0; k < i; ++k) {
-        HighsMipWorker& worker = d.workers[k];
-        const auto& domchgstack =
-            worker.getGlobalDomain().getDomainChangeStack();
-        for (const HighsDomainChange& domchg : domchgstack) {
-          if ((domchg.boundtype == HighsBoundType::kLower &&
-               domchg.boundval > d.getDomain().col_lower_[domchg.column]) ||
-              (domchg.boundtype == HighsBoundType::kUpper &&
-               domchg.boundval < d.getDomain().col_upper_[domchg.column])) {
-            d.getDomain().changeBound(domchg,
-                                      HighsDomain::Reason::unspecified());
-          }
-        }
-      }
-      return 0;
-    case 217: {
-      d.cliquetable.cleanupFixed(d.getDomain());
-      if (i) {
-        // sync the worker domains here: cleanupFixed might have found extra
-        // changes
-        auto doResetWorkerDomain = [&](HighsInt k) {
-          HighsMipWorker& worker = d.workers[k];
-          for (const HighsDomainChange& domchg :
-               d.getDomain().getDomainChangeStack()) {
-            worker.getGlobalDomain().changeBound(
-                domchg, HighsDomain::Reason::unspecified());
-          }
-          worker.getGlobalDomain().setDomainChangeStack(
-              std::vector<HighsDomainChange>());
-          // resetting the local domain cannot be done in parallel (changes
-          // the propagation domains of the main pool)
-          worker.search_ptr_->resetLocalDomain();
-          worker.getGlobalDomain().clearChangedCols();
-        };
-        std::vector<HighsInt> indices = firstIndices(int64_t(x));
-        ms.runTask(doResetWorkerDomain, d.rsRun_->tg, false, true, indices);
-      }
-      return 0;
-    }
     case 218:
       for (const HighsInt col : d.getDomain().getChangedCols())
         d.implications.cleanupVarbounds(col);
@@ -329,9 +270,6 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
     }
     case 227:
       return d.workers[i].search_ptr_->hasNode();
-    case 228:
-      d.performRestart();
-      return 0;
     case 229:
       d.workers[i].setAllowHeuristics(x != 0);
       return 0;
@@ -593,8 +531,7 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
         fclose(ms.improving_solution_file_);
       return 0;
   }
-  assert(false);
-  return 0;
+  return mipSetupOp(m, which, w, i, x);
 }
 
 void* mipMasterWorker(void* m) {
@@ -1824,8 +1761,14 @@ void HighsMipSolver::solvingReport(const std::string& solutionstatus) const {
 // Only called in Highs::runPresolve
 void HighsMipSolver::runMipPresolve(const HighsInt presolve_reduction_limit) {
   mipdata_ = decltype(mipdata_)(new HighsMipSolverData(*this));
+#ifdef HIGHS_RUST
+  const highs_rs::MipData m = highs_rs::mipData(*this);
+  highs_rs::highs_rs_mip_presolve_only(highs_rs::mipFns(), &m,
+                                       presolve_reduction_limit);
+#else
   mipdata_->init();
   mipdata_->runMipPresolve(presolve_reduction_limit);
+#endif
 }
 
 const HighsLp& HighsMipSolver::getPresolvedModel() const {
@@ -1840,6 +1783,7 @@ presolve::HighsPostsolveStack HighsMipSolver::getPostsolveStack() const {
   return mipdata_->postSolveStack;
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolver::callbackGetCutPool() const {
   assert(callback_->user_callback);
   assert(callback_->callbackActive(kCallbackMipGetCutPool));
@@ -1860,6 +1804,7 @@ void HighsMipSolver::callbackGetCutPool() const {
       kCallbackMipGetCutPool, solution_objective_, "MIP cut pool");
   assert(!interrupt);
 }
+#endif  // HIGHS_RUST
 
 std::array<char, 128> getGapString(const double gap_,
                                    const double primal_bound_,

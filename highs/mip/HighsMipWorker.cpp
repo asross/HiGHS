@@ -7,6 +7,7 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #include "mip/HighsMipWorker.h"
 
+#include "mip/HighsMipRust.h"
 #include "mip/HighsMipSolverData.h"
 #include "mip/MipTimer.h"
 
@@ -53,6 +54,14 @@ void HighsMipWorker::resetSepa() {
 
 bool HighsMipWorker::addIncumbent(const std::vector<double>& sol, double solobj,
                                   int solution_source) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData m = highs_rs::mipData(mipsolver_);
+    return highs_rs::highs_rs_worker_solution(highs_rs::mipFns(), &m, this,
+                                              sol.data(), sol.size(), solobj,
+                                              solution_source, false);
+  }
+#endif
   if (solobj < upper_bound) {
     // Get the transformed objective and solution if required
     const std::pair<bool, double> transformed_solobj =
@@ -112,6 +121,14 @@ std::pair<bool, double> HighsMipWorker::transformNewIntegerFeasibleSolution(
 
 bool HighsMipWorker::trySolution(const std::vector<double>& solution,
                                  const int solution_source) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData m = highs_rs::mipData(mipsolver_);
+    return highs_rs::highs_rs_worker_solution(highs_rs::mipFns(), &m, this,
+                                              solution.data(), solution.size(),
+                                              0, solution_source, true);
+  }
+#endif
   if (static_cast<int>(solution.size()) != mipsolver_.model_->num_col_)
     return false;
 

@@ -31,16 +31,12 @@ pub mod op {
     pub const TG_TASK_WAIT: i32 = 108;
     pub const START_SYMMETRY_DETECTION: i32 = 109;
     pub const START_ANALYTIC_CENTER: i32 = 110;
-    pub const FINISH_ANALYTIC_CENTER: i32 = 111;
-    pub const FINISH_SYMMETRY_DETECTION: i32 = 112;
     /// getLp().setIterationLimit(i) (i < 0: no limit)
     pub const LP_SET_ITERATION_LIMIT: i32 = 113;
     pub const LP_LOAD_MODEL: i32 = 114;
     pub const DOM_CLEAR_CHANGED_COLS: i32 = 115;
     pub const LP_SET_OBJECTIVE_LIMIT: i32 = 116;
     pub const DOM_OBJECTIVE_LOWER_BOUND: i32 = 117;
-    /// queryExternalSolution(solution_objective_, origin i)
-    pub const QUERY_EXTERNAL_SOLUTION: i32 = 118;
     /// the root LP's basis or presolve setting before the first solve
     pub const LP_FIRST_SOLVE_SETUP: i32 = 119;
     pub const LP_SET_RACE_IPX: i32 = 120;
@@ -64,11 +60,8 @@ pub mod op {
     /// if the helper and the main solver search independently: sync, and
     /// the main solver's quick search is done
     pub const MAIN_QUICK_DONE: i32 = 132;
-    pub const PERFORM_RESTART: i32 = 133;
     pub const IMPORT_ROOT_CUTS: i32 = 134;
     pub const PUBLISH_ROOT_CUTS: i32 = 135;
-    /// the cut pool callback (if active)
-    pub const CALLBACK_GET_CUT_POOL: i32 = 136;
     /// the root node on the node queue
     pub const NODEQUEUE_ROOT: i32 = 137;
     /// the root separator: create, separationRound (status i, returns
@@ -171,10 +164,10 @@ fn cmax(a: f64, b: f64) -> f64 {
 }
 
 impl MipData {
-    fn o(&self, code: i32) -> f64 {
+    pub(super) fn o(&self, code: i32) -> f64 {
         self.op(code, None, 0, 0.0)
     }
-    fn oi(&self, code: i32, i: i64) -> f64 {
+    pub(super) fn oi(&self, code: i32, i: i64) -> f64 {
         self.op(code, None, i, 0.0)
     }
     fn ob(&self, code: i32) -> bool {
@@ -293,7 +286,7 @@ impl MipData {
             self.update_lower_bound_ex(cmax(lb, self.o(op::DOM_OBJECTIVE_LOWER_BOUND)), true, true);
             self.print_display_line(-1);
             if !self.submip {
-                self.oi(op::QUERY_EXTERNAL_SOLUTION, origin::EVALUATE_ROOT_NODE0);
+                self.query_external_solution(self.sol_objective(), origin::EVALUATE_ROOT_NODE0 as i32);
             }
             self.o(op::LP_FIRST_SOLVE_SETUP);
             // with a core to spare, IPX races the dual simplex on a large
@@ -373,7 +366,7 @@ impl MipData {
                     );
                     self.o(op::TG_TASK_WAIT);
                     self.start(clk::PERFORM_RESTART);
-                    self.o(op::PERFORM_RESTART);
+                    super::setup::perform_restart(self);
                     self.stop(clk::PERFORM_RESTART);
                     self.sc().num_restarts_root += 1;
                     if self.modelstatus() == status::NOTSET {
@@ -437,7 +430,7 @@ impl MipData {
                         return self.clock_off_done();
                     }
                     self.start(clk::ROOT_SEPARATION_FINISH_ANALYTIC_CENTRE);
-                    self.o(op::FINISH_ANALYTIC_CENTER);
+                    self.finish_analytic_center();
                     self.stop(clk::ROOT_SEPARATION_FINISH_ANALYTIC_CENTRE);
                     self.start(clk::ROOT_SEPARATION_CENTRAL_ROUNDING);
                     self.heur(w, heur::CENTRAL_ROUNDING);
@@ -494,7 +487,7 @@ impl MipData {
                     break;
                 }
                 if !self.submip {
-                    self.oi(op::QUERY_EXTERNAL_SOLUTION, origin::EVALUATE_ROOT_NODE1);
+                    self.query_external_solution(self.sol_objective(), origin::EVALUATE_ROOT_NODE1 as i32);
                 }
             }
             self.stop(clk::ROOT_SEPARATION);
@@ -523,7 +516,7 @@ impl MipData {
                     return self.clock_off_done();
                 }
                 self.start(clk::FINISH_ANALYTIC_CENTRE);
-                self.o(op::FINISH_ANALYTIC_CENTER);
+                self.finish_analytic_center();
                 self.stop(clk::FINISH_ANALYTIC_CENTRE);
                 self.start(clk::ROOT_CENTRAL_ROUNDING);
                 self.heur(w, heur::CENTRAL_ROUNDING);
@@ -553,10 +546,10 @@ impl MipData {
             }
             self.print_display_line(-1);
             if !self.submip {
-                self.oi(op::QUERY_EXTERNAL_SOLUTION, origin::EVALUATE_ROOT_NODE2);
+                self.query_external_solution(self.sol_objective(), origin::EVALUATE_ROOT_NODE2 as i32);
             }
             // possible cut extraction callback
-            self.o(op::CALLBACK_GET_CUT_POOL);
+            self.callback_get_cut_pool();
             if self.check_limits_rs(0) {
                 return self.clock_off_done();
             }
@@ -677,7 +670,7 @@ impl MipData {
                     nseparounds += 1;
                     self.print_display_line(-1);
                     if !self.submip {
-                        self.oi(op::QUERY_EXTERNAL_SOLUTION, origin::EVALUATE_ROOT_NODE3);
+                        self.query_external_solution(self.sol_objective(), origin::EVALUATE_ROOT_NODE3 as i32);
                     }
                 }
                 if self.sc().upper_limit != INF || self.submip {
@@ -729,7 +722,7 @@ impl MipData {
                 self.print_display_line(-1);
             }
             if !self.submip {
-                self.oi(op::QUERY_EXTERNAL_SOLUTION, origin::EVALUATE_ROOT_NODE4);
+                self.query_external_solution(self.sol_objective(), origin::EVALUATE_ROOT_NODE4 as i32);
             }
             self.remove_fixed_indices();
             if self.ob(op::LP_SOLVER_BASIS_VALID) {
@@ -742,7 +735,7 @@ impl MipData {
                 if !self.submip && o.mip_allow_restart && !o.presolve_off {
                     if !self.sc().analytic_center_computed && compute_analytic_centre {
                         self.start(clk::FINISH_ANALYTIC_CENTRE);
-                        self.o(op::FINISH_ANALYTIC_CENTER);
+                        self.finish_analytic_center();
                         self.stop(clk::FINISH_ANALYTIC_CENTRE);
                     }
                     let fixing_rate = self.percentage_inactive_integers();
@@ -760,7 +753,7 @@ impl MipData {
                         }
                         self.o(op::TG_TASK_WAIT);
                         self.start(clk::PERFORM_RESTART);
-                        self.o(op::PERFORM_RESTART);
+                        super::setup::perform_restart(self);
                         self.stop(clk::PERFORM_RESTART);
                         if self.ob(op::TERMINATE) {
                             return false;
@@ -777,7 +770,7 @@ impl MipData {
                     }
                 }
                 if self.sc().detect_symmetries {
-                    self.o(op::FINISH_SYMMETRY_DETECTION);
+                    self.finish_symmetry_detection();
                     status = self.eval_root_lp_timed(w);
                     if status == lp_status::INFEASIBLE {
                         return self.clock_off_done();

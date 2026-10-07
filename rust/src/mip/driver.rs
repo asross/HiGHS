@@ -21,14 +21,8 @@ const IINF: i32 = i32::MAX;
 /// The operations of the driver (CMipFns::op codes from 200; `i` is mostly
 /// a worker index)
 pub mod op {
-    /// mipdata_->init()
-    pub const INIT: i32 = 200;
-    /// mipdata_->runMipPresolve(presolve_reduction_limit)
-    pub const RUN_MIP_PRESOLVE: i32 = 201;
     /// log "Presolve: <model status>"
     pub const LOG_PRESOLVE_STATUS: i32 = 202;
-    /// mipdata_->runSetup()
-    pub const RUN_SETUP: i32 = 203;
     /// the master worker
     pub const MASTER_WORKER_NEW: i32 = 204;
     /// mipdata_->feasibilityJump() (the model status)
@@ -48,16 +42,11 @@ pub mod op {
     pub const CREATE_NEW_WORKERS: i32 = 212;
     /// constructAdditionalWorkerData(master worker)
     pub const CONSTRUCT_ADDITIONAL_WORKER_DATA: i32 = 213;
-    /// syncSolutions
-    pub const SYNC_SOLUTIONS: i32 = 214;
-    /// syncPools and syncGlobalDomain of the search indices
+    /// syncPools of the search indices
     pub const SYNC_POOLS: i32 = 215;
-    pub const SYNC_GLOBAL_DOMAIN: i32 = 216;
-    /// the start of resetGlobalDomain (cleanupFixed and the workers'
-    /// domains if i != 0), its middle (cleanupVarbounds of the changed
+    /// the middle of resetGlobalDomain (cleanupVarbounds of the changed
     /// columns, the empty domain change stack, the local domain if there is
     /// one worker) and its end (clearChangedCols)
-    pub const RESET_GLOBAL_DOMAIN_START: i32 = 217;
     pub const RESET_GLOBAL_DOMAIN_MIDDLE: i32 = 218;
     pub const RESET_GLOBAL_DOMAIN_END: i32 = 219;
     /// syncGlobalPseudoCost, resetWorkerPseudoCosts
@@ -73,8 +62,6 @@ pub mod op {
     pub const SEARCH_NLEAVES: i32 = 225;
     pub const SEARCH_TREEWEIGHT: i32 = 226;
     pub const SEARCH_HAS_NODE: i32 = 227;
-    /// mipdata_->performRestart()
-    pub const PERFORM_RESTART: i32 = 228;
     /// worker i allows heuristics (x != 0)
     pub const SET_ALLOW_HEURISTICS: i32 = 229;
     /// install the best bound node (x = 0) or the best node (x = 1) on
@@ -366,7 +353,7 @@ impl MipData {
             self.dstart(clk::UPDATE_LOCAL_DOMAIN);
             crate::log_dev!(self.log, LogType::Info, "added %d global bound changes\n", gd.num_changed_cols());
             let multiple = self.d(op::NUM_WORKERS, 0, 0.0) > 1.0;
-            self.d(op::RESET_GLOBAL_DOMAIN_START, (multiple && reset_workers) as i64, num_workers as f64);
+            self.reset_worker_domains(multiple && reset_workers, num_workers);
             self.d(op::RESET_GLOBAL_DOMAIN_MIDDLE, multiple as i64, 0.0);
             self.d(op::RESET_GLOBAL_DOMAIN_END, 0, 0.0);
             self.remove_fixed_indices();
@@ -400,10 +387,10 @@ pub unsafe fn run(m: *mut MipData) {
     let md = &*m;
     md.dstart(clk::PRESOLVE_TIME);
     md.dstart(clk::INIT);
-    md.d(op::INIT, 0, 0.0);
+    md.init_rs();
     md.dstop(clk::INIT);
     md.dstart(clk::RUN_PRESOLVE);
-    md.d(op::RUN_MIP_PRESOLVE, 0, 0.0);
+    md.run_mip_presolve(md.opts.presolve_reduction_limit);
     glue::refill(m);
     let md = &*m;
     md.dstop(clk::RUN_PRESOLVE);
@@ -419,7 +406,7 @@ pub unsafe fn run(m: *mut MipData) {
             md.sc().lower_bound = 0.0;
             md.sc().upper_bound = 0.0;
             md.transform_new_integer_feasible_solution(&[], true);
-            md.op(mop::SAVE_REPORT_SOLUTION, None, 0, -INF);
+            md.save_report_mip_solution(-INF);
         }
         cleanup_solve(md);
         return;
@@ -427,7 +414,7 @@ pub unsafe fn run(m: *mut MipData) {
     md.dstart(clk::SOLVE_TIME);
     md.profiling_mip_log("starting  setup");
     md.dstart(clk::RUN_SETUP);
-    md.d(op::RUN_SETUP, 0, 0.0);
+    md.run_setup();
     glue::refill(m);
     let md = &*m;
     md.dstop(clk::RUN_SETUP);
@@ -456,7 +443,7 @@ unsafe fn search(m: *mut MipData) {
             }
             // possibly query the existence of an external solution
             if !md.submip {
-                md.op(rop::QUERY_EXTERNAL_SOLUTION, None, 0, 0.0);
+                md.query_external_solution(md.sol_objective(), 0);
             }
             // the trivial heuristics
             md.dstart(clk::TRIVIAL_HEURISTICS);
@@ -552,7 +539,7 @@ unsafe fn search(m: *mut MipData) {
             }
             // possibly query the existence of an external solution
             if !md.submip {
-                md.op(rop::QUERY_EXTERNAL_SOLUTION, None, 1, 0.0);
+                md.query_external_solution(md.sol_objective(), 1);
             }
             // update the global pseudocost with the workers' information
             md.d(op::SYNC_GLOBAL_PSEUDOCOST, 0, 0.0);
@@ -646,7 +633,7 @@ unsafe fn search(m: *mut MipData) {
                 break;
             }
             md.update_lower_bound_ex(min2(sc.upper_bound, md.nodequeue().best_lower_bound()), true, true);
-            md.d(op::SYNC_SOLUTIONS, 0, 0.0);
+            md.sync_solutions();
             if md.check_limits_rs(0) {
                 md.print_display_line(src::NONE);
                 break;
@@ -655,7 +642,7 @@ unsafe fn search(m: *mut MipData) {
             // sync the global information
             md.dstart(clk::DOMAIN_PROPAGATE);
             md.op(op::SYNC_POOLS, None, search_indices.len() as i64, 0.0);
-            md.op(op::SYNC_GLOBAL_DOMAIN, None, search_indices.len() as i64, 0.0);
+            md.sync_global_domain(search_indices.len() as i32);
             md.domain().propagate();
             md.dstop(clk::DOMAIN_PROPAGATE);
 
@@ -698,7 +685,7 @@ unsafe fn search(m: *mut MipData) {
                 num_workers = new_max_num_workers;
             }
         }
-        md.d(op::SYNC_SOLUTIONS, 0, 0.0);
+        md.sync_solutions();
         md.dstop(clk::SEARCH);
         return cleanup_solve(md);
     }
@@ -721,7 +708,7 @@ fn check_worker_restart_votes(md: &MipData, run: &mut Run, votes: &[Vote]) -> bo
     }
     let perform_restart = |md: &MipData| {
         crate::log_user!(md.log, LogType::Info, "\nRestarting search from the root node\n");
-        md.d(op::PERFORM_RESTART, 0, 0.0);
+        super::setup::perform_restart(md);
         md.dstop(clk::SEARCH);
     };
     // force a restart if enough individual workers vote for it

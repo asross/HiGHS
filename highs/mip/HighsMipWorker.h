@@ -77,6 +77,10 @@ class HighsMipWorker {
   double optimality_limit;
 
   std::vector<std::tuple<std::vector<double>, double, int>> solutions_;
+#ifdef HIGHS_RUST
+  // transformNewIntegerFeasibleSolution's solution in the original space
+  HighsSolution rsScratch_;
+#endif
 
   HighsRandom randgen;
 
