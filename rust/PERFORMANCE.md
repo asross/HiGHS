@@ -10,6 +10,40 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, primal heuristics: feasibility jump, ziRound, shifting, graph LNS
+
+Feasibility jump in Rust (mip/feasjump.rs), ziRound and shifting
+(heuristics.rs), graph LNS neighbourhoods and scoring (lns.rs); see
+PORTING.md. M1, heavily loaded (load 25-60), so cycles are rough.
+
+Feasibility jump alone (cycles with FJ minus without, node limit 1, min of
+3): C++ / rust-port / this build.
+
+| Case | C++ | rust-port | this |
+|---|---|---|---|
+| neos17 | 2.19G | 2.14G | 1.42G |
+| dispatch 080458 | 2.22G | 2.37G | 1.70G |
+| gen-ip002 | 0.38G | 0.39G | 0.22G |
+| gen-ip054 | 0.20G | 0.17G | 0.13G |
+| markshare2 | 0.26G | 0.26G | 0.19G |
+| markshare_4_0 | 0.09G | 0.09G | 0.06G |
+
+Gains come from layout (CSR both ways; a variable's value, jump move and
+good-set slot in one struct, so updating a neighbour's move touches one
+cache line; no allocation per jump value) and from computing the scores of
+a constraint's old and new LHS once per constraint.
+
+Whole solves against the rust-port HIGHS_RUST build (2000 nodes, `cyc.py
+2`, all same path): geomean 0.951; gen-ip002 0.903, gen-ip054 0.882,
+markshare_4_0 0.902, markshare2 0.947, neos17 0.959, neos-911970 0.959,
+nu25-pr12 0.977, air05 0.999, dispatch 080458 0.987, 3c1b60d6 1.002.
+
+Against pure C++: `perf.py --reps 1` same path on all cases, MIP 0.869,
+all 0.834. gcc/libstdc++ pair (`gcc_builds.sh`, 300 nodes, 12 MIPLIB +
+dispatch 080458): same path, geomean 0.880; hard_10-03_1340 and 3c1b60d6
+LNS dev logs identical. x86_64 under Rosetta (2000 nodes, the cyc.py
+7-instance set): same path, geomean 0.911.
+
 ## 2026-10-06, gcc/libstdc++ builds on the M1 (4442630fe5 + HPresolve)
 
 Both builds with Homebrew gcc 14 and libstdc++ (`rust/bench/gcc_builds.sh`:
@@ -88,6 +122,33 @@ dispatch MILPs (arm64 and x86_64), full solves and 14 MIPLIB at a node
 limit. `perf.py --reps 1` against pure C++ (before the clique/implications
 merge): MIP 0.925, dual simplex 0.739, primal 0.947, IPX 0.928, PDLP
 0.961, readers 0.330, all 0.805, all same path.
+
+## 2026-10-06, branch-and-bound search in Rust (b61e4b4a5f, merged with rust-port)
+
+HighsSearch, the node queue, pseudocosts, reduced cost fixing, cut and
+conflict pools in Rust. `perf.py --reps 1` against pure C++ (M1, heavily
+loaded): same path on all 32 cases; geomean MIP 0.911, LP dual 0.823,
+primal 0.958, IPX 0.975, PDLP 0.952, readers 0.443, all 0.828.
+
+Against the rust-port HIGHS_RUST build (`cyc.py 2`): air05 0.998, neos17
+1.000, nu25-pr12 1.005, neos-911970 1.000, dispatch 080458 1.007 (geomean
+1.002), all same path. Instructions rise 0-2% (the search's calls into the
+C++ domain and LP relaxation through function pointers), cycles do not.
+Before the merge, against the then rust-port build: gen-ip002 0.910 (same
+path); markshare_4_0 is not deterministic even for one binary (its node
+count varies between runs of the same build), so it checks no path.
+
+MIPLIB at 100 nodes (`mip_max_nodes = 100`, 30 of 34 instances, against
+pure C++): all same path, geomean 0.95. The other four (eilA101-2,
+neos-5052403-cygnet, germanrr, co-100) spend their time limit at the root
+on the loaded machine, so the runs differ by where they stop; reruns
+without a time limit did not finish (still to check).
+x86_64 (Rosetta) against pure x86_64 C++: neos17 0.934, nu25-pr12 0.794,
+neos-911970 1.002, air05 1.017, dispatch 080458 1.017, gen-ip002 0.872
+(without the time limit, which the loaded machine hit), all same path.
+gcc 14 / libstdc++ pair (`rust/bench/gcc_builds.sh`): same path on neos17,
+nu25-pr12, neos-911970, air05, dispatch 080458, and at 100 nodes air04,
+assign1-5-8, qap10, physiciansched6-2, mzzv11, rd-rplusc-21, gen-ip054.
 
 ## 2026-10-06, clique table and implications in Rust (8572be192b)
 

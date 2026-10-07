@@ -13,8 +13,10 @@
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 
+#include "HConfig.h"
 #include "util/HighsInt.h"
 
 class HighsMipSolver;
@@ -66,6 +68,156 @@ struct HighsPseudocostDelta {
   double conflictscoredown_sum = 0.0;
 };
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct Pseudocost;
+// HighsPseudocostInitialization's arrays (rust/src/mip/pseudocost.rs)
+struct PscostInit {
+  double* pseudocostup;
+  double* pseudocostdown;
+  HighsInt* nsamplesup;
+  HighsInt* nsamplesdown;
+  double* inferencesup;
+  double* inferencesdown;
+  HighsInt* ninferencesup;
+  HighsInt* ninferencesdown;
+  double* conflictscoreup;
+  double* conflictscoredown;
+  HighsInt n;
+  double cost_total;
+  double inferences_total;
+  double conflict_avg_score;
+  int64_t nsamplestotal;
+  int64_t ninferencestotal;
+};
+extern "C" {
+Pseudocost* highs_rs_pscost_new(HighsInt ncol, HighsInt minreliable);
+void highs_rs_pscost_free(Pseudocost* p);
+Pseudocost* highs_rs_pscost_clone(const Pseudocost* p);
+void highs_rs_pscost_init(Pseudocost* p, const PscostInit* init,
+                          const HighsInt* orig);
+void highs_rs_pscost_export(const Pseudocost* p, HighsInt maxCount,
+                            const HighsInt* orig, PscostInit* init);
+HighsInt highs_rs_pscost_geti(const Pseudocost* p, int which, HighsInt col);
+double highs_rs_pscost_getd(const Pseudocost* p, int which, HighsInt col,
+                            double x);
+double highs_rs_pscost_offset(const Pseudocost* p, HighsInt col, double frac,
+                              double offset, bool up);
+double highs_rs_pscost_score(const Pseudocost* p, HighsInt col, double up,
+                             double down);
+void highs_rs_pscost_set(Pseudocost* p, int which, HighsInt col, HighsInt i,
+                         double x);
+void highs_rs_pscost_add_observation(Pseudocost* p, HighsInt col, double delta,
+                                     double objdelta);
+void highs_rs_pscost_flush(Pseudocost* p, Pseudocost* other, bool sync);
+}
+}  // namespace highs_rs
+
+// The pseudocosts are Rust's (rust/src/mip/pseudocost.rs); this class is a
+// handle
+class HighsPseudocost {
+  friend struct HighsPseudocostInitialization;
+  highs_rs::Pseudocost* rs_ = nullptr;
+
+  using Rs = highs_rs::Pseudocost;
+  void set(int which, HighsInt col = 0, HighsInt i = 0, double x = 0) {
+    highs_rs::highs_rs_pscost_set(rs_, which, col, i, x);
+  }
+  double getd(int which, HighsInt col = 0, double x = 0) const {
+    return highs_rs::highs_rs_pscost_getd(rs_, which, col, x);
+  }
+  HighsInt geti(int which, HighsInt col = 0) const {
+    return highs_rs::highs_rs_pscost_geti(rs_, which, col);
+  }
+
+ public:
+  HighsPseudocost() = default;
+  HighsPseudocost(const HighsMipSolver& mipsolver);
+  HighsPseudocost(const HighsPseudocost& other)
+      : rs_(highs_rs::highs_rs_pscost_clone(other.rs_)) {}
+  HighsPseudocost(HighsPseudocost&& other) : rs_(other.rs_) {
+    other.rs_ = nullptr;
+  }
+  HighsPseudocost& operator=(const HighsPseudocost& other) {
+    if (this != &other) {
+      highs_rs::highs_rs_pscost_free(rs_);
+      rs_ = highs_rs::highs_rs_pscost_clone(other.rs_);
+    }
+    return *this;
+  }
+  HighsPseudocost& operator=(HighsPseudocost&& other) {
+    std::swap(rs_, other.rs_);
+    return *this;
+  }
+  ~HighsPseudocost() { highs_rs::highs_rs_pscost_free(rs_); }
+
+  Rs* rust() const { return rs_; }
+
+  void increaseConflictWeight() { set(2); }
+  void setDegeneracyFactor(double degeneracyFactor) {
+    assert(degeneracyFactor >= 1.0);
+    set(1, 0, 0, degeneracyFactor);
+  }
+  void increaseConflictScoreUp(HighsInt col) { set(3, col); }
+  void increaseConflictScoreDown(HighsInt col) { set(4, col); }
+  void setMinReliable(HighsInt minreliable) { set(0, 0, minreliable); }
+  HighsInt getMinReliable() const { return geti(0); }
+  HighsInt getNumObservations(HighsInt col) const {
+    return geti(1, col) + geti(2, col);
+  }
+  HighsInt getNumObservationsUp(HighsInt col) const { return geti(1, col); }
+  HighsInt getNumObservationsDown(HighsInt col) const { return geti(2, col); }
+  void addCutoffObservation(HighsInt col, bool upbranch) {
+    set(5, col, upbranch);
+  }
+  void addObservation(HighsInt col, double delta, double objdelta) {
+    highs_rs::highs_rs_pscost_add_observation(rs_, col, delta, objdelta);
+  }
+  void addInferenceObservation(HighsInt col, HighsInt ninferences,
+                               bool upbranch) {
+    set(6, col, ninferences, upbranch ? 1.0 : 0.0);
+  }
+  bool isReliable(HighsInt col) const { return geti(3, col) != 0; }
+  bool isReliableUp(HighsInt col) const { return geti(4, col) != 0; }
+  bool isReliableDown(HighsInt col) const { return geti(5, col) != 0; }
+  double getAvgPseudocost() const { return getd(0); }
+  double getPseudocostUp(HighsInt col, double frac, double offset) const {
+    return highs_rs::highs_rs_pscost_offset(rs_, col, frac, offset, true);
+  }
+  double getPseudocostDown(HighsInt col, double frac, double offset) const {
+    return highs_rs::highs_rs_pscost_offset(rs_, col, frac, offset, false);
+  }
+  double getPseudocostUp(HighsInt col, double frac) const {
+    return getd(1, col, frac);
+  }
+  double getPseudocostDown(HighsInt col, double frac) const {
+    return getd(2, col, frac);
+  }
+  double getConflictScoreUp(HighsInt col) const { return getd(3, col); }
+  double getConflictScoreDown(HighsInt col) const { return getd(4, col); }
+  double getScore(HighsInt col, double upcost, double downcost) const {
+    return highs_rs::highs_rs_pscost_score(rs_, col, upcost, downcost);
+  }
+  double getScore(HighsInt col, double frac) const {
+    return getd(5, col, frac);
+  }
+  double getScoreUp(HighsInt col, double frac) const {
+    return getd(6, col, frac);
+  }
+  double getScoreDown(HighsInt col, double frac) const {
+    return getd(7, col, frac);
+  }
+  double getAvgInferencesUp(HighsInt col) const { return getd(8, col); }
+  double getAvgInferencesDown(HighsInt col) const { return getd(9, col); }
+  void flushPseudoCost(HighsPseudocost& pseudocost) {
+    highs_rs::highs_rs_pscost_flush(rs_, pseudocost.rs_, false);
+  }
+  void syncPseudoCost(HighsPseudocost& pseudocost) {
+    highs_rs::highs_rs_pscost_flush(rs_, pseudocost.rs_, true);
+  }
+  void removeChanged() { set(7); }
+};
+#else
 class HighsPseudocost {
   friend struct HighsPseudocostInitialization;
   std::vector<double> pseudocostup;
@@ -503,5 +655,7 @@ class HighsPseudocost {
     delta_ninferencestotal = 0;
   }
 };
+
+#endif  // HIGHS_RUST
 
 #endif

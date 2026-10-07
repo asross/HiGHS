@@ -17,6 +17,7 @@
 #include <set>
 #include <vector>
 
+#include "HConfig.h"
 #include "lp_data/HConst.h"
 #include "mip/HighsDomainChange.h"
 #include "util/HighsCDouble.h"
@@ -25,6 +26,167 @@
 class HighsDomain;
 class HighsLpRelaxation;
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct NodeQueue;
+struct PoppedNode {
+  const HighsDomainChange* domchgstack;
+  HighsInt num_domchgs;
+  const HighsInt* branchings;
+  HighsInt num_branchings;
+  double lower_bound;
+  double estimate;
+  HighsInt depth;
+};
+extern "C" {
+NodeQueue* highs_rs_nodequeue_new();
+void highs_rs_nodequeue_free(NodeQueue* q);
+void highs_rs_nodequeue_set(NodeQueue* q, int which, HighsInt i, double x);
+int64_t highs_rs_nodequeue_count(const NodeQueue* q, int which, HighsInt col,
+                                 double x);
+double highs_rs_nodequeue_bound(NodeQueue* q, int which, int64_t i, double x);
+double highs_rs_nodequeue_emplace(NodeQueue* q,
+                                  const HighsDomainChange* domchgs,
+                                  HighsInt ndomchgs, const HighsInt* branchings,
+                                  HighsInt nbranchings, double lower_bound,
+                                  double estimate, HighsInt depth);
+void highs_rs_nodequeue_pop(NodeQueue* q, bool bestBound, PoppedNode* out);
+void highs_rs_nodequeue_check_global_bounds(NodeQueue* q,
+                                            const double* colLower,
+                                            const double* colUpper,
+                                            double feastol,
+                                            HighsCDouble* treeweight);
+void highs_rs_nodequeue_check_global_bound(NodeQueue* q, HighsInt col,
+                                           double lb, double ub,
+                                           double feastol,
+                                           HighsCDouble* treeweight);
+void highs_rs_nodequeue_prune_edge(NodeQueue* q, HighsInt col1,
+                                   HighsInt val1, HighsInt col2, HighsInt val2,
+                                   HighsCDouble* treeweight);
+bool highs_rs_nodequeue_common_bound(const NodeQueue* q, HighsInt col,
+                                     bool lower, double* val);
+}
+}  // namespace highs_rs
+
+// The node queue is Rust's (rust/src/mip/nodequeue.rs); this class is a
+// handle
+class HighsNodeQueue {
+  highs_rs::NodeQueue* rs_;
+
+  int64_t count(int which, HighsInt col = 0, double x = 0) const {
+    return highs_rs::highs_rs_nodequeue_count(rs_, which, col, x);
+  }
+
+ public:
+  struct OpenNode {
+    std::vector<HighsDomainChange> domchgstack;
+    std::vector<HighsInt> branchings;
+    double lower_bound;
+    double estimate;
+    HighsInt depth;
+
+    OpenNode()
+        : domchgstack(),
+          branchings(),
+          lower_bound(-kHighsInf),
+          estimate(-kHighsInf),
+          depth(0) {}
+
+    OpenNode(std::vector<HighsDomainChange>&& domchgstack,
+             std::vector<HighsInt>&& branchings, double lower_bound,
+             double estimate, HighsInt depth)
+        : domchgstack(std::move(domchgstack)),
+          branchings(std::move(branchings)),
+          lower_bound(lower_bound),
+          estimate(estimate),
+          depth(depth) {}
+
+    OpenNode& operator=(OpenNode&& other) = default;
+    OpenNode(OpenNode&&) = default;
+
+    OpenNode& operator=(const OpenNode& other) = delete;
+    OpenNode(const OpenNode&) = delete;
+  };
+
+ private:
+  OpenNode pop(bool bestBound);
+
+ public:
+  HighsNodeQueue() : rs_(highs_rs::highs_rs_nodequeue_new()) {}
+  HighsNodeQueue(const HighsNodeQueue&) = delete;
+  HighsNodeQueue& operator=(const HighsNodeQueue&) = delete;
+  HighsNodeQueue(HighsNodeQueue&& other) : rs_(other.rs_) {
+    other.rs_ = nullptr;
+  }
+  HighsNodeQueue& operator=(HighsNodeQueue&& other) {
+    std::swap(rs_, other.rs_);
+    return *this;
+  }
+  ~HighsNodeQueue() { highs_rs::highs_rs_nodequeue_free(rs_); }
+
+  highs_rs::NodeQueue* rust() const { return rs_; }
+
+  void checkGlobalBounds(HighsInt col, double lb, double ub, double feastol,
+                         HighsCDouble& treeweight) {
+    highs_rs::highs_rs_nodequeue_check_global_bound(rs_, col, lb, ub, feastol,
+                                          &treeweight);
+  }
+
+  void setOptimalityLimit(double optimality_limit) {
+    highs_rs::highs_rs_nodequeue_set(rs_, 0, 0, optimality_limit);
+  }
+
+  double performBounding(double upper_limit) {
+    return highs_rs::highs_rs_nodequeue_bound(rs_, 1, 0, upper_limit);
+  }
+
+  void setNumCol(HighsInt numcol) { highs_rs::highs_rs_nodequeue_set(rs_, 1, numcol, 0); }
+
+  double emplaceNode(std::vector<HighsDomainChange>&& domchgs,
+                     std::vector<HighsInt>&& branchings, double lower_bound,
+                     double estimate, HighsInt depth) {
+    return highs_rs::highs_rs_nodequeue_emplace(rs_, domchgs.data(), domchgs.size(),
+                                      branchings.data(), branchings.size(),
+                                      lower_bound, estimate, depth);
+  }
+
+  OpenNode popBestNode();
+
+  OpenNode popBestBoundNode();
+
+  int64_t numNodesUp(HighsInt col) const { return count(2, col); }
+
+  int64_t numNodesDown(HighsInt col) const { return count(3, col); }
+
+  int64_t numNodesUp(HighsInt col, double val) const {
+    return count(4, col, val);
+  }
+
+  int64_t numNodesDown(HighsInt col, double val) const {
+    return count(5, col, val);
+  }
+
+  double pruneInfeasibleNodes(HighsDomain& globaldomain, double feastol);
+
+  double pruneNode(int64_t nodeId) {
+    return highs_rs::highs_rs_nodequeue_bound(rs_, 2, nodeId, 0);
+  }
+
+  double getBestLowerBound() const {
+    return highs_rs::highs_rs_nodequeue_bound(rs_, 0, 0, 0);
+  }
+
+  HighsInt getBestBoundDomchgStackSize() const { return count(6); }
+
+  void clear() { highs_rs::highs_rs_nodequeue_set(rs_, 2, 0, 0); }
+
+  int64_t numNodes() const { return count(0); }
+
+  int64_t numActiveNodes() const { return count(1); }
+
+  bool empty() const { return numActiveNodes() == 0; }
+};
+#else
 class HighsNodeQueue {
  public:
   template <int S>
@@ -308,5 +470,6 @@ bool operator!=(const HighsNodeQueue::NodesetAllocator<T>&,
                 const HighsNodeQueue::NodesetAllocator<U>&) {
   return false;
 }
+#endif  // HIGHS_RUST
 
 #endif
