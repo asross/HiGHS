@@ -346,7 +346,7 @@ impl Search {
 
     /// The start of a call from C++: the pseudocosts, the global node queue
     /// and the model data
-    fn enter(&mut self, ps: *mut Pseudocost, nq: *const NodeQueue) {
+    pub(crate) fn enter(&mut self, ps: *mut Pseudocost, nq: *const NodeQueue) {
         self.ps = ps;
         self.queue = nq;
         let mut m = CModel {

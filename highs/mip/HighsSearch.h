@@ -119,6 +119,8 @@ class HighsSearch {
   HighsSearch(const HighsSearch&) = delete;
   HighsSearch& operator=(const HighsSearch&) = delete;
 
+  highs_rs::Search* rust() const { return rs_; }
+
   void setRINSNeighbourhood(const std::vector<double>& basesol,
                             const std::vector<double>& relaxsol);
 

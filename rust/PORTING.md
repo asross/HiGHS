@@ -395,20 +395,84 @@ and draws from the C++ HighsRandom in place. Its std::unordered_map of
 shifts is only looked up, never iterated, so it needs no libstdc++
 variant.
 
-Graph LNS (HighsGraphLns.cpp): the decision columns, the neighbourhoods
-(seed choice from the flip promise, disagreement with the LP, or random,
-and the breadth-first search, with the short-row variant), the promise
-update from the reduced costs, the move type bandit (UCB, `base + 0.5 *
-sqrt(...)` fused) and the flip candidates and partners (byGain is a total
-order on distinct columns, so any sort reproduces pdqsort's) are in Rust
-(mip/lns.rs, an `Lns` handle per graphLNS call). Still C++: the dives, the
-neighbourhood branch and bound, the flip search's moves and propagation
-screen, the LP re-solves and the sub-MIPs, and all of RENS, RINS,
-rootReducedCost, randomizedRounding, centralRounding / linesearchRounding,
-tryRoundedPoint, the feasibility pump, crossover and solveSubMip: these are
-sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls (the
-first is being ported separately), with no arithmetic of their own worth
-moving across the FFI.
+Graph LNS (HighsGraphLns.cpp) runs in Rust: the decision columns, the
+neighbourhoods (seed choice from the flip promise, disagreement with the
+LP, or random, and the breadth-first search, with the short-row variant),
+the promise update from the reduced costs, the move type bandit (UCB,
+`base + 0.5 * sqrt(...)` fused) and the flip candidates and partners
+(byGain is a total order on distinct columns, so any sort reproduces
+pdqsort's) are mip/lns.rs; the root dive, the neighbourhood loop with its
+dives and depth-first branch and bound, the flip search with its
+propagation screen and the LP re-solves are mip/graph_lns.rs.
+
+The rest of HighsPrimalHeuristics is Rust too (mip/primal.rs): the state
+(integer columns in rounding order, decision columns, LNS move statistics,
+fixing-rate observations, the generator) and RENS, RINS, rootReducedCost,
+randomized, central and line-search rounding, tryRoundedPoint, the
+feasibility pump, crossover and solveSubMip's gaps and statistics; the C++
+class is a handle whose methods forward (HighsPrimalHeuristics.cpp, the
+original under `#ifndef HIGHS_RUST`). The heuristics drive the Rust search
+directly (the C++ HighsSearch is only created, with its own pseudocost
+copy, and holds the local domain), and reach the C++ objects through
+mip/glue.rs: one C++ function per operation on a HighsDomain (copy,
+assign, changeBound, fixCol, propagate, backtrack, conflict analysis, the
+stack), a HighsLpRelaxation (copy or fresh, bounds, costs, options, the
+root basis, resolveLp, the solution, putIterate/getIterate, the dual
+infeasibility proof with its conflict), the worker and the solver, plus
+`op`, a table of scalar operations. The bounds of a domain are read
+through raw pointers (`Bnd`), since C++ changes them under Rust. The
+sub-MIP itself (options, the HighsMipSolver, its profiling) stays C++
+(`sub_mip`). Points are copied at the entry, so a C++ vector passed by
+reference never aliases a Rust slice across a call that changes it.
+Details that matter for the path: `changeBound`'s default reason is a
+branching (rootReducedCost), `HighsIntegers::nearestInteger` returns an
+int64, `1.0 - (1.0 - x) * 0.9`, `(1 - a) * p1 + a * p2`,
+`1000 + avg * 5` and `0.7 * rate + 0.3 * c / e` are fused, and RINS does
+not propagate after its fractional fixings (RENS does). Under the parallel
+lock several workers run RENS, RINS and randomized rounding on the one
+Rust object; they then only read it (UnsafeCell for the serial-only
+mutations).
+
+## The MIP driver (HighsMipSolver, HighsMipSolverData)
+
+The scalars of HighsMipSolverData are one struct (HighsMipScalars, same
+layout as glue.rs `MipScalars`, size checked on both sides); the old
+fields are references into it, so the rest of the solver reads them
+unchanged. Rust gets them in place with pointers to the solver's vectors
+and model (`MipData`, filled per call by `mipData()`, refetched after a
+restart or presolve since the model changes).
+
+In Rust (mip/mip_data.rs, root.rs, driver.rs): limitsToGap,
+computeNewUpperLimit, limitsToBounds, updateLowerBound, the primal-dual
+integral, checkLimits, moreHeuristicsAllowed, percentageInactiveIntegers,
+removeFixedIndices, printDisplayLine with its key and number formats,
+checkSolution, trySolution, solutionRowFeasible, the trivial heuristics,
+addIncumbent, transformNewIntegerFeasibleSolution (the repair LP and the
+postsolve stay C++ on a scratch HighsSolution), evaluateRootLp,
+rootSeparationRound, evaluateRootNode (with its restarts: one pass per
+model), HighsMipSolver::run (the presolve and setup calls, the pre-root
+heuristics, the root, the branch-and-bound loop: node selection, plunging,
+the dives and their heuristics, the restart votes, the ramp-up of the
+workers, the tree graph-LNS rounds) and cleanupSolve with the solving
+report (model status strings, getGapString, highsDoubleToString).
+processNode runs as a task of the C++ HighsMipSolver::runTask
+(`run_process_nodes`), so the parallel search and the concurrent LNS
+helper (a std::thread started in C++) keep their threading model. clang
+fuses `scale * ub - 0.5`, `rel * |ub + offset| * scale - eps`,
+`abs * scale - eps`, `ub - rel * |ub + offset|`, `pdi += dt * gap`,
+`total * effort + 10000`, `lb * scale - feastol` (the integral dual
+bound), the row activities of checkSolution and trySolution, and the
+separation's `scale * cur - avg` and `(1 - a) * s + a * p`;
+`std::pow(1.5, n)` is libm's pow (not powi).
+
+Still C++ (behind `CMipFns::op`, codes in mip_data.rs, root.rs and
+driver.rs): init, runMipPresolve, runSetup, performRestart,
+basisTransfer, the analytic centre and symmetry detection tasks, the
+concurrent helper (start, sync, crossover, root cut exchange), the user
+callbacks and external solutions, saveReportMipSolution, the workers'
+construction and synchronization (pools, global domains, pseudocosts,
+solutions), the per-worker search steps (each a call into the Rust
+search), the profiling clocks and HighsDebugSol (not supported).
 
 ## The top level (lp_data)
 

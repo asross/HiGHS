@@ -186,6 +186,10 @@ class HighsMipWorker {
       HighsInt& max_submip_level, HighsModelStatus& termination_status) const;
 
   void resetHeurStats();
+
+  // the heuristic statistics in place (HighsMipRust.h MipHeurStats)
+  void* heurStatsData() { return &heur_stats; }
+  static constexpr size_t kHeurStatsSize = sizeof(HeurStatistics);
 };
 
 #endif

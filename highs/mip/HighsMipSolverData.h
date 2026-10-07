@@ -115,6 +115,63 @@ struct HighsPrimaDualIntegral {
   void initialise();
 };
 
+// The scalars of HighsMipSolverData in one block (same layout as
+// MipScalars in rust/src/mip/glue.rs), which the Rust port of the solver
+// reads and writes in place; HighsMipSolverData keeps references to them
+// under their old names
+struct HighsMipScalars {
+  double feastol = 0.0;
+  double epsilon = 0.0;
+  double heuristic_effort = 0.0;
+  int64_t dispfreq = 0;
+  double firstlpsolobj = -kHighsInf;
+  double rootlpsolobj = -kHighsInf;
+  HighsInt numintegercols = 0;
+  HighsInt maxTreeSizeLog2 = 0;
+  HighsCDouble pruned_treeweight = 0;
+  double avgrootlpiters = 0.0;
+  double disptime = 0.0;
+  double last_disptime = 0.0;
+  int64_t firstrootlpiters = 0;
+  int64_t num_nodes = 0;
+  int64_t num_leaves = 0;
+  int64_t num_leaves_before_run = 0;
+  int64_t num_nodes_before_run = 0;
+  int64_t total_repair_lp = 0;
+  int64_t total_repair_lp_feasible = 0;
+  int64_t total_repair_lp_iterations = 0;
+  int64_t total_lp_iterations = 0;
+  int64_t heuristic_lp_iterations = 0;
+  int64_t sepa_lp_iterations = 0;
+  int64_t sb_lp_iterations = 0;
+  int64_t total_lp_iterations_before_run = 0;
+  int64_t heuristic_lp_iterations_before_run = 0;
+  int64_t sepa_lp_iterations_before_run = 0;
+  int64_t sb_lp_iterations_before_run = 0;
+  int64_t num_disp_lines = 0;
+  HighsInt numImprovingSols = 0;
+  double lower_bound = -kHighsInf;
+  double upper_bound = kHighsInf;
+  double upper_limit = kHighsInf;
+  double optimality_limit = kHighsInf;
+  HighsInt numRestarts = 0;
+  HighsInt numRestartsRoot = 0;
+  HighsInt numCliqueEntriesAfterPresolve = 0;
+  HighsInt numCliqueEntriesAfterFirstPresolve = 0;
+  int64_t lns_tree_next = -1;
+  int64_t lns_tree_wait = 0;
+  int64_t lns_quick_lp_iterations = 0;
+  int64_t concurrent_lns_seen = 0;
+  HighsPrimaDualIntegral primal_dual_integral;
+  bool cliquesExtracted = false;
+  bool rowMatrixSet = false;
+  bool analyticCenterComputed = false;
+  bool detectSymmetries = false;
+  bool lns_quick_improved = false;
+  bool crossoverStartLogged = false;
+  bool rootCutsImported = false;
+};
+
 enum MipSolutionSource : int {
   kSolutionSourceNone = -1,
   kSolutionSourceMin = kSolutionSourceNone,
@@ -145,6 +202,7 @@ enum MipSolutionSource : int {
 
 struct HighsMipSolverData {
   HighsMipSolver& mipsolver;
+  HighsMipScalars sc_;
 
   std::deque<HighsLpRelaxation> lps;
   std::deque<HighsCutPool> cutpools;
@@ -162,18 +220,18 @@ struct HighsMipSolverData {
   presolve::HighsPostsolveStack postSolveStack;
   HighsPresolveStatus presolve_status;
   HighsLp presolvedModel;
-  bool cliquesExtracted;
-  bool rowMatrixSet;
-  bool analyticCenterComputed;
+  bool& cliquesExtracted;
+  bool& rowMatrixSet;
+  bool& analyticCenterComputed;
   HighsModelStatus analyticCenterStatus;
   // set when graph LNS suits the model, which then has no use for the
   // analytic centre: a computation not started yet is skipped
   std::atomic<bool> skipAnalyticCenter{false};
-  bool detectSymmetries;
-  HighsInt numRestarts;
-  HighsInt numRestartsRoot;
-  HighsInt numCliqueEntriesAfterPresolve;
-  HighsInt numCliqueEntriesAfterFirstPresolve;
+  bool& detectSymmetries;
+  HighsInt& numRestarts;
+  HighsInt& numRestartsRoot;
+  HighsInt& numCliqueEntriesAfterPresolve;
+  HighsInt& numCliqueEntriesAfterFirstPresolve;
 
   std::vector<HighsInt> ARstart_;
   std::vector<HighsInt> ARindex_;
@@ -190,53 +248,57 @@ struct HighsMipSolverData {
   HighsSymmetries symmetries;
   std::shared_ptr<const StabilizerOrbits> globalOrbits;
 
-  double feastol;
-  double epsilon;
-  double heuristic_effort;
-  int64_t dispfreq;
+  double& feastol;
+  double& epsilon;
+  double& heuristic_effort;
+  int64_t& dispfreq;
   std::vector<double> analyticCenter;
   std::vector<double> firstlpsol;
   std::vector<double> rootlpsol;
-  double firstlpsolobj;
+  double& firstlpsolobj;
   HighsBasis firstrootbasis;
-  double rootlpsolobj;
-  HighsInt numintegercols;
-  HighsInt maxTreeSizeLog2;
+  double& rootlpsolobj;
+  HighsInt& numintegercols;
+  HighsInt& maxTreeSizeLog2;
 
-  HighsCDouble pruned_treeweight;
-  double avgrootlpiters;
-  double disptime;
-  double last_disptime;
-  int64_t firstrootlpiters;
-  int64_t num_nodes;
-  int64_t num_leaves;
-  int64_t num_leaves_before_run;
-  int64_t num_nodes_before_run;
-  int64_t total_repair_lp;
-  int64_t total_repair_lp_feasible;
-  int64_t total_repair_lp_iterations;
-  int64_t total_lp_iterations;
-  int64_t heuristic_lp_iterations;
-  int64_t sepa_lp_iterations;
-  int64_t sb_lp_iterations;
-  int64_t total_lp_iterations_before_run;
-  int64_t heuristic_lp_iterations_before_run;
-  int64_t sepa_lp_iterations_before_run;
-  int64_t sb_lp_iterations_before_run;
-  int64_t num_disp_lines;
+  HighsCDouble& pruned_treeweight;
+  double& avgrootlpiters;
+  double& disptime;
+  double& last_disptime;
+  int64_t& firstrootlpiters;
+  int64_t& num_nodes;
+  int64_t& num_leaves;
+  int64_t& num_leaves_before_run;
+  int64_t& num_nodes_before_run;
+  int64_t& total_repair_lp;
+  int64_t& total_repair_lp_feasible;
+  int64_t& total_repair_lp_iterations;
+  int64_t& total_lp_iterations;
+  int64_t& heuristic_lp_iterations;
+  int64_t& sepa_lp_iterations;
+  int64_t& sb_lp_iterations;
+  int64_t& total_lp_iterations_before_run;
+  int64_t& heuristic_lp_iterations_before_run;
+  int64_t& sepa_lp_iterations_before_run;
+  int64_t& sb_lp_iterations_before_run;
+  int64_t& num_disp_lines;
 
-  HighsInt numImprovingSols;
-  double lower_bound;
-  double upper_bound;
-  double upper_limit;
-  double optimality_limit;
+  HighsInt& numImprovingSols;
+  double& lower_bound;
+  double& upper_bound;
+  double& upper_limit;
+  double& optimality_limit;
   std::vector<double> incumbent;
 
   HighsNodeQueue nodequeue;
 
-  HighsPrimaDualIntegral primal_dual_integral;
+  HighsPrimaDualIntegral& primal_dual_integral;
 
   HighsDebugSol debugSolution;
+#ifdef HIGHS_RUST
+  // transformNewIntegerFeasibleSolution's solution in the original space
+  HighsSolution rsScratch_;
+#endif
 
   HighsMipSolverData(HighsMipSolver& mipsolver);
   ~HighsMipSolverData() { stopConcurrentLns(); }
@@ -246,17 +308,17 @@ struct HighsMipSolverData {
   // Graph LNS rounds during the tree search: the next one once the total
   // LP iterations reach lns_tree_next (-1: none), after a wait of
   // lns_tree_wait iterations of tree search
-  int64_t lns_tree_next = -1;
-  int64_t lns_tree_wait = 0;
+  int64_t& lns_tree_next;
+  int64_t& lns_tree_wait;
   // whether the quick graph-LNS search improved the incumbent (kept over
   // restarts): if not, the neighbourhood search does not suit the model
-  bool lns_quick_improved = false;
+  bool& lns_quick_improved;
   // the LP iterations of the quick graph-LNS search
-  int64_t lns_quick_lp_iterations = 0;
+  int64_t& lns_quick_lp_iterations;
 
   std::unique_ptr<HighsConcurrentLns> concurrent_lns;
-  int64_t concurrent_lns_seen = 0;
-  bool crossoverStartLogged = false;
+  int64_t& concurrent_lns_seen;
+  bool& crossoverStartLogged;
   bool useConcurrentHelper() const;
   void startConcurrentLns();
   // in a concurrent LNS helper: cross its incumbent with the main solver's
@@ -265,7 +327,7 @@ struct HighsMipSolverData {
   void stopConcurrentLns();
   void publishRootCuts();
   bool importRootCuts(HighsMipWorker& worker);
-  bool rootCutsImported = false;
+  bool& rootCutsImported;
 
   bool solutionRowFeasible(const std::vector<double>& solution) const;
   HighsModelStatus feasibilityJump();
@@ -281,6 +343,23 @@ struct HighsMipSolverData {
     HighsSymmetries symmetries;
     double detectionTime = 0.0;
   };
+
+#ifdef HIGHS_RUST
+  // the locals of evaluateRootNode, run in Rust (destroyed in reverse order
+  // of declaration, as in the C++)
+  struct RsRootCtx {
+    std::unique_ptr<SymmetryDetectionData> symData;
+    highs::parallel::TaskGroup tg;
+    std::unique_ptr<HighsSeparation> sepa;
+    HighsLpRelaxation::Status sepaStatus = HighsLpRelaxation::Status::kNotSet;
+  };
+  std::unique_ptr<RsRootCtx> rsRoot_;
+  // the task group of HighsMipSolver::run, run in Rust
+  struct RsRunCtx {
+    highs::parallel::TaskGroup tg;
+  };
+  std::unique_ptr<RsRunCtx> rsRun_;
+#endif
 
   void startSymmetryDetection(const highs::parallel::TaskGroup& taskGroup,
                               std::unique_ptr<SymmetryDetectionData>& symData);
