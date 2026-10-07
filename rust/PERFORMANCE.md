@@ -30,7 +30,11 @@ gcc/libstdc++ pair, 14 MIPLIB + dispatch 080458; x86_64 under Rosetta,
 neos17, nu25-pr12, neos-911970, gen-ip002, pk1, air05, dispatch 080458;
 graph LNS at mip_rel_gap 0.01, 200 nodes, log_dev_level 1 (LNS lines and
 incumbents): hard_10-03_1340, 3c1b60d6, 3c1b60d6_wind185, 080458 (clang),
-hard_10-03_1340, 3c1b60d6 (gcc).
+hard_10-03_1340, 3c1b60d6 (gcc). After merging the symmetry and probing
+ports: same path again on 12 MIPLIB (incl. the symmetric qap10, cod105,
+enlight_hard) + hard_10-03_1340 and 080458 with LNS (clang), 7 MIPLIB +
+080458 + hard_10-03_1340 with LNS (gcc), 5 MIPLIB + 080458 (x86_64);
+ctest 168/168.
 ## 2026-10-07, presolve probing and enumeration loops in Rust
 
 runProbing's loop and enumerateSolutions in Rust (probing.rs,
