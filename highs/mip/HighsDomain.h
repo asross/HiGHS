@@ -27,6 +27,8 @@ class HighsCutPool;
 #include "mip/HighsRsSpan.h"
 namespace highs_rs {
 struct DomainVecs;
+struct CutPropState;
+struct ConfPropState;
 struct DomainAccess;
 struct CliqueAccess;
 struct SymmetryAccess;
@@ -177,11 +179,21 @@ class HighsDomain {
     HighsInt cutpoolindex;
     HighsDomain* domain;
     HighsCutPool* cutpool;
+#ifdef HIGHS_RUST
+    // Rust's (domain.rs CutPropState), owned, referred to in place
+    highs_rs::CutPropState* rs_;
+    HighsRsArray<HighsCDouble>& activitycuts_;
+    HighsRsArray<HighsInt>& activitycutsinf_;
+    HighsRsArray<uint8_t>& propagatecutflags_;
+    HighsRsArray<HighsInt>& propagatecutinds_;
+    HighsRsArray<double>& capacityThreshold_;
+#else
     std::vector<HighsCDouble> activitycuts_;
     std::vector<HighsInt> activitycutsinf_;
     std::vector<uint8_t> propagatecutflags_;
     std::vector<HighsInt> propagatecutinds_;
     std::vector<double> capacityThreshold_;
+#endif
 
     CutpoolPropagation(HighsInt cutpoolindex, HighsDomain* domain,
                        HighsCutPool& cutpool);
@@ -213,10 +225,6 @@ class HighsDomain {
     HighsInt conflictpoolindex;
     HighsDomain* domain;
     HighsConflictPool* conflictpool_;
-    std::vector<HighsInt> colLowerWatched_;
-    std::vector<HighsInt> colUpperWatched_;
-    std::vector<uint8_t> conflictFlag_;
-    std::vector<HighsInt> propagateConflictInds_;
 
     struct WatchedLiteral {
       HighsDomainChange domchg = {0.0, -1, HighsBoundType::kLower};
@@ -224,7 +232,21 @@ class HighsDomain {
       HighsInt next = -1;
     };
 
+#ifdef HIGHS_RUST
+    // Rust's (domain.rs ConfPropState), owned, referred to in place
+    highs_rs::ConfPropState* rs_;
+    HighsRsArray<HighsInt>& colLowerWatched_;
+    HighsRsArray<HighsInt>& colUpperWatched_;
+    HighsRsArray<uint8_t>& conflictFlag_;
+    HighsRsArray<HighsInt>& propagateConflictInds_;
+    HighsRsArray<WatchedLiteral>& watchedLiterals_;
+#else
+    std::vector<HighsInt> colLowerWatched_;
+    std::vector<HighsInt> colUpperWatched_;
+    std::vector<uint8_t> conflictFlag_;
+    std::vector<HighsInt> propagateConflictInds_;
     std::vector<WatchedLiteral> watchedLiterals_;
+#endif
 
     ConflictPoolPropagation(HighsInt conflictpoolindex, HighsDomain* domain,
                             HighsConflictPool& cutpool);
@@ -788,7 +810,41 @@ struct DomainVecs {
   HighsRsArray<HighsInt> scratch_inds;
   HighsRsArray<HighsDomainChange> scratch_bounds;
 };
+// rust/src/mip/domain.rs CutPropState and ConfPropState
+struct CutPropState {
+  HighsRsArray<HighsCDouble> activitycuts;
+  HighsRsArray<HighsInt> activitycutsinf;
+  HighsRsArray<uint8_t> propagatecutflags;
+  HighsRsArray<HighsInt> propagatecutinds;
+  HighsRsArray<double> capacity_threshold;
+};
+struct ConfPropState {
+  HighsRsArray<HighsInt> col_lower_watched;
+  HighsRsArray<HighsInt> col_upper_watched;
+  HighsRsArray<uint8_t> conflict_flag;
+  HighsRsArray<HighsInt> propagate_conflict_inds;
+  HighsRsArray<HighsDomain::ConflictPoolPropagation::WatchedLiteral> watched;
+};
+struct CutPool;
+struct ConflictPool;
+struct Bounds;
 extern "C" {
+CutPropState* highs_rs_cutprop_new();
+CutPropState* highs_rs_cutprop_clone(const CutPropState* s);
+void highs_rs_cutprop_assign(CutPropState* d, const CutPropState* s);
+void highs_rs_cutprop_free(CutPropState* s);
+void highs_rs_cutprop_cut_added(CutPropState* s, const CutPool* pool,
+                                HighsInt cut, const Bounds* b, bool propagate,
+                                bool global);
+void highs_rs_cutprop_cut_deleted(CutPropState* s, HighsInt cut, bool keep);
+ConfPropState* highs_rs_confprop_new(HighsInt ncol);
+ConfPropState* highs_rs_confprop_clone(const ConfPropState* s);
+void highs_rs_confprop_assign(ConfPropState* d, const ConfPropState* s);
+void highs_rs_confprop_free(ConfPropState* s);
+void highs_rs_confprop_conflict_added(ConfPropState* s,
+                                      const ConflictPool* pool,
+                                      HighsInt conflict, const Bounds* b);
+void highs_rs_confprop_conflict_deleted(ConfPropState* s, HighsInt conflict);
 DomainVecs* highs_rs_domain_vecs_new(HighsInt ncol, const double* lower,
                                      const double* upper);
 DomainVecs* highs_rs_domain_vecs_clone(const DomainVecs* v);

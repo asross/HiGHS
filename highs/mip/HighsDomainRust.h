@@ -109,12 +109,6 @@ struct DomainAccess {
                     sizeof(highs::RbTreeLinks<HighsInt>) == 12,
                 "ObjectiveContribution is Contribution");
 
-  template <typename T>
-  static void reserve(void* v, size_t n) {
-    std::vector<T>& x = *static_cast<std::vector<T>*>(v);
-    x.reserve(std::max(n, 2 * x.capacity()));
-  }
-
   // whether std::vector is {begin, end, capacity end}, as Rust's StdVec
   static bool stdVecLayout() {
     std::vector<HighsInt> v;
@@ -266,13 +260,12 @@ struct DomainAccess {
     d.redundant_row = redundantRow;
     d.cut_reset_age = cutResetAge;
     d.conflict_reset_age = conflictResetAge;
-    // the domain's vectors are Rust's, the pools' std::vectors
+    // the vectors are Rust's
     d.reserve_i32 = highs_rs_reserve_i32;
     d.reserve_domchg = highs_rs_reserve_domchg;
     d.reserve_reason = highs_rs_reserve_reason;
     d.reserve_prev = highs_rs_reserve_prev;
     d.reserve_pair = highs_rs_reserve_pair;
-    d.reserve_pool_i32 = reserve<HighsInt>;
   }
 
   template <typename T>

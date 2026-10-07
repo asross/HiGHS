@@ -170,7 +170,6 @@ struct Domain {
   ReserveFn reserve_reason;
   ReserveFn reserve_prev;
   ReserveFn reserve_pair;
-  ReserveFn reserve_pool_i32;
 };
 
 // Mirror of CBounds: what the const methods read

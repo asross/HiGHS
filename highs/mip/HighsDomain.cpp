@@ -170,6 +170,146 @@ void HighsDomain::addConflictPool(HighsConflictPool& conflictPool) {
   conflictPoolPropagation.emplace_back(conflictPoolIndex, this, conflictPool);
 }
 
+#ifdef HIGHS_RUST
+// The pools' propagation domains: their vectors and the cutAdded /
+// conflictAdded hooks are Rust's (rust/src/mip/domain.rs CutPropState,
+// ConfPropState); these shells own the state and register with the pool
+HighsDomain::ConflictPoolPropagation::ConflictPoolPropagation(
+    HighsInt conflictpoolindex, HighsDomain* domain,
+    HighsConflictPool& conflictpool_)
+    : conflictpoolindex(conflictpoolindex),
+      domain(domain),
+      conflictpool_(&conflictpool_),
+      rs_(highs_rs::highs_rs_confprop_new(domain->mipsolver->numCol())),
+      colLowerWatched_(rs_->col_lower_watched),
+      colUpperWatched_(rs_->col_upper_watched),
+      conflictFlag_(rs_->conflict_flag),
+      propagateConflictInds_(rs_->propagate_conflict_inds),
+      watchedLiterals_(rs_->watched) {
+  conflictpool_.addPropagationDomain(this);
+}
+
+HighsDomain::ConflictPoolPropagation::ConflictPoolPropagation(
+    const ConflictPoolPropagation& other)
+    : conflictpoolindex(other.conflictpoolindex),
+      domain(other.domain),
+      conflictpool_(other.conflictpool_),
+      rs_(highs_rs::highs_rs_confprop_clone(other.rs_)),
+      colLowerWatched_(rs_->col_lower_watched),
+      colUpperWatched_(rs_->col_upper_watched),
+      conflictFlag_(rs_->conflict_flag),
+      propagateConflictInds_(rs_->propagate_conflict_inds),
+      watchedLiterals_(rs_->watched) {
+  if (!domain->mipsolver->mipdata_->parallelLockActive() ||
+      conflictpool_ != &domain->mipsolver->mipdata_->getConflictPool())
+    conflictpool_->addPropagationDomain(this);
+}
+
+HighsDomain::ConflictPoolPropagation&
+HighsDomain::ConflictPoolPropagation::operator=(
+    const ConflictPoolPropagation& other) {
+  if (this == &other) return *this;
+  if (conflictpool_) conflictpool_->removePropagationDomain(this);
+  conflictpoolindex = other.conflictpoolindex;
+  domain = other.domain;
+  conflictpool_ = other.conflictpool_;
+  highs_rs::highs_rs_confprop_assign(rs_, other.rs_);
+  assert(!domain->mipsolver->mipdata_->parallelLockActive());
+  if (conflictpool_) conflictpool_->addPropagationDomain(this);
+  return *this;
+}
+
+HighsDomain::ConflictPoolPropagation::~ConflictPoolPropagation() {
+  conflictpool_->removePropagationDomain(this);
+  highs_rs::highs_rs_confprop_free(rs_);
+}
+
+void HighsDomain::ConflictPoolPropagation::conflictDeleted(HighsInt conflict) {
+  highs_rs::highs_rs_confprop_conflict_deleted(rs_, conflict);
+}
+
+void HighsDomain::ConflictPoolPropagation::conflictAdded(HighsInt conflict) {
+  const highs_rs::Bounds b = highs_rs::DomainAccess::bounds(*domain);
+  highs_rs::highs_rs_confprop_conflict_added(rs_, conflictpool_->rust(),
+                                             conflict, &b);
+  // the arrays may have moved: update them in the view
+  highs_rs::DomainAccess::conflictPoolChanged(*domain, conflictpoolindex);
+}
+
+HighsDomain::CutpoolPropagation::CutpoolPropagation(HighsInt cutpoolindex,
+                                                    HighsDomain* domain,
+                                                    HighsCutPool& cutpool_)
+    : cutpoolindex(cutpoolindex),
+      domain(domain),
+      cutpool(&cutpool_),
+      rs_(highs_rs::highs_rs_cutprop_new()),
+      activitycuts_(rs_->activitycuts),
+      activitycutsinf_(rs_->activitycutsinf),
+      propagatecutflags_(rs_->propagatecutflags),
+      propagatecutinds_(rs_->propagatecutinds),
+      capacityThreshold_(rs_->capacity_threshold) {
+  cutpool->addPropagationDomain(this);
+}
+
+HighsDomain::CutpoolPropagation::CutpoolPropagation(
+    const CutpoolPropagation& other)
+    : cutpoolindex(other.cutpoolindex),
+      domain(other.domain),
+      cutpool(other.cutpool),
+      rs_(highs_rs::highs_rs_cutprop_clone(other.rs_)),
+      activitycuts_(rs_->activitycuts),
+      activitycutsinf_(rs_->activitycutsinf),
+      propagatecutflags_(rs_->propagatecutflags),
+      propagatecutinds_(rs_->propagatecutinds),
+      capacityThreshold_(rs_->capacity_threshold) {
+  if (!domain->mipsolver->mipdata_->parallelLockActive() ||
+      cutpool != &domain->mipsolver->mipdata_->getCutPool())
+    cutpool->addPropagationDomain(this);
+}
+
+// Warning: When a domain is copy-assigned, e.g., in `resetLocalDomain`,
+// with the line `localdom = getDomain()`, then it is going to notify
+// all cut / conflict pools that the original was propagating.
+// This would be non-deterministic in the order in which the global
+// pool gets notified. Currently, such code is only run in serial.
+HighsDomain::CutpoolPropagation& HighsDomain::CutpoolPropagation::operator=(
+    const CutpoolPropagation& other) {
+  if (this == &other) return *this;
+  if (cutpool) cutpool->removePropagationDomain(this);
+  cutpoolindex = other.cutpoolindex;
+  domain = other.domain;
+  cutpool = other.cutpool;
+  highs_rs::highs_rs_cutprop_assign(rs_, other.rs_);
+  assert(!domain->mipsolver->mipdata_->parallelLockActive());
+  if (cutpool) cutpool->addPropagationDomain(this);
+  return *this;
+}
+
+HighsDomain::CutpoolPropagation::~CutpoolPropagation() {
+  cutpool->removePropagationDomain(this);
+  highs_rs::highs_rs_cutprop_free(rs_);
+}
+
+void HighsDomain::CutpoolPropagation::cutAdded(HighsInt cut, bool propagate) {
+  const bool global = domain == &domain->mipsolver->mipdata_->getDomain();
+  if (propagate || global) {
+    const highs_rs::Bounds b = highs_rs::DomainAccess::bounds(*domain);
+    highs_rs::highs_rs_cutprop_cut_added(rs_, cutpool->rust(), cut, &b,
+                                         propagate, global);
+  }
+  // the arrays may have moved, and the cut pool's matrix (also for a domain
+  // that does not take the cut): update them in the view
+  highs_rs::DomainAccess::cutPoolChanged(*domain, cutpoolindex);
+}
+
+void HighsDomain::CutpoolPropagation::cutDeleted(
+    HighsInt cut, bool deletedOnlyForPropagation) {
+  const bool keep = deletedOnlyForPropagation &&
+                    domain == &domain->mipsolver->mipdata_->getDomain();
+  assert(!keep || domain->branchPos_.empty());
+  highs_rs::highs_rs_cutprop_cut_deleted(rs_, cut, keep);
+}
+#else
 void HighsDomain::ConflictPoolPropagation::linkWatchedLiteral(
     HighsInt linkPos) {
   assert(watchedLiterals_[linkPos].domchg.column != -1);
@@ -737,6 +877,7 @@ void HighsDomain::CutpoolPropagation::updateActivityUbChange(
         });
   }
 }
+#endif  // HIGHS_RUST
 #endif  // HIGHS_RUST
 
 namespace highs {

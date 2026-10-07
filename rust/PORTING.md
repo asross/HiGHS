@@ -193,12 +193,17 @@ assigned, sized for the rows and freed by Rust calls) and its old members
 (col_lower_, domchgstack_, ...) are references to the fields in place:
 `HighsRsArray` (HighsRsSpan.h), the begin/end/capacity layout of Rust's
 StdVec, which C++ reads, writes and shrinks and only Rust grows. The
-getters return these arrays. The pools' propagation data (CutpoolPropagation,
-ConflictPoolPropagation) and the objective propagation stay C++ vectors;
-since the two allocators must not swap buffers, propagate() copies a pool's
-rows to propagate into the Rust scratch where the C++ swaps them (same
-order, same results). The C++ bodies of the ported domain code are not
-compiled under HIGHS_RUST. The domain runs in Rust
+getters return these arrays. The pools' propagation domains are Rust's
+too: CutpoolPropagation and ConflictPoolPropagation are shells that own a
+`CutPropState` / `ConfPropState` (activities, flags, thresholds, rows to
+propagate; watched literals with their column lists), refer to its
+vectors in place and register with their pool as before (copies under
+the parallel lock only with a pool that is not the global one); the
+pools' cutAdded / cutDeleted / conflictAdded / conflictDeleted hooks run in
+Rust on the domain's bounds (`Bounds`) and the Rust pool, and the C++
+shell refreshes the view afterwards (also when the cut is not taken: the
+pool's matrix may have moved). The objective propagation stays C++. The
+C++ bodies of the ported domain code are not compiled under HIGHS_RUST. The domain runs in Rust
 (mip/domain.rs, objprop.rs, conflict.rs) on a view of that data: changeBound
 with the domain change stack, its reasons and previous bounds,
 backtrack/backtrackToGlobal, setDomainChangeStack, the whole propagate()
@@ -219,8 +224,7 @@ size() may move: copy, assignment, computeRowActivities,
 setupObjectivePropagation, adding or clearing pools; cutAdded and
 conflictAdded update their pool's part in place. The vectors that grow
 during propagation are passed as the vector objects (StdVec) and appended
-to in place: the domain's with the Rust allocator (`rs_reserve`), the
-pools' std::vectors (layout checked at runtime) with a C++ reserve. Rust's Dom derefs to the view and indexes its
+to in place with the Rust allocator (`rs_reserve`). Rust's Dom derefs to the view and indexes its
 pointer+length pairs with bounds checks; the hot loops copy the pairs they
 use into locals. Only Ctx::change_bound calls back into C++ code that
 re-enters Rust; Dom views are borrowed from the Ctx, so none is alive
