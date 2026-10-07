@@ -27,14 +27,6 @@ static_assert(sizeof(HighsPrimalDualErrors) == 184,
               "HighsPrimalDualErrors layout");
 static_assert(sizeof(HighsBasisStatus) == 1, "HighsBasisStatus is a byte");
 
-struct RsSolution {
-  bool value_valid, dual_valid;
-  RsMut<double> col_value, col_dual, row_value, row_dual;
-};
-struct RsBasis {
-  bool valid;
-  RsMut<uint8_t> col_status, row_status;
-};
 struct RsKktOptions {
   RsLog log;
   double primal_feasibility_tolerance, dual_feasibility_tolerance,
@@ -74,21 +66,6 @@ void highs_rs_lp_kkt_check(int* model_status, HighsInfoStruct* info,
 bool highs_rs_report_kkt_failures(const RsLp* lp, const RsKktOptions* o,
                                   const HighsInfoStruct* info,
                                   const char* message, size_t message_len);
-}
-
-static RsSolution rsSolution(const HighsSolution& s) {
-  return {s.value_valid,      s.dual_valid,       rsMut(s.col_value),
-          rsMut(s.col_dual),  rsMut(s.row_value), rsMut(s.row_dual)};
-}
-
-static RsBasis rsBasis(const HighsBasis& b) {
-  return {b.valid,
-          {reinterpret_cast<uint8_t*>(
-               const_cast<HighsBasisStatus*>(b.col_status.data())),
-           b.col_status.size()},
-          {reinterpret_cast<uint8_t*>(
-               const_cast<HighsBasisStatus*>(b.row_status.data())),
-           b.row_status.size()}};
 }
 
 static RsKktOptions rsKktOptions(const HighsOptions& options) {

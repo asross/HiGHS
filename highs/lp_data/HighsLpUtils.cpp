@@ -2784,6 +2784,7 @@ HighsStatus assessLpPrimalSolution(const std::string& message,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
 void writeBasisFile(FILE*& file, const HighsOptions& options, const HighsLp& lp,
                     const HighsBasis& basis) {
   const HighsLogOptions& log_options = options.log_options;
@@ -2830,6 +2831,8 @@ void writeBasisFile(FILE*& file, const HighsOptions& options, const HighsLp& lp,
     highsFprintfString(file, log_options, ss.str());
   }
 }
+
+#endif
 
 HighsStatus getIndexFromName(
     const HighsLogOptions& log_options, std::string& from_method,

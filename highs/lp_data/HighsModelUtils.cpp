@@ -133,6 +133,7 @@ std::string typeToString(const HighsVarType type) {
   return "";
 }
 
+#ifndef HIGHS_RUST
 void writeModelBoundSolution(
     FILE* file, const HighsLogOptions& log_options, const bool columns,
     const HighsInt dim, const std::vector<double>& lower,
@@ -177,6 +178,8 @@ void writeModelBoundSolution(
   }
 }
 
+#endif
+
 void writeModelObjective(FILE* file, const HighsLogOptions& log_options,
                          const HighsModel& model,
                          const std::vector<double>& primal_solution) {
@@ -193,6 +196,7 @@ void writeLpObjective(FILE* file, const HighsLogOptions& log_options,
   writeObjectiveValue(file, log_options, (double)objective_value);
 }
 
+#ifndef HIGHS_RUST
 void writeObjectiveValue(FILE* file, const HighsLogOptions& log_options,
                          const double objective_value) {
   auto objStr = highsDoubleToString(objective_value,
@@ -322,6 +326,8 @@ void writeModelSolution(FILE* file, const HighsLogOptions& log_options,
     }
   }
 }
+
+#endif
 
 bool replaceSpacesByUnderscores(std::string& name) {
   // Find the first occurrence of the substring
@@ -492,6 +498,7 @@ HighsFileType getFileType(const std::string filename) {
   return HighsFileType::kMinimal;
 }
 
+#ifndef HIGHS_RUST
 void writeSolutionFile(FILE* file, const HighsOptions& options,
                        const HighsModel& model, const HighsBasis& basis,
                        const HighsSolution& solution, const HighsInfo& info,
@@ -1322,6 +1329,8 @@ void writeOldRawSolution(FILE* file, const HighsLogOptions& log_options,
     highsFprintfString(file, log_options, ss.str());
   }
 }
+
+#endif
 
 HighsBasisStatus checkedVarHighsNonbasicStatus(
     const HighsBasisStatus ideal_status, const double lower,

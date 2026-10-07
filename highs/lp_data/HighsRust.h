@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "lp_data/HStruct.h"
 #include "lp_data/HighsLp.h"
 #include "lp_data/HighsOptions.h"
 #include "util/HighsUtils.h"
@@ -50,6 +51,28 @@ struct RsLog {
               size_t len);
 };
 RsLog rsLog(const HighsLogOptions& log_options);
+
+// HighsSolution and HighsBasis
+struct RsSolution {
+  bool value_valid, dual_valid;
+  RsMut<double> col_value, col_dual, row_value, row_dual;
+};
+inline RsSolution rsSolution(const HighsSolution& s) {
+  return {s.value_valid,      s.dual_valid,       rsMut(s.col_value),
+          rsMut(s.col_dual),  rsMut(s.row_value), rsMut(s.row_dual)};
+}
+struct RsBasis {
+  bool valid;
+  RsMut<uint8_t> col_status, row_status;
+};
+inline RsMut<uint8_t> rsMut(const std::vector<HighsBasisStatus>& v) {
+  static_assert(sizeof(HighsBasisStatus) == 1, "HighsBasisStatus is a byte");
+  return {reinterpret_cast<uint8_t*>(const_cast<HighsBasisStatus*>(v.data())),
+          v.size()};
+}
+inline RsBasis rsBasis(const HighsBasis& b) {
+  return {b.valid, rsMut(b.col_status), rsMut(b.row_status)};
+}
 
 struct RsMatrix {
   int format, num_col, num_row;

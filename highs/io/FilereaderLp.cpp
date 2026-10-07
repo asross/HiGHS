@@ -463,6 +463,7 @@ void FilereaderLp::writeToFileMatrixRow(FILE* file, const HighsInt iRow,
   }
 }
 
+#ifndef HIGHS_RUST
 HighsStatus FilereaderLp::writeModelToFile(const HighsOptions& options,
                                            const std::string filename,
                                            const HighsModel& model) {
@@ -644,3 +645,4 @@ HighsStatus FilereaderLp::writeModelToFile(const HighsOptions& options,
   fclose(file);
   return HighsStatus::kOk;
 }
+#endif

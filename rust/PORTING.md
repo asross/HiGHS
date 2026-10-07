@@ -471,6 +471,38 @@ which stay identical. Limits: strtold is strtod (x86_64's 80-bit strtold
 could round a halfway --time_limit twice), and glibc 2.38's C23 strtoll
 (which g++ may bind) also reads a leading "-0b".
 
+The file writers are Rust: solution files in every style (old raw, raw,
+pretty, Glpsol raw and pretty, sparse; writeSolutionFile and its parts,
+writePrimalSolution and writeObjectiveValue, which the MIP improving
+solution file uses), basis files (writeBasisFile) in
+lp_data/writers.rs, and the MPS (writeMps, free and fixed) and LP
+(FilereaderLp::writeModelToFile) model writers in io/model_write.rs.
+The C++ functions are wrappers (HighsWritersRust.cpp): they open the
+file, compute what is C++ data or arithmetic (the HighsCDouble objective
+of the raw style, the row-wise matrix copy of the LP writer, the
+getKktFailures of the Glpsol KKT report, done between two Rust calls so
+messages keep their order) and pass views (`RsWriteModel`, names as
+c_str/strlen). Rust sends text back through one callback (`RsOut`):
+fwrite to the file in 64 KB blocks, or, when the file is stdout,
+highsFprintfString of the same pieces as the C++ (one per C++
+highsFprintfString), so log callbacks see the same calls; messages go
+through the same callback, in order. A piece C++ builds with
+highsFormatToString is cut to its 1023-byte buffer, and an LP token to
+560 bytes, as vsnprintf would.
+
+Numbers (io/write.rs) are formatted without printf: `g` is `%.{p}g`
+(Rust's `{:.*e}` rounds the exact value half-to-even, as libc does, and
+the digits are then laid out as %g would), `double_to_string` is
+highsDoubleToString. The macOS libc has a quirk the writers mirror: its
+dtoa keeps the trailing zeros of an integer below 1e15 that %g rounds
+down to p <= 14 digits when its floating-point quick path cannot decide
+the rounding (`%.4g` of 55005 is "5.500e+04", glibc's "5.5e+04");
+`libc_keeps_zeros` simulates both dtoa paths (macOS only). It matters
+for the %12g / %13.6g / %.10g columns of the pretty styles; %.15g and
+highsDoubleToString never round an integer. glibc signs NaN ("-nan"),
+macOS does not; `g` follows the target. (util/printf.rs, used for
+messages, does not mirror the integer-tie quirk.)
+
 Still C++ in lp_data: Highs.cpp and HighsInterface.cpp (run /
 optimizeModel orchestration, presolve/postsolve calls, the cleanup solve,
 basis handling, model modification), HighsSolve.cpp (solveLp dispatch),
@@ -487,3 +519,10 @@ per HighsSearch / HighsDomain step (the local domains are C++), which is
 left for when the domain's C++ class goes.
 
 handling of HighsSolution.cpp, and the rest of app/.
+
+HighsOptions.cpp and HighsInfo.cpp (option setting, files, reports),
+HighsRanging.cpp (with the ranging file), HighsIis.cpp, the remaining
+HighsLpUtils.cpp (semi variables, user scaling, solution and basis file
+reading: istream parsing that fills C++ name hashes, LP reporting,
+vector edits), the IPX solution conversions and basis handling of
+HighsSolution.cpp, and app/.
