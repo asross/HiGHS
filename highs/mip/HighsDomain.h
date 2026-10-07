@@ -27,6 +27,7 @@ class HighsCutPool;
 namespace highs_rs {
 struct DomainAccess;
 struct CliqueAccess;
+struct SymmetryAccess;
 }
 #endif
 class HighsConflictPool;
@@ -36,6 +37,7 @@ class HighsDomain {
 #ifdef HIGHS_RUST
   friend struct highs_rs::DomainAccess;
   friend struct highs_rs::CliqueAccess;
+  friend struct highs_rs::SymmetryAccess;
 #endif
 
  public:

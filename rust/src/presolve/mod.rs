@@ -4,3 +4,5 @@
 mod ffi;
 pub mod hpresolve;
 pub mod postsolve;
+pub mod symmetry;
+mod symmetry_ffi;

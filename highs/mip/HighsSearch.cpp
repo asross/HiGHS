@@ -854,7 +854,7 @@ void HighsSearch::installNode(HighsNodeQueue::OpenNode&& node) {
     const auto& domchgstack = localdom.getDomainChangeStack();
     for (HighsInt i : localdom.getBranchingPositions()) {
       HighsInt col = domchgstack[i].column;
-      if (getSymmetries().columnPosition[col] == -1) continue;
+      if (getSymmetries().getColumnPosition(col) == -1) continue;
 
       if (!getDomain().isBinary(col) ||
           (domchgstack[i].boundtype == HighsBoundType::kLower &&

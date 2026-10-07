@@ -584,7 +584,7 @@ void HighsMipSolverData::finishSymmetryDetection(
     detectSymmetries = false;
     highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
                  "No symmetry present\n\n");
-  } else if (symmetries.orbitopes.size() == 0) {
+  } else if (symmetries.numOrbitopes() == 0) {
     highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
                  "Found %d generator(s)\n\n", int(symmetries.numGenerators));
 
@@ -593,19 +593,18 @@ void HighsMipSolverData::finishSymmetryDetection(
       highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
                    "Found %d generator(s) and %d full orbitope(s) acting on %d "
                    "columns\n\n",
-                   int(symmetries.numPerms), int(symmetries.orbitopes.size()),
-                   int(symmetries.columnToOrbitope.size()));
+                   int(symmetries.numPerms), int(symmetries.numOrbitopes()),
+                   int(symmetries.numOrbitopeColumns()));
     } else {
       highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
                    "Found %d full orbitope(s) acting on %d columns\n\n",
-                   int(symmetries.orbitopes.size()),
-                   int(symmetries.columnToOrbitope.size()));
+                   int(symmetries.numOrbitopes()),
+                   int(symmetries.numOrbitopeColumns()));
     }
   }
   symData.reset();
 
-  for (HighsOrbitopeMatrix& orbitope : symmetries.orbitopes)
-    orbitope.determineOrbitopeType(cliquetable);
+  symmetries.determineOrbitopeTypes(cliquetable);
 
   if (symmetries.numPerms != 0) {
     StabilizerOrbitWorkspace workspace;

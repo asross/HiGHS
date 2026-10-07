@@ -21,6 +21,195 @@
 #include "parallel/HighsParallel.h"
 #include "util/HighsDisjointSets.h"
 
+#ifdef HIGHS_RUST
+
+#include "mip/HighsCliqueTableRust.h"
+#include "mip/HighsMipSolver.h"
+
+namespace highs_rs {
+
+/// rust SymDom
+struct SymDom {
+  CliqueDom dom;
+  const double* model_lower;
+  const double* model_upper;
+  const HighsInt* branch_pos;
+  HighsInt num_branch_pos;
+  void (*mark_infeasible)(void*);
+};
+
+struct SymmetryAccess {
+  static SymDom symDom(const HighsDomain& domain) {
+    HighsDomain& dom = const_cast<HighsDomain&>(domain);
+    SymDom d;
+    d.dom = cliqueDom(dom);
+    d.model_lower = dom.mipsolver->model_->col_lower_.data();
+    d.model_upper = dom.mipsolver->model_->col_upper_.data();
+    d.branch_pos = dom.getBranchingPositions().data();
+    d.num_branch_pos = dom.getBranchingPositions().size();
+    d.mark_infeasible = [](void* p) {
+      static_cast<HighsDomain*>(p)->markInfeasible();
+    };
+    return d;
+  }
+};
+
+extern "C" {
+SymmetryDetection* highs_rs_symdet_new();
+void highs_rs_symdet_free(SymmetryDetection* d);
+void highs_rs_symdet_load(SymmetryDetection* d, HighsInt num_col,
+                          HighsInt num_row, const HighsInt* a_start,
+                          const HighsInt* a_index, const double* a_value,
+                          HighsInt nnz, const double* col_cost,
+                          const double* col_lower, const double* col_upper,
+                          const uint8_t* integrality, const double* row_lower,
+                          const double* row_upper, double epsilon);
+bool highs_rs_symdet_init(SymmetryDetection* d);
+bool highs_rs_symdet_run(SymmetryDetection* d, Symmetries* s, void* ctx,
+                         bool (*interrupted)(void*));
+Symmetries* highs_rs_sym_new();
+void highs_rs_sym_free(Symmetries* s);
+void highs_rs_sym_clear(Symmetries* s);
+HighsInt highs_rs_sym_get(const Symmetries* s, HighsInt which);
+HighsInt highs_rs_sym_branching_column(const Symmetries* s,
+                                       const double* col_lower,
+                                       const double* col_upper, HighsInt n,
+                                       HighsInt col);
+HighsInt highs_rs_sym_propagate_orbitopes(const Symmetries* s,
+                                          const SymDom* dom);
+void highs_rs_sym_determine_orbitope_types(Symmetries* s, CliqueTable* t);
+struct StabOrbits;
+StabOrbits* highs_rs_sym_stabilizer_orbits(const Symmetries* s,
+                                           const SymDom* dom);
+const HighsInt* highs_rs_stab_vec(const StabOrbits* o, HighsInt which,
+                                  HighsInt* len);
+void highs_rs_stab_free(StabOrbits* o);
+HighsInt highs_rs_sym_orbital_fixing(const Symmetries* s, const SymDom* dom,
+                                     const HighsInt* orbit_cols,
+                                     HighsInt num_orbit_cols,
+                                     const HighsInt* orbit_starts,
+                                     HighsInt num_orbit_starts);
+HighsInt highs_rs_sym_column_position(const Symmetries* s, HighsInt col);
+}
+}  // namespace highs_rs
+
+void HighsSymmetries::Free::operator()(highs_rs::Symmetries* s) const {
+  highs_rs::highs_rs_sym_free(s);
+}
+
+HighsSymmetries::HighsSymmetries() : rs(highs_rs::highs_rs_sym_new()) {}
+
+void HighsSymmetries::clear() {
+  highs_rs::highs_rs_sym_clear(rs.get());
+  numPerms = 0;
+  numGenerators = 0;
+}
+
+HighsInt HighsSymmetries::getColumnPosition(HighsInt col) const {
+  return highs_rs::highs_rs_sym_column_position(rs.get(), col);
+}
+
+HighsInt HighsSymmetries::numOrbitopes() const {
+  return highs_rs::highs_rs_sym_get(rs.get(), 2);
+}
+
+HighsInt HighsSymmetries::numOrbitopeColumns() const {
+  return highs_rs::highs_rs_sym_get(rs.get(), 3);
+}
+
+void HighsSymmetries::determineOrbitopeTypes(HighsCliqueTable& cliquetable) {
+  highs_rs::highs_rs_sym_determine_orbitope_types(rs.get(),
+                                                  cliquetable.rust());
+}
+
+HighsInt HighsSymmetries::propagateOrbitopes(HighsDomain& domain) const {
+  highs_rs::SymDom d = highs_rs::SymmetryAccess::symDom(domain);
+  return highs_rs::highs_rs_sym_propagate_orbitopes(rs.get(), &d);
+}
+
+HighsInt HighsSymmetries::getBranchingColumn(
+    const std::vector<double>& colLower, const std::vector<double>& colUpper,
+    HighsInt col) const {
+  return highs_rs::highs_rs_sym_branching_column(
+      rs.get(), colLower.data(), colUpper.data(), colLower.size(), col);
+}
+
+std::shared_ptr<const StabilizerOrbits>
+HighsSymmetries::computeStabilizerOrbits(const HighsDomain& localdom,
+                                         StabilizerOrbitWorkspace&) {
+  highs_rs::SymDom d = highs_rs::SymmetryAccess::symDom(localdom);
+  highs_rs::StabOrbits* o =
+      highs_rs::highs_rs_sym_stabilizer_orbits(rs.get(), &d);
+  auto copy = [&](HighsInt which, std::vector<HighsInt>& v) {
+    HighsInt len;
+    const HighsInt* p = highs_rs::highs_rs_stab_vec(o, which, &len);
+    v.assign(p, p + len);
+  };
+  StabilizerOrbits stabilizerOrbits;
+  copy(0, stabilizerOrbits.orbitCols);
+  copy(1, stabilizerOrbits.orbitStarts);
+  copy(2, stabilizerOrbits.stabilizedCols);
+  highs_rs::highs_rs_stab_free(o);
+  stabilizerOrbits.symmetries = this;
+  return std::make_shared<const StabilizerOrbits>(std::move(stabilizerOrbits));
+}
+
+HighsInt StabilizerOrbits::orbitalFixing(HighsDomain& domain) const {
+  highs_rs::SymDom d = highs_rs::SymmetryAccess::symDom(domain);
+  return highs_rs::highs_rs_sym_orbital_fixing(
+      symmetries->rs.get(), &d, orbitCols.data(), orbitCols.size(),
+      orbitStarts.data(), orbitStarts.size());
+}
+
+bool StabilizerOrbits::isStabilized(HighsInt col) const {
+  return symmetries->getColumnPosition(col) == -1 ||
+         std::binary_search(stabilizedCols.begin(), stabilizedCols.end(), col);
+}
+
+void HighsSymmetryDetection::Free::operator()(
+    highs_rs::SymmetryDetection* d) const {
+  highs_rs::highs_rs_symdet_free(d);
+}
+
+HighsSymmetryDetection::HighsSymmetryDetection()
+    : rs(highs_rs::highs_rs_symdet_new()) {}
+
+void HighsSymmetryDetection::loadModelAsGraph(const HighsLp& model,
+                                              double epsilon) {
+  highs_rs::highs_rs_symdet_load(
+      rs.get(), model.num_col_, model.num_row_, model.a_matrix_.start_.data(),
+      model.a_matrix_.index_.data(), model.a_matrix_.value_.data(),
+      model.a_matrix_.index_.size(), model.col_cost_.data(),
+      model.col_lower_.data(), model.col_upper_.data(),
+      reinterpret_cast<const uint8_t*>(model.integrality_.data()),
+      model.row_lower_.data(), model.row_upper_.data(), epsilon);
+}
+
+bool HighsSymmetryDetection::initializeDetection() {
+  return highs_rs::highs_rs_symdet_init(rs.get());
+}
+
+void HighsSymmetryDetection::run(HighsSymmetries& symmetries) {
+  // the C++ checks for an interrupt at each leave; Rust asks, and the
+  // exception is thrown here, outside of the Rust frames
+  HighsSplitDeque* workerDeque = HighsTaskExecutor::getThisWorkerDeque();
+  bool completed = highs_rs::highs_rs_symdet_run(
+      rs.get(), symmetries.rs.get(), workerDeque, [](void* p) {
+        try {
+          static_cast<HighsSplitDeque*>(p)->checkInterrupt();
+        } catch (const HighsTask::Interrupt&) {
+          return true;
+        }
+        return false;
+      });
+  if (!completed) throw HighsTask::Interrupt();
+  symmetries.numPerms = highs_rs::highs_rs_sym_get(symmetries.rs.get(), 0);
+  symmetries.numGenerators =
+      highs_rs::highs_rs_sym_get(symmetries.rs.get(), 1);
+}
+
+#else
+
 void HighsSymmetryDetection::removeFixPoints() {
   Gend.resize(numVertices);
   for (HighsInt i = 0; i < numVertices; ++i) {
@@ -1934,3 +2123,5 @@ void HighsSymmetryDetection::run(HighsSymmetries& symmetries) {
     symmetries.permutations.resize(symmetries.numPerms * numActiveCols);
   }
 }
+
+#endif  // HIGHS_RUST
