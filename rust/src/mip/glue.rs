@@ -86,6 +86,39 @@ pub struct SubMipResult {
     pub has_solution: bool,
 }
 
+/// A sub-MIP to build and run (CMipFns::sub_mip): its bounds, start and
+/// the options that differ from the caller's
+#[repr(C)]
+pub struct SubMipSpec {
+    /// HighsLpRelaxation whose LP and basis are used, or null for the
+    /// model and the first root basis
+    pub lp: P,
+    pub col_lower: *const f64,
+    pub col_upper: *const f64,
+    /// num_col values and their num_row row activities, or null
+    pub start_cols: *const f64,
+    pub start_rows: *const f64,
+    pub num_start_rows: i32,
+    pub mip_max_leaves: i32,
+    pub mip_max_nodes: i32,
+    pub mip_max_stall_nodes: i32,
+    pub mip_pscost_minreliable: i32,
+    pub time_limit: f64,
+    pub objective_bound: f64,
+    /// both NaN to keep the caller's
+    pub mip_rel_gap: f64,
+    pub mip_abs_gap: f64,
+    pub mip_heuristic_effort: f64,
+    /// RINS, RENS and root reduced cost (bits 0-2), or -1 to keep the
+    /// caller's
+    pub heur_flags: i32,
+    pub presolve: bool,
+    pub output_flag: bool,
+    pub mip_detect_symmetry: bool,
+    /// the sub-MIP's lns_target_reached_
+    pub lns_target: *const super::concurrent::Pool,
+}
+
 /// The C++ operations, implemented in highs/mip/HighsMipRust.cpp
 #[repr(C)]
 pub struct CMipFns {
@@ -146,30 +179,9 @@ pub struct CMipFns {
     pub num_workers: unsafe extern "C" fn(P) -> i32,
     /// fills the worker's view
     pub worker_view: unsafe extern "C" fn(P, *mut WorkerData),
-    /// solveSubMip's run: the HighsMipSolver of the sub-MIP. `lp` is a
-    /// HighsLpRelaxation whose LP and basis are used, or null for the model
-    /// and the first root basis; `start` (num_col values) or null; abs_gap
-    /// NaN to keep the caller's gaps; `heur` the settings of RINS, RENS
-    /// and root reduced cost (bits 0-2) or -1 to keep the caller's;
-    /// `lns_target` the sub-MIP's lns_target_reached_. The solution goes to
-    /// `sol`.
-    pub sub_mip: unsafe extern "C" fn(
-        P,
-        P,
-        P,
-        *const f64,
-        *const f64,
-        i32,
-        i32,
-        i32,
-        *const f64,
-        f64,
-        f64,
-        i32,
-        *const super::concurrent::Pool,
-        *mut SubMipResult,
-        *mut f64,
-    ),
+    /// solveSubMip's run: the HighsMipSolver of the sub-MIP of the spec,
+    /// for the worker; the solution goes to `sol`
+    pub sub_mip: unsafe extern "C" fn(P, P, *const SubMipSpec, *mut SubMipResult, *mut f64),
     /// a scalar operation on the solver (mip_data.rs, mod op)
     pub op: unsafe extern "C" fn(P, i32, P, i64, f64) -> f64,
     /// the scratch solution of transformNewIntegerFeasibleSolution:
@@ -830,7 +842,9 @@ pub fn try_solution(m: &MipData, w: &Worker, sol: &[f64], source: i32) -> bool {
     m.try_solution_any(w, sol, source)
 }
 
-/// The sub-MIP run of solveSubMip (see CMipFns::sub_mip)
+/// The sub-MIP run of solveSubMip (see CMipFns::sub_mip): the options
+/// that differ from the caller's and the start's row activities; abs_gap
+/// NaN to keep the caller's gaps
 #[allow(clippy::too_many_arguments)]
 pub fn sub_mip(
     m: &MipData,
@@ -846,30 +860,45 @@ pub fn sub_mip(
     abs_gap: f64,
     sol: &mut [f64],
 ) -> SubMipResult {
-    let mut r = SubMipResult::default();
-    c!(
-        sub_mip,
-        m.mipsolver,
-        w.p,
-        lp.map_or(std::ptr::null_mut(), |l| l.p),
-        lo.as_ptr(),
-        up.as_ptr(),
-        maxleaves,
-        maxnodes,
-        stallnodes,
-        start.map_or(std::ptr::null(), |s| s.as_ptr()),
-        time_cap,
-        abs_gap,
+    // the start's row activities (calculateRowValuesQuad, which needs a
+    // column-wise model)
+    let mut rows = Vec::new();
+    if let (Some(start), true) = (start, m.colwise) {
+        rows = vec![0.0; m.num_row as usize];
+        crate::lp_data::edit::calculate_row_values_quad(m.a_start(), m.a_index(), m.a_value(), start, &mut rows);
+    }
+    let time_limit = m.opts.time_limit - m.timer_read();
+    let spec = SubMipSpec {
+        lp: lp.map_or(std::ptr::null_mut(), |l| l.p),
+        col_lower: lo.as_ptr(),
+        col_upper: up.as_ptr(),
+        start_cols: start.map_or(std::ptr::null(), |s| s.as_ptr()),
+        start_rows: rows.as_ptr(),
+        num_start_rows: rows.len() as i32,
+        mip_max_leaves: maxleaves,
+        mip_max_nodes: maxnodes,
+        mip_max_stall_nodes: stallnodes,
+        mip_pscost_minreliable: 0,
+        // std::min
+        time_limit: if time_cap < time_limit { time_cap } else { time_limit },
+        objective_bound: w.upper_limit(),
+        mip_rel_gap: if abs_gap.is_nan() { f64::NAN } else { 0.0 },
+        mip_abs_gap: abs_gap,
+        mip_heuristic_effort: 0.8,
         // a concurrent helper runs without the heuristics that solve
         // sub-MIPs; its crossover sub-MIP gets the main solver's settings
-        match (start, m.helper_lns()) {
+        heur_flags: match (start, m.helper_lns()) {
             (Some(_), Some(p)) => p.run_rins as i32 | (p.run_rens as i32) << 1 | (p.run_root_reduced_cost as i32) << 2,
             _ => -1,
         },
-        m.sub_mip_lns_target(),
-        &mut r,
-        sol.as_mut_ptr()
-    );
+        // with only root presolve allowed, none in the sub-MIP
+        presolve: !m.root_presolve_only,
+        output_flag: false,
+        mip_detect_symmetry: false,
+        lns_target: m.sub_mip_lns_target(),
+    };
+    let mut r = SubMipResult::default();
+    c!(sub_mip, m.mipsolver, w.p, &spec, &mut r, sol.as_mut_ptr());
     r
 }
 

@@ -45,6 +45,30 @@ struct MipSearchParts {
   void* localdom;
 };
 
+// glue.rs SubMipSpec
+struct MipSubMipSpec {
+  void* lp;
+  const double* col_lower;
+  const double* col_upper;
+  const double* start_cols;
+  const double* start_rows;
+  HighsInt num_start_rows;
+  HighsInt mip_max_leaves;
+  HighsInt mip_max_nodes;
+  HighsInt mip_max_stall_nodes;
+  HighsInt mip_pscost_minreliable;
+  double time_limit;
+  double objective_bound;
+  double mip_rel_gap;
+  double mip_abs_gap;
+  double mip_heuristic_effort;
+  int heur_flags;
+  bool presolve;
+  bool output_flag;
+  bool mip_detect_symmetry;
+  const ConcurrentPool* lns_target;
+};
+
 // glue.rs SubMipResult
 struct MipSubMipResult {
   int termination_status;
@@ -266,9 +290,8 @@ struct MipFns {
   bool (*parallel_lock_active)(void*);
   HighsInt (*num_workers)(void*);
   void (*worker_view)(void*, MipWorkerData*);
-  void (*sub_mip)(void*, void*, void*, const double*, const double*, HighsInt,
-                  HighsInt, HighsInt, const double*, double, double, int,
-                  const ConcurrentPool*, MipSubMipResult*, double*);
+  void (*sub_mip)(void*, void*, const MipSubMipSpec*, MipSubMipResult*,
+                  double*);
   double (*op)(void*, int, void*, int64_t, double);
   void (*scratch_solution)(void*, const double*, HighsInt, MipScratchView*);
   void (*set_vec)(void*, int, const void*, HighsInt);

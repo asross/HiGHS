@@ -218,78 +218,57 @@ static void workerView(void* w, MipWorkerData* d) {
   d->optimality_limit = &worker.optimality_limit;
 }
 
-// HighsPrimalHeuristics::solveSubMip's run of the sub-MIP
-static void subMip(void* m, void* w, void* lp, const double* lo,
-                   const double* up, HighsInt maxleaves, HighsInt maxnodes,
-                   HighsInt stallnodes, const double* start, double timeCap,
-                   double absGap, int heurFlags,
-                   const ConcurrentPool* lnsTarget, MipSubMipResult* r,
-                   double* sol) {
+// HighsPrimalHeuristics::solveSubMip's run of the sub-MIP: the shell of
+// rust/src/mip/glue.rs sub_mip, which decides the options and the start
+static void subMip(void* m, void* w, const MipSubMipSpec* spec,
+                   MipSubMipResult* r, double* sol) {
   const HighsMipSolver& mipsolver = mip(m);
   HighsMipWorker& worker = wk(w);
-  const HighsLp& lpModel = lp ? lpr(lp).getLp() : *mipsolver.model_;
-  const HighsBasis& basis = lp ? lpr(lp).getLpSolver().getBasis()
-                               : mipsolver.mipdata_->firstrootbasis;
+  const HighsLp& lpModel =
+      spec->lp ? lpr(spec->lp).getLp() : *mipsolver.model_;
+  const HighsBasis& basis = spec->lp ? lpr(spec->lp).getLpSolver().getBasis()
+                                     : mipsolver.mipdata_->firstrootbasis;
   HighsOptions submipoptions = *mipsolver.options_mip_;
   HighsLp submip = lpModel;
 
-  // set bounds and restore integrality of the lp relaxation copy
-  submip.col_lower_.assign(lo, lo + lpModel.num_col_);
-  submip.col_upper_.assign(up, up + lpModel.num_col_);
+  // the bounds, and the integrality of the model (not of an LP relaxation)
+  submip.col_lower_.assign(spec->col_lower,
+                           spec->col_lower + lpModel.num_col_);
+  submip.col_upper_.assign(spec->col_upper,
+                           spec->col_upper + lpModel.num_col_);
   submip.integrality_ = mipsolver.model_->integrality_;
   submip.offset_ = 0;
 
-  // set limits
-  submipoptions.mip_max_leaves = maxleaves;
-  submipoptions.output_flag = false;
-
-  const bool allow_submip_log = true;
-  if (allow_submip_log && lpModel.num_col_ == -54 &&
-      lpModel.num_row_ == -172) {
-    submipoptions.output_flag = true;
-    if (mipsolver.profiling_->sub_solver_)
-      printf(
-          "HighsPrimalHeuristics::solveSubMip (%d, %d) with output_flag = %s\n",
-          int(lpModel.num_col_), int(lpModel.num_row_),
-          highsBoolToString(submipoptions.output_flag).c_str());
+  submipoptions.mip_max_leaves = spec->mip_max_leaves;
+  submipoptions.output_flag = spec->output_flag;
+  submipoptions.mip_max_nodes = spec->mip_max_nodes;
+  submipoptions.mip_max_stall_nodes = spec->mip_max_stall_nodes;
+  submipoptions.mip_pscost_minreliable = spec->mip_pscost_minreliable;
+  submipoptions.time_limit = spec->time_limit;
+  submipoptions.objective_bound = spec->objective_bound;
+  if (!std::isnan(spec->mip_abs_gap)) {
+    submipoptions.mip_rel_gap = spec->mip_rel_gap;
+    submipoptions.mip_abs_gap = spec->mip_abs_gap;
   }
-
-  submipoptions.mip_max_nodes = maxnodes;
-  submipoptions.mip_max_stall_nodes = stallnodes;
-  submipoptions.mip_pscost_minreliable = 0;
-  submipoptions.time_limit -= mipsolver.timer_.read();
-  submipoptions.time_limit = std::min(submipoptions.time_limit, timeCap);
-  submipoptions.objective_bound = worker.upper_limit;
-
-  // the gap target is the caller's (set in Rust), not the sub-MIP's
-  if (!std::isnan(absGap)) {
-    submipoptions.mip_rel_gap = 0.0;
-    submipoptions.mip_abs_gap = absGap;
+  submipoptions.presolve = spec->presolve ? kHighsOnString : kHighsOffString;
+  submipoptions.mip_detect_symmetry = spec->mip_detect_symmetry;
+  submipoptions.mip_heuristic_effort = spec->mip_heuristic_effort;
+  if (spec->heur_flags >= 0) {
+    submipoptions.mip_heuristic_run_rins = spec->heur_flags & 1;
+    submipoptions.mip_heuristic_run_rens = (spec->heur_flags >> 1) & 1;
+    submipoptions.mip_heuristic_run_root_reduced_cost =
+        (spec->heur_flags >> 2) & 1;
   }
-
-  // check if only root presolve is allowed
-  if (submipoptions.mip_root_presolve_only)
-    submipoptions.presolve = kHighsOffString;
-  else
-    submipoptions.presolve = kHighsOnString;
-  submipoptions.mip_detect_symmetry = false;
-  submipoptions.mip_heuristic_effort = 0.8;
-  // a concurrent LNS helper's crossover sub-MIP: the main solver's
-  // settings of the heuristics that solve sub-MIPs
-  if (heurFlags >= 0) {
-    submipoptions.mip_heuristic_run_rins = heurFlags & 1;
-    submipoptions.mip_heuristic_run_rens = (heurFlags >> 1) & 1;
-    submipoptions.mip_heuristic_run_root_reduced_cost = (heurFlags >> 2) & 1;
-  }
-  // setup solver and run it
 
   HighsSolution solution;
   solution.value_valid = false;
   solution.dual_valid = false;
-  if (start) {
-    solution.col_value.assign(start, start + mipsolver.numCol());
+  if (spec->start_cols) {
+    solution.col_value.assign(spec->start_cols,
+                              spec->start_cols + mipsolver.numCol());
+    solution.row_value.assign(spec->start_rows,
+                              spec->start_rows + spec->num_start_rows);
     solution.value_valid = true;
-    calculateRowValuesQuad(*mipsolver.model_, solution);
   }
   if (!mipsolver.submip && !mipsolver.mipdata_->parallelLockActive()) {
     mipsolver.profiling_->start(kMipClockSubMipSolve);
@@ -298,7 +277,7 @@ static void subMip(void* m, void* w, void* lp, const double* lo,
   HighsMipSolver submipsolver(*mipsolver.callback_, submipoptions, submip,
                               solution, true, mipsolver.submip_level + 1);
   submipsolver.initialiseTerminator(mipsolver);
-  submipsolver.lns_target_reached_ = lnsTarget;
+  submipsolver.lns_target_reached_ = spec->lns_target;
   submipsolver.rootbasis = &basis;
   HighsPseudocostInitialization pscostinit(worker.getPseudocost(), 1);
   submipsolver.pscostinit = &pscostinit;
