@@ -112,3 +112,20 @@ $I/qptestnw.lp
 -hx
 --help -- -x
 --threads=7 --random_seed=" 3" --time_limit=" 2.5" --run_crossover=off $I/afiro.mps
+--options_file ranging.set --solution_file s.sol $I/adlittle.mps
+--options_file dev.set --ranging on $I/afiro.mps
+--options_file ranging.set --solution_file s.sol --presolve off $I/egout.mps
+--read_basis_file $F/adl.bas $I/adlittle.mps
+--read_basis_file $F/adl.bas $I/afiro.mps
+--read_basis_file $F/adl_v1.bas $I/adlittle.mps
+--read_basis_file $F/adl_badname.bas $I/adlittle.mps
+--read_basis_file $F/adl_v7.bas $I/adlittle.mps
+--read_solution_file $F/adl.sol $I/adlittle.mps
+--read_solution_file $F/adl.sol $I/afiro.mps
+--read_solution_file $F/adl_sparse.sol $I/adlittle.mps
+--read_solution_file $F/adl_miplib.sol $I/adlittle.mps
+--read_solution_file $F/bad_miplib.sol $I/adlittle.mps
+--read_solution_file $F/adl_short.sol $I/adlittle.mps
+--read_solution_file $F/egout.sol $I/egout.mps
+--read_solution_file $F/adl.bas $I/adlittle.mps
+--read_basis_file $F/adl.sol $I/adlittle.mps

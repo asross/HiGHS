@@ -14,6 +14,9 @@
 #include "../extern/zstr/zstr.hpp"
 #endif
 
+#ifndef HIGHS_RUST
+// The free format MPS parser is Rust (rust/src/io/mps.rs, called from
+// FilereaderMps.cpp)
 namespace free_format_parser {
 
 const bool kNoClockCalls = false;
@@ -2111,3 +2114,4 @@ double HMpsFF::getValue(const std::string& word, bool& is_nan,
   return value;
 }
 }  // namespace free_format_parser
+#endif

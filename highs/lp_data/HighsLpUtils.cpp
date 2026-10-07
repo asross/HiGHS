@@ -2212,6 +2212,8 @@ void analyseLp(const HighsLogOptions& log_options, const HighsLp& lp) {
                      lp.row_upper_);
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/readers.rs)
 HighsStatus readSolutionFile(const std::string& filename,
                              const HighsOptions& options, HighsLp& lp,
                              HighsBasis& basis, HighsSolution& solution,
@@ -2624,6 +2626,7 @@ bool readSolutionFileIdDoubleIntLineOk(std::string& id, double& value,
   in_file >> index;  // double value
   return true;
 }
+#endif
 
 void assessColPrimalSolution(const HighsOptions& options, const double primal,
                              const double lower, const double upper,
@@ -2879,6 +2882,8 @@ HighsStatus getIndexFromName(
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/readers.rs)
 HighsStatus readBasisFile(const HighsLogOptions& log_options, HighsLp& lp,
                           HighsBasis& basis, const std::string& filename) {
   // Opens a basis file as an ifstream
@@ -3016,6 +3021,7 @@ HighsStatus readBasisStream(const HighsLogOptions& log_options, HighsLp& lp,
   }
   return return_status;
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
@@ -3524,6 +3530,8 @@ void removeRowsOfCountOne(const HighsLogOptions& log_options, HighsLp& lp) {
                "Removed %d rows of count 1\n", (int)num_row_count_1);
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
 void getSubVectors(const HighsIndexCollection& index_collection,
                    const HighsInt data_dim, const double* data0,
                    const double* data1, const double* data2,
@@ -3716,6 +3724,7 @@ void getSubVectorsTranspose(const HighsIndexCollection& index_collection,
     }
   }
 }
+#endif
 
 std::string highsVarTypeToString(const HighsVarType type) {
   switch (type) {

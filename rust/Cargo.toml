@@ -6,6 +6,14 @@ edition = "2021"
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+# The crest command line (the highs app's). It links the C++ part of a
+# static HIGHS_RUST build of libhighs: HIGHS_LIB_DIR=<build>/lib cargo build
+# --release --features crest (see build.rs)
+[[bin]]
+name = "crest"
+path = "src/bin/crest.rs"
+required-features = ["crest"]
+
 [features]
 # Follow libstdc++ (gcc) instead of libc++ where the C++ standard library's
 # choices show in results: heap/partial_sort tie orders, std::tuple layout
@@ -14,6 +22,8 @@ libstdcxx = []
 # Never fuse multiply-adds, like a C++ build without FMA instructions or
 # with -ffp-contract=off (default on x86_64)
 no_fma = []
+# Build the crest binary
+crest = []
 
 [profile.release]
 lto = true

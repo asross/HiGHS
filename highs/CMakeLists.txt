@@ -19,6 +19,9 @@ if(HIGHS_RUST)
   # qpsolver/a_quass.cpp calls it (perturbation and scaling are unused)
   list(REMOVE_ITEM highs_sources qpsolver/basis.cpp qpsolver/perturbation.cpp
     qpsolver/quass.cpp qpsolver/ratiotest.cpp qpsolver/scaling.cpp)
+  # The LP reader is Rust (rust/src/io/lp.rs); filereaderlp/reader.cpp is
+  # outside the unity batches, so removing it shifts none
+  list(REMOVE_ITEM highs_sources io/filereaderlp/reader.cpp)
   # With fewer sources the unity batches shift; keep the file-scope
   # `using namespace HighsExtras` of this file out of the hipo batch
   set_source_files_properties(HighsExternalApi.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
@@ -547,4 +550,20 @@ if(HIGHS_RUST)
   add_custom_target(highs_rs DEPENDS ${HIGHS_RUST_LIB})
   add_dependencies(${highs_rust_target} highs_rs)
   target_link_libraries(${highs_rust_target} ${highs_rust_link} ${HIGHS_RUST_LIB})
+
+  # The Rust command line crest (rust/src/bin/crest.rs) links the C++ of
+  # the static library (rust/build.rs); own target dir, since the crest
+  # feature would rebuild libhighs_rs
+  if(TARGET highs AND NOT BUILD_SHARED_LIBS)
+    string(REPLACE "/rust/" "/rust-crest/" crest_out ${highs_rust_out})
+    add_custom_target(crest ALL
+      COMMAND ${CMAKE_COMMAND} -E env HIGHS_LIB_DIR=$<TARGET_FILE_DIR:highs>
+              ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
+              --target-dir ${CMAKE_BINARY_DIR}/rust-crest ${highs_rust_target_args}
+              --features "crest ${HIGHS_RUST_FEATURES}" --bin crest
+      COMMAND ${CMAKE_COMMAND} -E copy ${crest_out}/crest ${CMAKE_BINARY_DIR}/bin/crest
+      WORKING_DIRECTORY ${HIGHS_RUST_DIR}
+      DEPENDS highs
+      COMMENT "Building crest")
+  endif()
 endif()

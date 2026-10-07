@@ -444,6 +444,82 @@ static void special() {
   }
 }
 
+// getCols / getRows by interval, set and mask, with the matrix column-wise
+// and row-wise (getSubVectors and getSubVectorsTranspose), and without
+// the matrix or data
+static void getColsRows(const std::string& instances) {
+  for (const char* f : {"adlittle.mps", "afiro.mps"}) {
+    Highs h;
+    h.setOptionValue("output_flag", false);
+    h.readModel(instances + "/" + f);
+    for (int rowwise = 0; rowwise < 2; rowwise++) {
+      HighsLp lp = h.getLp();
+      if (rowwise) {
+        lp.a_matrix_.ensureRowwise();
+        h.passModel(lp);
+      }
+      printf("== getColsRows %s rowwise %d (%d)\n", f, rowwise,
+             int(h.getLp().a_matrix_.isRowwise()));
+      for (int what = 0; what < 2; what++) {
+        const HighsInt dim = what ? lp.num_row_ : lp.num_col_;
+        std::vector<HighsInt> set = {1, 2, 3, 7, dim - 2, dim - 1};
+        std::vector<HighsInt> mask(dim, 0);
+        for (HighsInt i = 0; i < dim; i += 3) mask[i] = 1;
+        for (int how = 0; how < 4; how++) {
+          HighsInt num = 0, nnz = 0;
+          std::vector<double> c(dim), lo(dim), up(dim);
+          std::vector<HighsInt> start(dim + 1), index(lp.a_matrix_.numNz());
+          std::vector<double> value(lp.a_matrix_.numNz());
+          HighsStatus s;
+          if (what == 0) {
+            if (how == 0)
+              s = h.getCols(2, dim - 3, num, c.data(), lo.data(), up.data(),
+                            nnz, start.data(), index.data(), value.data());
+            else if (how == 1)
+              s = h.getCols(HighsInt(set.size()), set.data(), num, c.data(),
+                            lo.data(), up.data(), nnz, start.data(),
+                            index.data(), value.data());
+            else if (how == 2)
+              s = h.getCols(mask.data(), num, c.data(), lo.data(), up.data(),
+                            nnz, start.data(), index.data(), value.data());
+            else
+              s = h.getCols(0, dim - 1, num, nullptr, nullptr, up.data(), nnz,
+                            start.data(), nullptr, nullptr);
+          } else {
+            if (how == 0)
+              s = h.getRows(2, dim - 3, num, lo.data(), up.data(), nnz,
+                            start.data(), index.data(), value.data());
+            else if (how == 1)
+              s = h.getRows(HighsInt(set.size()), set.data(), num, lo.data(),
+                            up.data(), nnz, start.data(), index.data(),
+                            value.data());
+            else if (how == 2)
+              s = h.getRows(mask.data(), num, lo.data(), up.data(), nnz,
+                            start.data(), index.data(), value.data());
+            else
+              s = h.getRows(0, dim - 1, num, nullptr, lo.data(), nnz, nullptr,
+                            nullptr, nullptr);
+          }
+          printf("%s how %d status %d num %d nnz %d\n", what ? "rows" : "cols",
+                 how, int(s), int(num), int(nnz));
+          c.resize(num);
+          lo.resize(num);
+          up.resize(num);
+          start.resize(num);
+          index.resize(nnz);
+          value.resize(nnz);
+          sum("cost", c);
+          sum("lower", lo);
+          sum("upper", up);
+          ivec("start", start);
+          ivec("index", index);
+          sum("value", value);
+        }
+      }
+    }
+  }
+}
+
 int main(int argc, char** argv) {
   const std::string instances = argc > 1 ? argv[1] : "check/instances";
   g_instances = instances;
@@ -480,5 +556,6 @@ int main(int argc, char** argv) {
   solutionAndBasis(instances);
   presolvePostsolve(instances);
   special();
+  getColsRows(instances);
   return 0;
 }
