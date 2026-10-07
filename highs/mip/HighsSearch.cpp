@@ -2382,7 +2382,7 @@ struct SearchAccess {
     return boxShared(s(p).mipsolver.mipdata_->globalOrbits);
   }
   static HighsInt columnPosition(void* p, HighsInt col) {
-    return s(p).getSymmetries().columnPosition[col];
+    return s(p).getSymmetries().getColumnPosition(col);
   }
   static void* computeStabilizerOrbits(void* p) {
     return boxShared(s(p).getSymmetries().computeStabilizerOrbits(
