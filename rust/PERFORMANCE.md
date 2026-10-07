@@ -10,6 +10,26 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, file writers in Rust
+
+Solution (every style), basis, MPS and LP writers in Rust
+(lp_data/writers.rs, io/model_write.rs). Wall time of Highs::writeModel /
+writeSolution / writeBasis, best of 3, M1 (a solve running on other
+cores), seconds C++ -> Rust; solutions are of the LP relaxation:
+
+| model | .mps | .lp | raw | pretty | glpsol raw | glpsol pretty | basis |
+|---|---|---|---|---|---|---|---|
+| dispatch 080458 | 0.386 -> 0.220 | 0.506 -> 0.251 | 0.458 -> 0.095 | 0.464 -> 0.189 | 0.220 -> 0.061 | 0.514 -> 0.190 | 0.112 -> 0.050 |
+| blp-ar98 | 0.255 -> 0.181 | 0.327 -> 0.230 | 0.086 -> 0.015 | 0.081 -> 0.032 | 0.031 -> 0.013 | 0.107 -> 0.069 | 0.011 -> 0.004 |
+| 30n20b8 | 0.147 -> 0.078 | 0.202 -> 0.125 | 0.063 -> 0.007 | 0.097 -> 0.024 | 0.017 -> 0.006 | 0.131 -> 0.025 | 0.016 -> 0.004 |
+| 80bau3b | 0.029 -> 0.022 | 0.048 -> 0.018 | 0.050 -> 0.008 | 0.054 -> 0.013 | 0.042 -> 0.008 | 0.085 -> 0.016 | 0.007 -> 0.003 |
+
+The gain is printf (one Rust `{:.*e}` per number, no locale or stream
+machinery) and fwrite of 64 KB blocks instead of one fprintf per piece.
+The model writers keep C++ work Rust does not replace (name checks and
+hashing in Highs::writeModel, the LP writer's row-wise copy), and the
+pretty Glpsol style its getKktFailures. Files byte-identical throughout.
+
 ## 2026-10-07, presolve probing and enumeration loops in Rust
 
 runProbing's loop and enumerateSolutions in Rust (probing.rs,
