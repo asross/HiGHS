@@ -456,8 +456,8 @@ the dives and their heuristics, the restart votes, the ramp-up of the
 workers, the tree graph-LNS rounds) and cleanupSolve with the solving
 report (model status strings, getGapString, highsDoubleToString).
 processNode runs as a task of the C++ HighsMipSolver::runTask
-(`run_process_nodes`), so the parallel search and the concurrent LNS
-helper (a std::thread started in C++) keep their threading model. clang
+(`run_process_nodes`), so the parallel search keeps its threading
+model. clang
 fuses `scale * ub - 0.5`, `rel * |ub + offset| * scale - eps`,
 `abs * scale - eps`, `ub - rel * |ub + offset|`, `pdi += dt * gap`,
 `total * effort + 10000`, `lb * scale - feastol` (the integral dual
@@ -491,11 +491,27 @@ domains, pools, the sub-MIP's HighsMipSolver with its options and model),
 the pools' and pseudocosts' sync calls, the per-worker search steps (each
 a call into the Rust search, with the profiling clocks around it), the
 start of the analytic centre task (a `Highs` IPM solve) and of the
-symmetry detection, the repair LP of transformNewIntegerFeasibleSolution,
-the concurrent LNS helper (HighsConcurrentLns: start, sync, crossover with
-the main solver, root cut exchange; its thread is a std::thread that runs
-a C++ HighsMipSolver), the profiling clocks (HighsProfiling, shared with
-Highs) and HighsDebugSol (not supported).
+symmetry detection, the repair LP of transformNewIntegerFeasibleSolution, the profiling
+clocks (HighsProfiling, shared with Highs) and HighsDebugSol (not
+supported).
+
+The concurrent LNS helper is Rust (mip/concurrent.rs): its pool
+(HighsConcurrentLns: the best solution with its version, each search's
+own best until the crossover, the bounds, the stop and target flags, the
+root cuts in a OnceLock, the crossover's log state) and its thread, a
+Rust std::thread (8 MB stack, a Linux std::thread's) owned with the pool
+by the main solver (HighsMipScalars::concurrent_lns, an `Arc` shared with
+the thread; joined on stop and in ~HighsMipSolverData), and start, sync,
+crossoverWithMain, the root cut publish and import, the limit checks and
+the offers of addIncumbent. The atomics keep the C++'s orderings. C++
+keeps the object shells: the helper's options, model and root basis
+(`helper_new`), its HighsMipSolver with its single-thread scheduler,
+timer and profiling (`helper_run`, run on the Rust thread), the LP's cut
+rows (op 135) and the cut pool's addCut and separate into the LP. The
+helper's HighsMipSolver::concurrent_lns_ and a sub-MIP's
+lns_target_reached_ point to the Rust pool. Single-thread solves never
+start a helper (useConcurrentHelper, still C++ for
+std::thread::hardware_concurrency).
 
 ## The task scheduler (highs/parallel)
 

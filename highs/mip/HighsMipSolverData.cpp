@@ -193,11 +193,6 @@ double mipSetupOp(void* m, int which, void* w, int64_t i, double x) {
       ms.pscostinit = nullptr;
       d.rsRestart_.reset();
       return 0;
-    case 319:
-      if (d.concurrent_lns) d.concurrent_lns->independent = false;
-      d.syncConcurrentLns();
-      d.stopConcurrentLns();
-      return 0;
     case 320: {
       const HighsInt numCuts = HighsInt(i);
       if (numCuts > 0) d.postSolveStack.appendCutsToModel(numCuts);
@@ -1960,7 +1955,7 @@ bool HighsMipSolverData::addIncumbent(const std::vector<double>& sol,
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_add_incumbent(highs_rs::mipFns(), &rsm, sol.data(), sol.size(), solobj, solution_source, print_display_line, is_user_solution);
   }
-#endif
+#else
   assert(!parallelLockActive());
   const bool execute_mip_solution_callback =
       !is_user_solution && !mipsolver.submip &&
@@ -2072,6 +2067,7 @@ bool HighsMipSolverData::addIncumbent(const std::vector<double>& sol,
     incumbent = sol;
 
   return true;
+#endif  // HIGHS_RUST
 }
 
 static std::array<char, 22> convertToPrintString(int64_t val) {
@@ -2472,6 +2468,7 @@ bool HighsMipSolverData::useConcurrentHelper() const {
          options.mip_heuristic_run_graph_lns && options.mip_rel_gap >= 1e-3;
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::startConcurrentLns() {
   const HighsOptions& options = *mipsolver.options_mip_;
   if (concurrent_lns || !useConcurrentHelper() || !firstrootbasis.valid) return;
@@ -2660,6 +2657,7 @@ void HighsMipSolverData::stopConcurrentLns() {
   if (concurrent_lns->thread.joinable()) concurrent_lns->thread.join();
   concurrent_lns.reset();
 }
+#endif  // HIGHS_RUST
 
 void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
 #ifdef HIGHS_RUST
@@ -2669,7 +2667,7 @@ void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
                                               &worker);
     return;
   }
-#endif
+#else
   // not in a concurrent LNS helper, which only searches for solutions, nor
   // in a main solver that has one: the analytic centre (an IPX solve that
   // can take long, without checking whether the helper has closed the gap)
@@ -3304,6 +3302,7 @@ restart:
   }
   // End of HighsMipSolverData::evaluateRootNode()
   clockOff(profiling);
+#endif  // HIGHS_RUST
 }
 
 bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
@@ -3312,7 +3311,7 @@ bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_check_limits(highs_rs::mipFns(), &rsm, nodeOffset);
   }
-#endif
+#else
   const HighsOptions& options = *mipsolver.options_mip_;
 
   // A concurrent LNS helper stops when its main solver does, and the main
@@ -3421,6 +3420,7 @@ bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
   }
 
   return false;
+#endif  // HIGHS_RUST
 }
 
 #ifndef HIGHS_RUST

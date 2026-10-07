@@ -34,6 +34,7 @@ struct NodeQueue;
 struct Heuristics;
 struct CliqueTable;
 struct RedcostFixing;
+struct ConcurrentPool;
 
 // glue.rs SearchParts
 struct MipSearchParts {
@@ -122,6 +123,7 @@ struct MipOptions {
   HighsInt presolve_reduction_limit;
   bool mip_detect_symmetry;
   bool mip_improving_solution_save;
+  bool mip_concurrent_crossover;
 };
 
 // glue.rs OrigModel
@@ -216,6 +218,9 @@ struct MipData {
   MipSolutionPtrs solution;
   MipOrigModel orig;
   MipOptions opts;
+  const ConcurrentPool* helper_pool;
+  const ConcurrentPool* lns_target;
+  const Heuristics* heur;
 };
 
 // glue.rs CMipFns
@@ -262,8 +267,8 @@ struct MipFns {
   HighsInt (*num_workers)(void*);
   void (*worker_view)(void*, MipWorkerData*);
   void (*sub_mip)(void*, void*, void*, const double*, const double*, HighsInt,
-                  HighsInt, HighsInt, const double*, double, double,
-                  MipSubMipResult*, double*);
+                  HighsInt, HighsInt, const double*, double, double, int,
+                  const ConcurrentPool*, MipSubMipResult*, double*);
   double (*op)(void*, int, void*, int64_t, double);
   void (*scratch_solution)(void*, const double*, HighsInt, MipScratchView*);
   void (*set_vec)(void*, int, const void*, HighsInt);
@@ -274,8 +279,10 @@ struct MipFns {
   void (*set_cleanup_result)(void*, const void*);
   const char* (*model_name)(void*, HighsInt*);
   HighsInt (*max_submip_level)(void*);
-  void (*sync_concurrent_lns)(void*);
-  void (*crossover_with_main)(void*, void*);
+  void* (*helper_new)(void*, double);
+  void (*helper_run)(void*, const ConcurrentPool*);
+  void (*add_root_cut)(void*, const HighsInt*, const double*, HighsInt, double,
+                       bool);
   const void* (*vec_ptr)(void*, int, HighsInt*);
   void (*set_basis)(void*, int, const uint8_t*, HighsInt, const uint8_t*,
                     HighsInt, bool, bool, bool);
@@ -314,6 +321,13 @@ void mipWorkerScratch(void* m, void* w, const double* x, HighsInt n,
                       MipScratchView* v);
 
 extern "C" {
+void highs_rs_concurrent_lns_set_root_cuts(const ConcurrentPool* pool,
+                                           const HighsInt* start,
+                                           HighsInt num_cuts,
+                                           const HighsInt* index,
+                                           const double* value, HighsInt nnz,
+                                           const double* rhs,
+                                           const uint8_t* integral);
 Heuristics* highs_rs_heur_new(HighsInt seed);
 void highs_rs_heur_free(Heuristics* h);
 void highs_rs_heur_run(Heuristics* h, const MipFns* f, const MipData* m,

@@ -43,7 +43,7 @@ namespace mipglue {
 static_assert(sizeof(MipHeurStats) == HighsMipWorker::kHeurStatsSize,
               "HighsMipWorker::HeurStatistics layout");
 static_assert(sizeof(HighsModelStatus) == sizeof(int), "model status is int");
-static_assert(sizeof(HighsMipScalars) == 368, "HighsMipScalars layout");
+static_assert(sizeof(HighsMipScalars) == 376, "HighsMipScalars layout");
 static_assert(offsetof(HighsMipScalars, primal_dual_integral) == 320,
               "HighsMipScalars layout");
 
@@ -222,7 +222,9 @@ static void workerView(void* w, MipWorkerData* d) {
 static void subMip(void* m, void* w, void* lp, const double* lo,
                    const double* up, HighsInt maxleaves, HighsInt maxnodes,
                    HighsInt stallnodes, const double* start, double timeCap,
-                   double absGap, MipSubMipResult* r, double* sol) {
+                   double absGap, int heurFlags,
+                   const ConcurrentPool* lnsTarget, MipSubMipResult* r,
+                   double* sol) {
   const HighsMipSolver& mipsolver = mip(m);
   HighsMipWorker& worker = wk(w);
   const HighsLp& lpModel = lp ? lpr(lp).getLp() : *mipsolver.model_;
@@ -272,13 +274,12 @@ static void subMip(void* m, void* w, void* lp, const double* lo,
     submipoptions.presolve = kHighsOnString;
   submipoptions.mip_detect_symmetry = false;
   submipoptions.mip_heuristic_effort = 0.8;
-  // a concurrent LNS helper runs without the heuristics that solve
-  // sub-MIPs; its crossover sub-MIP gets the main solver's settings
-  if (start && mipsolver.concurrent_lns_) {
-    submipoptions.mip_heuristic_run_rins = mipsolver.concurrent_lns_->runRins;
-    submipoptions.mip_heuristic_run_rens = mipsolver.concurrent_lns_->runRens;
-    submipoptions.mip_heuristic_run_root_reduced_cost =
-        mipsolver.concurrent_lns_->runRootReducedCost;
+  // a concurrent LNS helper's crossover sub-MIP: the main solver's
+  // settings of the heuristics that solve sub-MIPs
+  if (heurFlags >= 0) {
+    submipoptions.mip_heuristic_run_rins = heurFlags & 1;
+    submipoptions.mip_heuristic_run_rens = (heurFlags >> 1) & 1;
+    submipoptions.mip_heuristic_run_root_reduced_cost = (heurFlags >> 2) & 1;
   }
   // setup solver and run it
 
@@ -297,10 +298,7 @@ static void subMip(void* m, void* w, void* lp, const double* lo,
   HighsMipSolver submipsolver(*mipsolver.callback_, submipoptions, submip,
                               solution, true, mipsolver.submip_level + 1);
   submipsolver.initialiseTerminator(mipsolver);
-  submipsolver.lns_target_reached_ =
-      mipsolver.mipdata_->concurrent_lns
-          ? &mipsolver.mipdata_->concurrent_lns->targetReached
-          : mipsolver.lns_target_reached_;
+  submipsolver.lns_target_reached_ = lnsTarget;
   submipsolver.rootbasis = &basis;
   HighsPseudocostInitialization pscostinit(worker.getPseudocost(), 1);
   submipsolver.pscostinit = &pscostinit;
@@ -560,26 +558,36 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       }
       return 0;
     }
-    case 129:
-      d.startConcurrentLns();
-      return 0;
-    case 130:
-      d.syncConcurrentLns();
-      return 0;
-    case 131:
-      d.crossoverWithMain(wk(w));
-      return 0;
-    case 132:
-      if (d.concurrent_lns && d.concurrent_lns->independent) {
-        d.syncConcurrentLns();
-        d.concurrent_lns->mainQuickDone = true;
+    case 133: {
+      HighsCutSet cutset;
+      d.getCutPool().separate(d.getLp().getSolution().col_value, d.getDomain(),
+                              cutset, d.feastol, d.cutpools);
+      if (cutset.empty()) return 0;
+      d.getLp().addCuts(cutset);
+      return 1;
+    }
+    case 135: {
+      // the LP's cut rows for the main solver
+      HighsLpRelaxation& lp = d.getLp();
+      std::vector<HighsInt> start{0}, index;
+      std::vector<double> value, rhs;
+      std::vector<uint8_t> integral;
+      for (HighsInt row = ms.numRow(); row < lp.numRows(); ++row) {
+        HighsInt len;
+        const HighsInt* inds;
+        const double* vals;
+        lp.getRow(row, len, inds, vals);
+        index.insert(index.end(), inds, inds + len);
+        value.insert(value.end(), vals, vals + len);
+        start.push_back(index.size());
+        rhs.push_back(lp.getLp().row_upper_[row]);
+        integral.push_back(lp.isRowIntegral(row));
       }
+      highs_rs_concurrent_lns_set_root_cuts(
+          ms.concurrent_lns_, start.data(), rhs.size(), index.data(),
+          value.data(), index.size(), rhs.data(), integral.data());
       return 0;
-    case 134:
-      return d.importRootCuts(wk(w));
-    case 135:
-      d.publishRootCuts();
-      return 0;
+    }
     case 137:
       d.nodequeue.emplaceNode(
           std::vector<HighsDomainChange>(), std::vector<HighsInt>(),
@@ -602,8 +610,6 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       return ms.terminate();
     case 143:
       return d.getLp().getAvgSolveIters();
-    case 144:
-      return ms.concurrent_lns_ && ms.concurrent_lns_->independent;
     case 146:
       return d.getLp().getLpSolver().getBasis().valid;
     case 147:
@@ -628,18 +634,7 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
     case 0:
       return ms.timer_.read();
     case 1:
-      // the order of HighsMipSolverData::checkLimits
-      if (ms.concurrent_lns_ &&
-          ms.concurrent_lns_->stop.load(std::memory_order_relaxed))
-        return 1;
-      if (d.concurrent_lns &&
-          d.concurrent_lns->targetReached.load(std::memory_order_relaxed))
-        return 2;
-      if (ms.lns_target_reached_ &&
-          ms.lns_target_reached_->load(std::memory_order_relaxed))
-        return 4;
-      if (d.terminatorActive() && d.terminatorTerminated()) return 8;
-      return 0;
+      return d.terminatorActive() && d.terminatorTerminated();
     case 4:
       return d.getCutPool().getNumCuts();
     case 5:
@@ -650,13 +645,6 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
       return d.objectiveFunction.integralScale();
     case 8:
       return d.cliquetable.getSubstitutions().size();
-    case 12:
-      ms.concurrent_lns_->offer(d.incumbent, x);
-      return 0;
-    case 13:
-      if (ms.concurrent_lns_->mainLowerBound.load() > x)
-        ms.concurrent_lns_->targetReached = true;
-      return 0;
     case 14:
       for (HighsMipWorker& worker : d.workers) {
         if (i == 0) {
@@ -808,11 +796,60 @@ static const HighsInt* intVec(void* m, int which, HighsInt* n) {
   return v.data();
 }
 static void refill(void* m, MipData* out) { *out = mipData(mip(m)); }
-static void syncConcurrentLns(void* m) {
-  mip(m).mipdata_->syncConcurrentLns();
+
+// The concurrent LNS helper (rust/src/mip/concurrent.rs): its options,
+// model and root basis, copied by the main solver
+struct HelperData {
+  HighsOptions options;
+  HighsLp model;
+  HighsBasis basis;
+  HighsCallback* callback;
+};
+static void* helperNew(void* m, double time_left) {
+  const HighsMipSolver& mipsolver = mip(m);
+  const HighsOptions& options = *mipsolver.options_mip_;
+  HelperData* data = new HelperData();
+  data->options = options;
+  data->options.presolve = kHighsOffString;
+  data->options.output_flag = false;
+  data->options.mip_improving_solution_save = false;
+  data->options.mip_detect_symmetry = false;
+  data->options.mip_heuristic_run_rens = false;
+  data->options.mip_heuristic_run_rins = false;
+  data->options.mip_heuristic_run_root_reduced_cost = false;
+  data->options.mip_heuristic_run_feasibility_jump = false;
+  data->options.mip_concurrent_helper = false;
+  data->options.random_seed = options.random_seed + 1;
+  data->options.time_limit = time_left;
+  data->model = *mipsolver.model_;
+  data->basis = mipsolver.mipdata_->firstrootbasis;
+  data->callback = mipsolver.callback_;
+  return data;
 }
-static void crossoverWithMain(void* m, void* w) {
-  mip(m).mipdata_->crossoverWithMain(wk(w));
+// in the helper's thread: its own (single thread) task scheduler and
+// profiling, and its solver
+static void helperRun(void* d, const ConcurrentPool* pool) {
+  std::unique_ptr<HelperData> data(static_cast<HelperData*>(d));
+  highs::parallel::initialize_scheduler(1);
+  HighsTimer timer;
+  HighsProfiling profiling;
+  profiling.multi_threaded = false;
+  profiling.initialize(timer, false, false);
+  HighsSolution solution;
+  solution.value_valid = false;
+  HighsMipSolver helper(*data->callback, data->options, data->model, solution,
+                        true, 1);
+  helper.concurrent_lns_ = pool;
+  helper.rootbasis = &data->basis;
+  helper.setProfiling(&profiling);
+  helper.run();
+}
+static void addRootCut(void* m, const HighsInt* inds, const double* vals,
+                       HighsInt len, double rhs, bool integral) {
+  const HighsMipSolver& ms = mip(m);
+  ms.mipdata_->getCutPool().addCut(ms, const_cast<HighsInt*>(inds),
+                                   const_cast<double*>(vals), len, rhs,
+                                   integral, true, false);
 }
 
 static const MipFns fns = {
@@ -868,8 +905,9 @@ static const MipFns fns = {
     mipSetCleanupResult,
     mipModelName,
     mipMaxSubmipLevel,
-    syncConcurrentLns,
-    crossoverWithMain,
+    helperNew,
+    helperRun,
+    addRootCut,
     mipVecPtr,
     mipSetBasis,
     mipCallback,
@@ -896,6 +934,9 @@ MipData mipData(const HighsMipSolver& mipsolver) {
   m.orig_maximize = mipsolver.orig_model_->sense_ == ObjSense::kMaximize;
   m.submip = mipsolver.submip;
   m.concurrent_helper = mipsolver.concurrent_lns_ != nullptr;
+  m.helper_pool = mipsolver.concurrent_lns_;
+  m.lns_target = mipsolver.lns_target_reached_;
+  m.heur = d.heuristics.rust();
   m.root_presolve_only = mipsolver.options_mip_->mip_root_presolve_only;
   m.a_start = &model.a_matrix_.start_;
   m.a_index = &model.a_matrix_.index_;
@@ -966,6 +1007,7 @@ MipData mipData(const HighsMipSolver& mipsolver) {
   m.opts.presolve_reduction_limit = o.presolve_reduction_limit;
   m.opts.mip_detect_symmetry = o.mip_detect_symmetry;
   m.opts.mip_improving_solution_save = o.mip_improving_solution_save;
+  m.opts.mip_concurrent_crossover = o.mip_concurrent_crossover;
   return m;
 }
 }  // namespace highs_rs

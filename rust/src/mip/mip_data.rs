@@ -48,9 +48,7 @@ pub mod src {
 pub mod op {
     /// timer_.read()
     pub const TIMER_READ: i32 = 0;
-    /// bit 0: the concurrent helper is to stop, 1: its main solver's target
-    /// is reached, 2: lns_target_reached_, 3: the terminator stopped this
-    /// instance
+    /// the terminator stopped this instance
     pub const LIMIT_FLAGS: i32 = 1;
     /// getCutPool().getNumCuts()
     pub const NUM_CUTS: i32 = 4;
@@ -62,10 +60,6 @@ pub mod op {
     pub const OBJ_INT_SCALE: i32 = 7;
     /// cliquetable.getSubstitutions().size()
     pub const NUM_SUBSTITUTIONS: i32 = 8;
-    /// the concurrent helper pool: offer the incumbent with objective x
-    pub const CONCURRENT_OFFER: i32 = 12;
-    /// the helper's main solver's lower bound is above x: target reached
-    pub const CONCURRENT_TARGET: i32 = 13;
     /// workers' upper_bound = x (i 0), upper_limit and optimality_limit
     /// (i 1)
     pub const SYNC_WORKERS: i32 = 14;
@@ -348,8 +342,7 @@ impl MipData {
 
     /// checkLimits
     pub fn check_limits_rs(&self, node_offset: i64) -> bool {
-        let flags = self.op(op::LIMIT_FLAGS, None, 0, 0.0) as i64;
-        if flags != 0 {
+        if self.concurrent_limit() || self.op(op::LIMIT_FLAGS, None, 0, 0.0) != 0.0 {
             return true;
         }
         // possible user interrupt
@@ -914,9 +907,7 @@ impl MipData {
                 self.update_primal_dual_integral(lb, lb, prev_upper_bound, sc.upper_bound, true, true);
             }
             glue::set_vec(self, vec::INCUMBENT, sol);
-            if self.concurrent_helper {
-                self.op(op::CONCURRENT_OFFER, None, 0, sc.upper_bound);
-            }
+            self.concurrent_offer(sc.upper_bound);
             let new_upper_limit = self.compute_new_upper_limit(solobj, 0.0, 0.0);
             if !is_user_solution && !self.submip {
                 self.save_report_mip_solution(new_upper_limit);
@@ -929,9 +920,7 @@ impl MipData {
                 self.nodequeue().set_optimality_limit(sc.optimality_limit);
                 // a helper's solution within the target gap of its main
                 // solver's bound finishes the main solve
-                if self.concurrent_helper {
-                    self.op(op::CONCURRENT_TARGET, None, 0, sc.optimality_limit);
-                }
+                self.concurrent_target(sc.optimality_limit);
                 self.op(op::SYNC_WORKERS, None, 1, 0.0);
                 self.op(op::DEBUG_NEW_INCUMBENT, None, 0, 0.0);
                 let gd = self.domain();

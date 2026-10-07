@@ -17,6 +17,9 @@
 
 struct HighsMipSolverData;
 struct HighsConcurrentLns;
+namespace highs_rs {
+struct ConcurrentPool;
+}
 class HighsCutPool;
 struct HighsPseudocostInitialization;
 class HighsCliqueTable;
@@ -64,11 +67,21 @@ class HighsMipSolver {
   HighsInt submip_level;
   HighsInt max_submip_level;
   const HighsBasis* rootbasis;
+#ifdef HIGHS_RUST
+  // set for a concurrent LNS helper: the pool shared with the main solver
+  // (rust/src/mip/concurrent.rs)
+  const highs_rs::ConcurrentPool* concurrent_lns_ = nullptr;
+  // for a sub-MIP of a main solver with a concurrent LNS helper: the pool
+  // whose target reached (the helper has closed the main solver's gap)
+  // ends the sub-MIP too
+  const highs_rs::ConcurrentPool* lns_target_reached_ = nullptr;
+#else
   // set for a concurrent LNS helper: the pool shared with the main solver
   HighsConcurrentLns* concurrent_lns_ = nullptr;
   // for a sub-MIP of a main solver with a concurrent LNS helper: set once
   // the helper has closed the main solver's gap, which ends the sub-MIP too
   const std::atomic<bool>* lns_target_reached_ = nullptr;
+#endif
   const HighsPseudocostInitialization* pscostinit;
   const HighsCliqueTable* clqtableinit;
   const HighsImplications* implicinit;

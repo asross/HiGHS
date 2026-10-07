@@ -117,9 +117,6 @@ pub mod op {
     pub const TREE_GRAPH_LNS: i32 = 251;
     /// the solve's end in C++ (before cleanupSolve): flags of the solve
     pub const CLEANUP_START: i32 = 252;
-    /// the concurrent helper: its lower bound (into the solve), stop
-    pub const CONCURRENT_HELPER_BOUND: i32 = 253;
-    pub const STOP_CONCURRENT_LNS: i32 = 254;
     /// terminatorActive / terminatorTerminated / terminatorTerminate
     pub const TERMINATOR: i32 = 255;
     /// the end of cleanupSolve in C++: the solver's result fields from the
@@ -517,7 +514,7 @@ unsafe fn search(m: *mut MipData) {
         let mut root_node = true; // don't separate the root node again
         let mut node_lim: i32 = if max_num_workers > 1 { 1 } else { IINF }; // for ramp up
         while md.nodequeue().num_active_nodes() != 0 {
-            md.op(rop::SYNC_CONCURRENT_LNS, None, 0, 0.0);
+            md.sync_concurrent_lns();
             // a graph LNS round once the tree search has had its share
             let sc = md.sc();
             if sc.lns_tree_next >= 0
@@ -815,11 +812,11 @@ pub fn gap_string(gap: f64, primal_bound: f64, rel_gap: f64, abs_gap: f64, feast
 pub fn cleanup_solve(md: &MipData) {
     // take the helper's best solution even if no crossover took place, and
     // its root bound, valid for the whole solve
-    let helper_bound = md.d(op::CONCURRENT_HELPER_BOUND, 0, 0.0);
+    let helper_bound = md.concurrent_final_sync();
     if helper_bound > md.sc().lower_bound {
         md.update_lower_bound_ex(helper_bound, true, true);
     }
-    md.d(op::STOP_CONCURRENT_LNS, 0, 0.0);
+    md.stop_concurrent_lns();
     let sc = md.sc();
     // a solution of the helper may have closed the gap after a limit
     // stopped the search

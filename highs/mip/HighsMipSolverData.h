@@ -35,6 +35,13 @@
 #include "presolve/HighsSymmetry.h"
 #include "util/HighsTimer.h"
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct ConcurrentMain;
+// rust/src/mip/concurrent.rs: stops and frees the main solver's helper
+extern "C" void highs_rs_concurrent_lns_stop(ConcurrentMain** main);
+}  // namespace highs_rs
+#else
 // Incumbents exchanged between the MIP solver and a concurrent LNS
 // helper: a second MIP solver instance on a copy of the presolved model,
 // run in its own thread, that only does the root LP, cuts and graph LNS
@@ -105,6 +112,7 @@ struct HighsConcurrentLns {
     return true;
   }
 };
+#endif  // HIGHS_RUST
 
 struct HighsPrimaDualIntegral {
   double value;
@@ -170,6 +178,10 @@ struct HighsMipScalars {
   bool lns_quick_improved = false;
   bool crossoverStartLogged = false;
   bool rootCutsImported = false;
+#ifdef HIGHS_RUST
+  // the main solver's concurrent LNS helper (rust/src/mip/concurrent.rs)
+  highs_rs::ConcurrentMain* concurrent_lns = nullptr;
+#endif
 };
 
 enum MipSolutionSource : int {
@@ -301,7 +313,13 @@ struct HighsMipSolverData {
 #endif
 
   HighsMipSolverData(HighsMipSolver& mipsolver);
+#ifdef HIGHS_RUST
+  ~HighsMipSolverData() {
+    highs_rs::highs_rs_concurrent_lns_stop(&sc_.concurrent_lns);
+  }
+#else
   ~HighsMipSolverData() { stopConcurrentLns(); }
+#endif
 
   // The main solver owns its concurrent LNS helper; the helper reaches the
   // same pool through mipsolver.concurrent_lns_
@@ -316,10 +334,11 @@ struct HighsMipSolverData {
   // the LP iterations of the quick graph-LNS search
   int64_t& lns_quick_lp_iterations;
 
-  std::unique_ptr<HighsConcurrentLns> concurrent_lns;
   int64_t& concurrent_lns_seen;
   bool& crossoverStartLogged;
   bool useConcurrentHelper() const;
+#ifndef HIGHS_RUST
+  std::unique_ptr<HighsConcurrentLns> concurrent_lns;
   void startConcurrentLns();
   // in a concurrent LNS helper: cross its incumbent with the main solver's
   void crossoverWithMain(HighsMipWorker& worker);
@@ -327,6 +346,7 @@ struct HighsMipSolverData {
   void stopConcurrentLns();
   void publishRootCuts();
   bool importRootCuts(HighsMipWorker& worker);
+#endif
   bool& rootCutsImported;
 
   bool solutionRowFeasible(const std::vector<double>& solution) const;

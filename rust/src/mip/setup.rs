@@ -61,9 +61,6 @@ pub mod op {
     /// cleared)
     pub const RESTART_CTX_NEW: i32 = 317;
     pub const RESTART_CTX_FREE: i32 = 318;
-    /// the concurrent helper before a restart: no longer independent,
-    /// synced, stopped
-    pub const RESTART_STOP_CONCURRENT: i32 = 319;
     /// the cuts (i of them) appended to the model, presolvedModel = the LP
     /// (with its integrality and offset kept)
     pub const RESTART_MODEL: i32 = 320;
@@ -918,7 +915,8 @@ impl MipData {
 /// refilled after it)
 pub fn perform_restart(md: &MipData) {
     // the helper's solutions would be for the model before the restart
-    md.o(op::RESTART_STOP_CONCURRENT);
+    md.concurrent_final_sync();
+    md.stop_concurrent_lns();
     md.o(op::RESTART_CTX_NEW);
     let sc = md.sc();
     sc.num_restarts += 1;

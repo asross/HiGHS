@@ -149,7 +149,10 @@ pub struct CMipFns {
     /// solveSubMip's run: the HighsMipSolver of the sub-MIP. `lp` is a
     /// HighsLpRelaxation whose LP and basis are used, or null for the model
     /// and the first root basis; `start` (num_col values) or null; abs_gap
-    /// NaN to keep the caller's gaps. The solution goes to `sol`.
+    /// NaN to keep the caller's gaps; `heur` the settings of RINS, RENS
+    /// and root reduced cost (bits 0-2) or -1 to keep the caller's;
+    /// `lns_target` the sub-MIP's lns_target_reached_. The solution goes to
+    /// `sol`.
     pub sub_mip: unsafe extern "C" fn(
         P,
         P,
@@ -162,6 +165,8 @@ pub struct CMipFns {
         *const f64,
         f64,
         f64,
+        i32,
+        *const super::concurrent::Pool,
         *mut SubMipResult,
         *mut f64,
     ),
@@ -187,8 +192,14 @@ pub struct CMipFns {
     /// the model name (data, length) and max_submip_level
     pub model_name: unsafe extern "C" fn(P, *mut i32) -> *const u8,
     pub max_submip_level: unsafe extern "C" fn(P) -> i32,
-    pub sync_concurrent_lns: unsafe extern "C" fn(P),
-    pub crossover_with_main: unsafe extern "C" fn(P, P),
+    /// the concurrent helper's options, model and root basis (with the
+    /// time left) for helper_run
+    pub helper_new: unsafe extern "C" fn(P, f64) -> P,
+    /// runs the helper's HighsMipSolver on the data of helper_new (which
+    /// it frees) with the pool (concurrent.rs) in its own thread
+    pub helper_run: unsafe extern "C" fn(P, *const c_void),
+    /// getCutPool().addCut of a helper's root cut
+    pub add_root_cut: unsafe extern "C" fn(P, *const i32, *const f64, i32, f64, bool),
     /// the data and size of the solver's vector `which` (setup::vptr), or
     /// null
     pub vec_ptr: unsafe extern "C" fn(P, i32, *mut i32) -> *const c_void,
@@ -294,6 +305,8 @@ pub struct MipScalars {
     pub lns_quick_improved: bool,
     pub crossover_start_logged: bool,
     pub root_cuts_imported: bool,
+    /// the main solver's concurrent helper (concurrent.rs), or null
+    pub concurrent_lns: *mut super::concurrent::Main,
 }
 
 /// The options the solver reads (a copy per call)
@@ -330,6 +343,7 @@ pub struct MipOptions {
     pub presolve_reduction_limit: i32,
     pub mip_detect_symmetry: bool,
     pub mip_improving_solution_save: bool,
+    pub mip_concurrent_crossover: bool,
 }
 
 /// The original model (for solutions in the original space)
@@ -408,6 +422,12 @@ pub struct MipData {
     pub solution: SolutionPtrs,
     pub orig: OrigModel,
     pub opts: MipOptions,
+    /// in a concurrent helper: the pool shared with its main solver
+    pub helper_pool: *const super::concurrent::Pool,
+    /// in a sub-MIP: the pool whose target reached ends the solve
+    pub lns_target: *const super::concurrent::Pool,
+    /// the solver's heuristics
+    pub heur: *const super::primal::Heur,
 }
 
 macro_rules! vecs {
@@ -465,12 +485,6 @@ impl MipData {
     pub fn redcost(&self) -> &super::redcost::RedcostFixing {
         // SAFETY: as clique
         unsafe { &*self.redcost }
-    }
-    pub fn sync_concurrent_lns(&self) {
-        c!(sync_concurrent_lns, self.mipsolver)
-    }
-    pub fn crossover_with_main(&self, w: &Worker) {
-        c!(crossover_with_main, self.mipsolver, w.p)
     }
 }
 
@@ -846,6 +860,13 @@ pub fn sub_mip(
         start.map_or(std::ptr::null(), |s| s.as_ptr()),
         time_cap,
         abs_gap,
+        // a concurrent helper runs without the heuristics that solve
+        // sub-MIPs; its crossover sub-MIP gets the main solver's settings
+        match (start, m.helper_lns()) {
+            (Some(_), Some(p)) => p.run_rins as i32 | (p.run_rens as i32) << 1 | (p.run_root_reduced_cost as i32) << 2,
+            _ => -1,
+        },
+        m.sub_mip_lns_target(),
         &mut r,
         sol.as_mut_ptr()
     );
@@ -930,10 +951,20 @@ mod tests {
     #[test]
     fn layouts() {
         // HighsMipScalars (static_assert in HighsPrimalHeuristics.cpp)
-        assert_eq!(std::mem::size_of::<MipScalars>(), 368);
+        assert_eq!(std::mem::size_of::<MipScalars>(), 376);
         assert_eq!(std::mem::offset_of!(MipScalars, pdi), 320);
         assert_eq!(std::mem::size_of::<HeurStats>(), 72);
     }
+}
+
+/// The concurrent helper's data (CMipFns::helper_new)
+pub fn fns_call_helper_new(m: &MipData, time_left: f64) -> P {
+    c!(helper_new, m.mipsolver, time_left)
+}
+
+/// A helper's root cut into the cut pool (CMipFns::add_root_cut)
+pub fn add_root_cut(m: &MipData, index: &[i32], value: &[f64], rhs: f64, integral: bool) {
+    c!(add_root_cut, m.mipsolver, index.as_ptr(), value.as_ptr(), index.len() as i32, rhs, integral)
 }
 
 /// The master worker
