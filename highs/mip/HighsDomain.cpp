@@ -880,6 +880,59 @@ void HighsDomain::CutpoolPropagation::updateActivityUbChange(
 #endif  // HIGHS_RUST
 #endif  // HIGHS_RUST
 
+#ifdef HIGHS_RUST
+// The objective propagation's state is Rust's (rust/src/mip/objprop.rs
+// ObjPropState): built there on the domain's bounds, owned by this shell
+HighsDomain::ObjectivePropagation::ObjectivePropagation(HighsDomain* domain)
+    : domain(domain),
+      objFunc(&domain->mipsolver->mipdata_->objectiveFunction),
+      cost(domain->mipsolver->model_->col_cost_.data()) {
+  const highs_rs::Bounds b = highs_rs::DomainAccess::bounds(*domain);
+  const auto& nz = objFunc->getObjectiveNonzeros();
+  const auto& starts = objFunc->getCliquePartitionStarts();
+  const auto& packed = objFunc->getObjectiveValuesPacked();
+  rs_ = highs_rs::highs_rs_objprop_new(
+      &b, cost, domain->mipsolver->numCol(), nz.data(), nz.size(),
+      starts.data(), objFunc->getNumCliquePartitions() + 1, packed.data(),
+      packed.size());
+}
+
+HighsDomain::ObjectivePropagation::ObjectivePropagation(
+    const ObjectivePropagation& other)
+    : domain(other.domain),
+      objFunc(other.objFunc),
+      cost(other.cost),
+      rs_(other.rs_ ? highs_rs::highs_rs_objprop_clone(other.rs_) : nullptr) {
+}
+
+HighsDomain::ObjectivePropagation& HighsDomain::ObjectivePropagation::operator=(
+    const ObjectivePropagation& other) {
+  if (this == &other) return *this;
+  highs_rs::highs_rs_objprop_free(rs_);
+  domain = other.domain;
+  objFunc = other.objFunc;
+  cost = other.cost;
+  rs_ = other.rs_ ? highs_rs::highs_rs_objprop_clone(other.rs_) : nullptr;
+  return *this;
+}
+
+HighsDomain::ObjectivePropagation::~ObjectivePropagation() {
+  highs_rs::highs_rs_objprop_free(rs_);
+}
+
+double HighsDomain::ObjectivePropagation::objectiveLowerBound() const {
+  return rs_->num_inf_obj_lower == 0 ? double(rs_->objective_lower)
+                                     : -kHighsInf;
+}
+
+void HighsDomain::ObjectivePropagation::getPropagationConstraint(
+    HighsInt domchgStackSize, const double*& vals, const HighsInt*& inds,
+    HighsInt& len, double& rhs, HighsInt domchgCol) {
+  highs_rs::highs_rs_domain_obj_propagation_constraint(
+      highs_rs::DomainAccess::view(*domain), domchgStackSize, domchgCol, &vals,
+      &inds, &len, &rhs);
+}
+#else
 namespace highs {
 template <>
 struct RbTreeTraits<
@@ -1065,6 +1118,7 @@ void HighsDomain::ObjectivePropagation::recomputeCapacityThreshold() {
                        domain->feastol(), domain->variableType(col)));
   }
 }
+#endif  // HIGHS_RUST
 
 #ifndef HIGHS_RUST
 void HighsDomain::ObjectivePropagation::updateActivityLbChange(
@@ -1319,6 +1373,7 @@ bool HighsDomain::ObjectivePropagation::shouldBePropagated() const {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsDomain::ObjectivePropagation::debugCheckObjectiveLower() const {
 #ifndef NDEBUG
   if (domain->infeasible_) return;
@@ -1365,6 +1420,7 @@ void HighsDomain::ObjectivePropagation::debugCheckObjectiveLower() const {
   assert(numInf == numInfObjLower);
 #endif
 }
+#endif  // HIGHS_RUST
 
 #ifndef HIGHS_RUST
 void HighsDomain::ObjectivePropagation::propagate() {

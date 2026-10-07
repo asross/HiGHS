@@ -3,16 +3,18 @@
 //! bound changes, and the bounds it implies under the cutoff
 //! (mipdata.upper_limit). The binaries of each clique partition of the
 //! objective contribute through a red-black tree of their contributions
-//! (highs/util/HighsRbTree.h, ported exactly so that the trees, built by
-//! the C++ constructor, have the same shape and order).
+//! (highs/util/HighsRbTree.h, ported exactly so that the trees have the
+//! same shape and order). The state is Rust's ([`ObjPropState`]), built
+//! here and owned by the C++ ObjectivePropagation shell.
 
-use super::domain::{bound_range, max2, CSlice, Ctx, Dom, DomChg, LOWER, REASON_OBJECTIVE, UPPER};
-use super::domain::{Reason, INF};
+use super::domain::{bound_range, max2, Bounds, CBounds, CDomain, CSlice, Ctx, Dom, DomChg, StdVec, LOWER};
+use super::domain::{Reason, INF, REASON_OBJECTIVE, UPPER};
+use crate::ffi::sl;
 use crate::util::cdouble::CDouble;
 
 /// ObjectivePropagation::ObjectiveContribution
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Contribution {
     pub contribution: f64,
     pub col: i32,
@@ -47,7 +49,7 @@ pub struct CObjProp {
 
 /// ObjectivePropagation::PartitionCliqueData
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct CliqueData {
     multiplier: f64,
     rhs: i32,
@@ -351,6 +353,218 @@ struct Obj<'a> {
     is_propagated: &'a mut bool,
 }
 
+/// ObjectivePropagation::recomputeCapacityThreshold on the domain's bounds
+fn capacity_threshold(
+    contributions: &mut [Contribution],
+    partition_sets: &mut [[i32; 2]],
+    cost: &[f64],
+    obj_nonzeros: &[i32],
+    partition_starts: &[i32],
+    b: &Bounds,
+) -> f64 {
+    let feastol = b.feastol;
+    let np = partition_starts.len() - 1;
+    let mut cap = -feastol;
+    for i in 0..np {
+        let (worst, best) = {
+            let [root, first] = &mut partition_sets[i];
+            let t = Tree { nodes: contributions, root, first };
+            (t.first(), t.last())
+        };
+        if worst == -1 {
+            continue;
+        }
+        let col = contributions[worst as usize].col as usize;
+        if b.col_lower[col] == b.col_upper[col] {
+            continue;
+        }
+        let mut contribution = contributions[worst as usize].contribution;
+        if best != worst {
+            contribution -= contributions[best as usize].contribution;
+        }
+        cap = max2(cap, contribution * (1.0 - feastol));
+    }
+    for &c in &obj_nonzeros[partition_starts[np] as usize..] {
+        let col = c as usize;
+        cap = max2(cap, cost[col].abs() * bound_range(b.col_upper[col], b.col_lower[col], feastol, b.continuous(col)));
+    }
+    cap
+}
+
+/// The ObjectivePropagation's state, owned by the C++ shell (mirrored by
+/// highs_rs::ObjPropState)
+#[repr(C)]
+pub struct ObjPropState {
+    pub contributions: StdVec<Contribution>,
+    /// (root, first) of each partition's tree
+    pub partition_sets: StdVec<[i32; 2]>,
+    pub cons_buffer: StdVec<f64>,
+    pub clique_data: StdVec<CliqueData>,
+    pub objective_lower: CDouble,
+    pub num_inf_obj_lower: i32,
+    pub capacity_threshold: f64,
+    pub is_propagated: bool,
+}
+
+impl Clone for ObjPropState {
+    fn clone(&self) -> Self {
+        ObjPropState {
+            contributions: self.contributions.to_owned_vec(),
+            partition_sets: self.partition_sets.to_owned_vec(),
+            cons_buffer: self.cons_buffer.to_owned_vec(),
+            clique_data: self.clique_data.to_owned_vec(),
+            ..*self
+        }
+    }
+}
+
+impl Drop for ObjPropState {
+    fn drop(&mut self) {
+        // SAFETY: Rust-owned vectors
+        unsafe {
+            drop(self.contributions.take_vec());
+            drop(self.partition_sets.take_vec());
+            drop(self.cons_buffer.take_vec());
+            drop(self.clique_data.take_vec());
+        }
+    }
+}
+
+impl ObjPropState {
+    /// ObjectivePropagation(domain): for each clique partition all columns
+    /// contribute with their largest value, then the largest contribution
+    /// of each partition is removed (the trees keep the columns not fixed
+    /// to their value with the larger contribution); then the other
+    /// objective nonzeros
+    pub fn build(b: &Bounds, cost: &[f64], obj_nonzeros: &[i32], partition_starts: &[i32], packed: &[f64]) -> Self {
+        let np = partition_starts.len() - 1;
+        let mut contributions = vec![Contribution::default(); partition_starts[np] as usize];
+        let mut partition_sets = vec![[-1, -1]; np];
+        let (cons_buffer, mut clique_data) =
+            if np != 0 { (packed.to_vec(), vec![CliqueData::default(); np]) } else { (Vec::new(), Vec::new()) };
+        let mut objective_lower = CDouble::from(0.0);
+        let mut num_inf = 0;
+        for i in 0..np {
+            clique_data[i].rhs = 1;
+            for j in partition_starts[i] as usize..partition_starts[i + 1] as usize {
+                let col = obj_nonzeros[j];
+                let c = col as usize;
+                contributions[j].col = col;
+                contributions[j].partition = i as i32;
+                let link = if cost[c] > 0.0 {
+                    objective_lower += cost[c];
+                    contributions[j].contribution = cost[c];
+                    clique_data[i].rhs -= 1;
+                    b.col_lower[c] == 0.0
+                } else {
+                    contributions[j].contribution = -cost[c];
+                    b.col_upper[c] == 1.0
+                };
+                if link {
+                    let [root, first] = &mut partition_sets[i];
+                    Tree { nodes: &mut contributions, root, first }.link(j as i32);
+                }
+            }
+            let worst = partition_sets[i][1];
+            if worst != -1 {
+                objective_lower -= contributions[worst as usize].contribution;
+            }
+        }
+        for &col in &obj_nonzeros[partition_starts[np] as usize..] {
+            let c = col as usize;
+            if cost[c] > 0.0 {
+                if b.col_lower[c] == -INF {
+                    num_inf += 1;
+                } else {
+                    objective_lower += b.col_lower[c] * cost[c];
+                }
+            } else if b.col_upper[c] == INF {
+                num_inf += 1;
+            } else {
+                objective_lower += b.col_upper[c] * cost[c];
+            }
+        }
+        let capacity_threshold =
+            capacity_threshold(&mut contributions, &mut partition_sets, cost, obj_nonzeros, partition_starts, b);
+        ObjPropState {
+            contributions: StdVec::from_vec(contributions),
+            partition_sets: StdVec::from_vec(partition_sets),
+            cons_buffer: StdVec::from_vec(cons_buffer),
+            clique_data: StdVec::from_vec(clique_data),
+            objective_lower,
+            num_inf_obj_lower: num_inf,
+            capacity_threshold,
+            is_propagated: false,
+        }
+    }
+}
+
+/// ObjectivePropagation(domain): the state built on the domain's bounds
+///
+/// # Safety
+/// The arrays valid for their lengths; `partition_starts` has
+/// numPartitions + 1 entries
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn highs_rs_objprop_new(
+    b: *const CBounds,
+    cost: *const f64,
+    ncol: i32,
+    obj_nonzeros: *const i32,
+    nnz: i32,
+    partition_starts: *const i32,
+    nstarts: i32,
+    packed: *const f64,
+    npacked: i32,
+) -> *mut ObjPropState {
+    let s = ObjPropState::build(
+        &(*b).view(),
+        sl(cost, ncol),
+        sl(obj_nonzeros, nnz),
+        sl(partition_starts, nstarts),
+        sl(packed, npacked),
+    );
+    Box::into_raw(Box::new(s))
+}
+
+/// # Safety
+/// `s` live
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_objprop_clone(s: *const ObjPropState) -> *mut ObjPropState {
+    Box::into_raw(Box::new((*s).clone()))
+}
+
+/// # Safety
+/// `s` from new/clone, or null
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_objprop_free(s: *mut ObjPropState) {
+    if !s.is_null() {
+        drop(Box::from_raw(s));
+    }
+}
+
+/// getPropagationConstraint of the domain's (active) objective propagation
+///
+/// # Safety
+/// `d` a domain's view; the outputs writable
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_obj_propagation_constraint(
+    d: *const CDomain,
+    stacksize: i32,
+    domchg_col: i32,
+    vals: *mut *const f64,
+    inds: *mut *const i32,
+    len: *mut i32,
+    rhs: *mut f64,
+) {
+    let mut dom = CDomain::view(d as *mut CDomain);
+    let (i, v, r) = dom.obj_propagation_constraint(stacksize, domchg_col);
+    *inds = i.as_ptr();
+    *vals = v.as_ptr();
+    *len = i.len() as i32;
+    *rhs = r;
+}
+
 impl CObjProp {
     /// # Safety
     /// As for CDomain::view; one view at a time
@@ -582,36 +796,10 @@ impl<'a> Dom<'a> {
 
     /// ObjectivePropagation::recomputeCapacityThreshold
     fn obj_recompute_capacity_threshold(&mut self) {
-        let mut o = self.obj();
-        let feastol = self.feastol;
-        let np = o.num_partitions();
-        let mut cap = -feastol;
-        for i in 0..np {
-            let (worst, best) = {
-                let t = o.tree(i);
-                (t.first(), t.last())
-            };
-            if worst == -1 {
-                continue;
-            }
-            if self.is_fixed(o.contributions[worst as usize].col as usize) {
-                continue;
-            }
-            let mut contribution = o.contributions[worst as usize].contribution;
-            if best != worst {
-                contribution -= o.contributions[best as usize].contribution;
-            }
-            cap = max2(cap, contribution * (1.0 - feastol));
-        }
-        for i in o.partition_starts[np] as usize..o.obj_nonzeros.len() {
-            let col = o.obj_nonzeros[i] as usize;
-            cap = max2(
-                cap,
-                o.cost[col].abs()
-                    * bound_range(self.col_upper[col], self.col_lower[col], feastol, self.is_continuous(col)),
-            );
-        }
-        *o.capacity_threshold = cap;
+        let o = self.obj();
+        let b = self.bounds();
+        *o.capacity_threshold =
+            capacity_threshold(o.contributions, o.partition_sets, o.cost, o.obj_nonzeros, o.partition_starts, &b);
     }
 }
 

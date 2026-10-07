@@ -13,8 +13,8 @@
 //! refer to its fields in place (HighsRsArray: the begin/end/capacity
 //! layout of [`StdVec`], read by C++ and grown only by Rust), and so are
 //! the pools' propagation data ([`CutPropState`], [`ConfPropState`], whose
-//! cutAdded / conflictAdded hooks run here). The objective propagation
-//! stays C++.
+//! cutAdded / conflictAdded hooks run here) and the objective
+//! propagation's ([`super::objprop::ObjPropState`]).
 //! `highs_rs::DomainAccess` (highs/mip/HighsDomainRust.h) fills a
 //! `#[repr(C)]` [`CDomain`] with pointer+length pairs of the model matrices
 //! (column-wise from the model, row-wise from mipdata), of the domain's
@@ -836,6 +836,12 @@ pub(crate) fn bound_range(upper: f64, lower: f64, tolerance: f64, continuous: bo
 }
 
 impl<'a> Bounds<'a> {
+    /// The column is continuous
+    #[inline(always)]
+    pub(crate) fn continuous(&self, col: usize) -> bool {
+        self.is_continuous(col)
+    }
+
     #[inline(always)]
     fn is_continuous(&self, col: usize) -> bool {
         self.integrality[col] == 0

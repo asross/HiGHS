@@ -243,17 +243,18 @@ struct DomainAccess {
       o.partition_starts = dslice(f.getCliquePartitionStarts());
       o.col_to_partition = dslice(f.getColToPartition());
       o.num_binaries = f.getNumBinariesInObjective();
-      o.contributions = {nonNull(op.objectiveLowerContributions.data()),
-                         (int)op.objectiveLowerContributions.size()};
-      o.partition_sets = dslice(op.contributionPartitionSets);
-      o.objective_lower = &op.objectiveLower;
-      o.num_inf_obj_lower = &op.numInfObjLower;
-      o.capacity_threshold = &op.capacityThreshold;
-      o.is_propagated = &op.isPropagated;
+      ObjPropState& st = *op.rs_;
+      o.contributions = {nonNull(st.contributions.data()),
+                         (int)st.contributions.size()};
+      o.partition_sets = dslice(st.partition_sets);
+      o.objective_lower = &st.objective_lower;
+      o.num_inf_obj_lower = &st.num_inf_obj_lower;
+      o.capacity_threshold = &st.capacity_threshold;
+      o.is_propagated = &st.is_propagated;
       o.obj_vals = dslice(f.getObjectiveValuesPacked());
-      o.clique_data = {nonNull(op.partitionCliqueData.data()),
-                       (int)op.partitionCliqueData.size()};
-      o.cons_buffer = dslice(op.propagationConsBuffer);
+      o.clique_data = {nonNull(st.clique_data.data()),
+                       (int)st.clique_data.size()};
+      o.cons_buffer = dslice(st.cons_buffer);
     }
     d.dom = &dom;
     d.implications = implications;

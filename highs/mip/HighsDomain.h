@@ -29,6 +29,7 @@ namespace highs_rs {
 struct DomainVecs;
 struct CutPropState;
 struct ConfPropState;
+struct ObjPropState;
 struct DomainAccess;
 struct CliqueAccess;
 struct SymmetryAccess;
@@ -40,6 +41,7 @@ class HighsObjectiveFunction;
 class HighsDomain {
 #ifdef HIGHS_RUST
   friend struct highs_rs::DomainAccess;
+  friend struct highs_rs::ObjPropState;
   friend struct highs_rs::CliqueAccess;
   friend struct highs_rs::SymmetryAccess;
 #endif
@@ -276,6 +278,42 @@ class HighsDomain {
 
  private:
   struct ObjectivePropagation {
+#ifdef HIGHS_RUST
+    // the state is Rust's (rust/src/mip/objprop.rs ObjPropState), owned
+    HighsDomain* domain = nullptr;
+    const HighsObjectiveFunction* objFunc = nullptr;
+    const double* cost = nullptr;
+    highs_rs::ObjPropState* rs_ = nullptr;
+
+    struct ObjectiveContribution {
+      double contribution;
+      HighsInt col;
+      HighsInt partition;
+      highs::RbTreeLinks<HighsInt> links;
+    };
+    struct PartitionCliqueData {
+      double multiplier;
+      HighsInt rhs;
+      bool changed;
+    };
+
+    ObjectivePropagation() = default;
+    ObjectivePropagation(HighsDomain* domain);
+    ObjectivePropagation(const ObjectivePropagation& other);
+    ObjectivePropagation& operator=(const ObjectivePropagation& other);
+    ~ObjectivePropagation();
+
+    bool isActive() const { return domain != nullptr; }
+
+    // the objective's lower bound if it is finite
+    double objectiveLowerBound() const;
+
+    // construct the proot constraint at the time when the domain change stack
+    // had the given size
+    void getPropagationConstraint(HighsInt domchgStackSize, const double*& vals,
+                                  const HighsInt*& inds, HighsInt& len,
+                                  double& rhs, HighsInt domchgCol = -1);
+#else
     HighsDomain* domain = nullptr;
     const HighsObjectiveFunction* objFunc;
     const double* cost;
@@ -334,6 +372,7 @@ class HighsDomain {
 
    private:
     void recomputeCapacityThreshold();
+#endif
   };
 
 #ifdef HIGHS_RUST
@@ -649,12 +688,18 @@ class HighsDomain {
 
   const ReasonArray& getDomainChangeReason() const { return domchgreason_; }
 
+#ifdef HIGHS_RUST
+  double getObjectiveLowerBound() const {
+    return objProp_.isActive() ? objProp_.objectiveLowerBound() : -kHighsInf;
+  }
+#else
   double getObjectiveLowerBound() const {
     if (objProp_.isActive() && objProp_.numInfObjLower == 0)
       return double(objProp_.objectiveLower);
 
     return -kHighsInf;
   }
+#endif
 
   void getCutoffConstraint(const double*& vals, const HighsInt*& inds,
                            HighsInt& len, double& rhs) {
@@ -825,10 +870,38 @@ struct ConfPropState {
   HighsRsArray<HighsInt> propagate_conflict_inds;
   HighsRsArray<HighsDomain::ConflictPoolPropagation::WatchedLiteral> watched;
 };
+// rust/src/mip/objprop.rs ObjPropState
+struct ObjPropState {
+  HighsRsArray<HighsDomain::ObjectivePropagation::ObjectiveContribution>
+      contributions;
+  HighsRsArray<std::pair<HighsInt, HighsInt>> partition_sets;
+  HighsRsArray<double> cons_buffer;
+  HighsRsArray<HighsDomain::ObjectivePropagation::PartitionCliqueData>
+      clique_data;
+  HighsCDouble objective_lower;
+  HighsInt num_inf_obj_lower;
+  double capacity_threshold;
+  bool is_propagated;
+};
 struct CutPool;
 struct ConflictPool;
 struct Bounds;
+struct Domain;
 extern "C" {
+ObjPropState* highs_rs_objprop_new(const Bounds* b, const double* cost,
+                                   HighsInt ncol, const HighsInt* obj_nonzeros,
+                                   HighsInt nnz,
+                                   const HighsInt* partition_starts,
+                                   HighsInt nstarts, const double* packed,
+                                   HighsInt npacked);
+ObjPropState* highs_rs_objprop_clone(const ObjPropState* s);
+void highs_rs_objprop_free(ObjPropState* s);
+void highs_rs_domain_obj_propagation_constraint(const Domain* d,
+                                                HighsInt stacksize,
+                                                HighsInt domchg_col,
+                                                const double** vals,
+                                                const HighsInt** inds,
+                                                HighsInt* len, double* rhs);
 CutPropState* highs_rs_cutprop_new();
 CutPropState* highs_rs_cutprop_clone(const CutPropState* s);
 void highs_rs_cutprop_assign(CutPropState* d, const CutPropState* s);

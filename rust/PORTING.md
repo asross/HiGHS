@@ -202,15 +202,18 @@ the parallel lock only with a pool that is not the global one); the
 pools' cutAdded / cutDeleted / conflictAdded / conflictDeleted hooks run in
 Rust on the domain's bounds (`Bounds`) and the Rust pool, and the C++
 shell refreshes the view afterwards (also when the cut is not taken: the
-pool's matrix may have moved). The objective propagation stays C++. The
+pool's matrix may have moved). So is the objective propagation's state
+(`ObjPropState`, objprop.rs: the contributions with their red-black trees,
+the partition cliques, the lower bound and threshold), built in Rust on
+the domain's bounds and owned by the C++ ObjectivePropagation shell, whose
+getPropagationConstraint forwards to Rust. The
 C++ bodies of the ported domain code are not compiled under HIGHS_RUST. The domain runs in Rust
 (mip/domain.rs, objprop.rs, conflict.rs) on a view of that data: changeBound
 with the domain change stack, its reasons and previous bounds,
 backtrack/backtrackToGlobal, setDomainChangeStack, the whole propagate()
 loop (model rows, cuts, conflicts, objective), the activity updates with
 infinity counts and capacity thresholds, ObjectivePropagation with its
-red-black trees (HighsRbTree ported exactly: the trees are built by the C++
-constructor and updated in Rust), conflict analysis (ConflictSet: the
+red-black trees (HighsRbTree ported exactly), conflict analysis (ConflictSet: the
 frontiers are BTreeMaps by stack position) and tightenCoefficients. Still
 C++: the clique table's and implications' fixings of a fixed binary (called
 back through one function, which re-enters changeBound), adding a
