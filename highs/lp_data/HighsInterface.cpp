@@ -4027,6 +4027,7 @@ bool Highs::infeasibleBoundsOk() {
 
 #endif
 
+#ifndef HIGHS_RUST  // multi-objective solves are not in Crestline
 bool Highs::validLinearObjective(const HighsLinearObjective& linear_objective,
                                  const HighsInt iObj) const {
   HighsInt linear_objective_coefficients_size =
@@ -4369,6 +4370,7 @@ HighsStatus Highs::multiobjectiveSolve() {
   return returnFromLexicographicOptimization(HighsStatus::kOk,
                                              original_lp_num_row);
 }
+#endif
 
 bool Highs::tryPdlpCleanup(HighsInt& pdlp_cleanup_iteration_limit,
                            const HighsInfo& presolved_lp_info) const {

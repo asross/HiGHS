@@ -113,6 +113,10 @@ HighsDebugStatus debugDualChuzcFailHeap(
 HighsDebugStatus debugNonbasicFlagConsistent(const HighsOptions& options,
                                              const HighsLp& lp,
                                              const SimplexBasis& basis) {
+#ifdef HIGHS_RUST
+  // Debugging is not in Crestline: the check is a no-op
+  return HighsDebugStatus::kNotChecked;
+#else
   if (options.highs_debug_level < kHighsDebugLevelCheap)
     return HighsDebugStatus::kNotChecked;
   HighsDebugStatus return_status = HighsDebugStatus::kOk;
@@ -142,4 +146,5 @@ HighsDebugStatus debugNonbasicFlagConsistent(const HighsOptions& options,
     return_status = HighsDebugStatus::kLogicalError;
   }
   return return_status;
+#endif
 }

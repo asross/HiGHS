@@ -90,6 +90,13 @@ if ((NOT FAST_BUILD OR ALL_TESTS) AND NOT (BUILD_EXTRA_UNIT_ONLY))
       list(APPEND TEST_SOURCES TestHipo.cpp)
   endif()
 
+  if (HIGHS_RUST)
+      # Crestline leaves out iCrash, multi-objective solves and HiPDLP
+      # (rust/PORTING.md, "Crestline's scope"): their tests are skipped
+      list(REMOVE_ITEM TEST_SOURCES TestICrash.cpp TestMultiObjective.cpp
+        TestPdlpHi.cpp)
+  endif()
+
   set(OPT_LEVEL_CHANGED OFF)
 
   if(CMAKE_CXX_FLAGS_RELEASE MATCHES "-O[0-9s]" AND NOT CMAKE_CXX_FLAGS_RELEASE MATCHES "-O3")
@@ -151,16 +158,18 @@ if ((NOT FAST_BUILD OR ALL_TESTS) AND NOT (BUILD_EXTRA_UNIT_ONLY))
   endif()
 
 
-  # check the C API
-  add_executable(capi_unit_tests TestCAPI.c)
+  # check the C API (which a HIGHS_RUST build leaves out)
+  if (NOT HIGHS_RUST)
+    add_executable(capi_unit_tests TestCAPI.c)
 
-  if (FAST_BUILD)
-    target_link_libraries(capi_unit_tests highs)
-  else()
-    target_link_libraries(capi_unit_tests libhighs)
+    if (FAST_BUILD)
+      target_link_libraries(capi_unit_tests highs)
+    else()
+      target_link_libraries(capi_unit_tests libhighs)
+    endif()
+
+    add_test(NAME capi_unit_tests COMMAND capi_unit_tests)
   endif()
-
-  add_test(NAME capi_unit_tests COMMAND capi_unit_tests)
 
   # Check whether test executable builds OK.
   if ((NOT HIGHS_COVERAGE) AND

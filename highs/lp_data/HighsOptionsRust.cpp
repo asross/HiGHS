@@ -17,7 +17,6 @@
 #include <string>
 #include <vector>
 
-#include "HighsExternalApi.h"
 #include "io/LoadOptions.h"
 #include "lp_data/HighsInfo.h"
 
@@ -102,8 +101,6 @@ struct RsOptionHost {
   void* ctx;
   void (*set_string)(void*, const char*, size_t);
   void (*open_log_file)(void*, const char*, size_t);
-  bool (*hipo_available)();
-  void (*hipo_unavailable)(const RsLog*, const char*, size_t);
   void (*write)(void*, const char*, size_t);
 };
 
@@ -114,23 +111,13 @@ void openLogFile(void* ctx, const char* p, size_t n) {
   OptionCtx& c = *static_cast<OptionCtx*>(ctx);
   highsOpenLogFile(*c.log_options, *c.records, std::string(p, n));
 }
-bool hipoAvailable() {
-  return HighsExternalApi::isAvailable<HighsExtras::hipo>();
-}
-void hipoUnavailable(const RsLog* log, const char* p, size_t n) {
-  const std::string name(p, n);
-  HighsExternalApi::logUnavailable<HighsExtras::hipo>(
-      *static_cast<const HighsLogOptions*>(log->opts), HighsLogType::kError,
-      "The HiPO solver was requested via the \"%s\" option.", name.c_str());
-}
 void writeFile(void* file, const char* p, size_t n) {
   fwrite(p, 1, n, static_cast<FILE*>(file));
 }
 
 RsOptionHost rsOptionHost(const HighsLogOptions& log_options,
                           OptionCtx* ctx = nullptr) {
-  return {rsLog(log_options), ctx,           setString, openLogFile,
-          hipoAvailable,      hipoUnavailable, writeFile};
+  return {rsLog(log_options), ctx, setString, openLogFile, writeFile};
 }
 
 // info.rs: CInfoRecord

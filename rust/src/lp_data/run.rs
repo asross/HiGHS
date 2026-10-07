@@ -136,6 +136,7 @@ pub struct ROptions {
     /// HighsLogOptions::output_flag and log_dev_level
     pub output_flag: *const bool,
     pub log_dev_level: *const i32,
+    pub simplex_strategy: i32,
 }
 
 /// Dimensions and properties of model_ (0) or the reduced LP (1)
@@ -192,9 +193,6 @@ pub enum Op {
     /// callSolveQp() / callSolveMip() -> status
     CallSolveQp,
     CallSolveMip,
-    /// The iCrash block: -2 error return without returnFromOptimizeModel,
-    /// else the status for returnFromOptimizeModel if not 0 (Ok)
-    ICrash,
     /// basisForSolution() -> status
     BasisForSolution,
     /// basis_.clear()
@@ -518,6 +516,17 @@ impl<'a> Run<'a> {
                 *c.o.highs_debug_level = 0;
             }
         }
+        // SIP and PAMI are not in Crestline: the simplex solver uses the
+        // serial dual simplex for them (simplex/hekk.rs)
+        if (c.o.simplex_strategy == 2 || c.o.simplex_strategy == 3) && self.on() {
+            log_user!(
+                log,
+                LogType::Warning,
+                "simplex_strategy = %d (%s) is not available in this build: using the serial dual simplex\n",
+                c.o.simplex_strategy,
+                if c.o.simplex_strategy == 2 { "SIP" } else { "PAMI" }
+            );
+        }
         if !c.o.use_warm_start {
             self.op0(Op::ClearSolver);
         }
@@ -674,16 +683,9 @@ impl<'a> Run<'a> {
         let mut this_solve_original_lp_time = -1.0;
         let mut postsolve_iteration_count: i32 = -1;
         let lp_no_solution_basis = self.f.ipm_no_crossover || self.f.solver_pdlp;
-        if c.o.icrash {
-            let r = self.op0(Op::ICrash);
-            if self.ab() {
-                return Status::Error;
-            }
-            match r {
-                -2 => return Status::Error,
-                0 => {}
-                s => return self.return_from_optimize_model(status_from_i64(s), undo_mods),
-            }
+        // iCrash is not in Crestline
+        if c.o.icrash && self.on() {
+            log_user!(log, LogType::Warning, "icrash = true: iCrash is not available in this build and is ignored\n");
         }
         let solver_will_use_basis = self.f.solver_will_use_basis;
         if solver_will_use_basis {
