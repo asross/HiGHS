@@ -592,6 +592,7 @@ HighsStatus writeModelAsMps(const HighsOptions& options,
   return write_status;
 }
 
+#ifndef HIGHS_RUST
 HighsStatus writeMps(
     const HighsLogOptions& log_options, const std::string& filename,
     const std::string& model_name, const HighsInt& num_row,
@@ -999,3 +1000,4 @@ HighsStatus writeMps(
   fclose(file);
   return HighsStatus::kOk;
 }
+#endif
