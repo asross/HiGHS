@@ -538,6 +538,43 @@ lns_target_reached_ point to the Rust pool. Single-thread solves never
 start a helper (useConcurrentHelper, still C++ for
 std::thread::hardware_concurrency).
 
+A sub-MIP (solveSubMip's run: RENS, RINS, crossover) is decided in Rust
+(glue.rs `sub_mip`): a `SubMipSpec` of the bounds, the start with its row
+activities, and every option that differs from the caller's (limits, time
+limit with the cap, objective bound, gaps, presolve, symmetry, effort,
+the helper's heuristic settings, lns_target_reached_). The C++ subMip is
+the shell: it copies the options and model, applies the spec, constructs
+and runs the HighsMipSolver between the profiling clocks and returns the
+result.
+
+A worker's state is Rust's (workers.rs `WorkerState`: bounds, heuristic
+and separation statistics, generator, the heuristics flag, the buffered
+solutions); HighsMipWorker owns it, refers to its fields in place
+(RsState) and keeps the pointers to the C++ objects it works on.
+
+What remains C++ before a pure-Rust MIP solve (each an object shell or a
+step on one, reached through `CMipFns`/`CLpFns`/`CSearchFns`/`CSepaFns`
+callbacks; about 240 op codes):
+- The LP solver of HighsLpRelaxation, a `Highs` object (passModel,
+  addRows/deleteRows, changeColsBounds/Cost, setBasis/getBasis, run with
+  the IPX race, getSolution/getInfo, getDualRay, getBasisInverseRow,
+  putIterate/getIterate, options), and the same for the analytic centre
+  (IPM) and the repair LP. The LP algorithms are Rust, but HEkk's data and
+  the Highs LP API stay C++ (HEkkRustSolve.cpp views); a Rust-owned LP
+  relaxation needs a Rust-owned HEkk with the incremental model updates
+  and status bookkeeping of HEkk.cpp and Highs' modification methods,
+  shared with the top-level port (lp_data).
+- The object shells: HighsMipSolver (options, models, callback, timer,
+  terminator), HighsMipSolverData's containers (deques of LP relaxations,
+  domains, pool and pseudocost handles, workers), HighsSearch (local
+  domain shell, conflict scratch), HighsSeparation and the separators'
+  objects (HighsTransformedLp, HighsCutGeneration for conflicts,
+  HighsCutSet), HighsObjectiveFunction, HighsDomain's scalars and
+  redundant rows, the presolve (HPresolve shell, the postsolve stack's
+  storage, the restart's model rebuilds), HighsSymmetries' handle,
+  HighsProfiling/HighsTimer.
+- Highs::callSolveMip and its post-processing (lp_data).
+
 ## The task scheduler (highs/parallel)
 
 The executor, the split deques, the sleeping workers' stack, the binary
