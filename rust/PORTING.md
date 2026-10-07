@@ -370,3 +370,40 @@ tryRoundedPoint, the feasibility pump, crossover and solveSubMip: these are
 sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls (the
 first is being ported separately), with no arithmetic of their own worth
 moving across the FFI.
+
+## The top level (lp_data)
+
+The `Highs` class and its data (HighsLp, HighsSolution, HighsBasis,
+HighsInfo, HighsOptions) stay C++-owned: the public API, highspy and the
+C API hand out references to them. rust/src/lp_data works on views
+(highs/lp_data/HighsRust.h: `RsMut` arrays, `RsLp`, `RsIndexCollection`;
+HighsInfoStruct and HighsPrimalDualErrors are read and written in place,
+layouts checked by static_assert and a Rust test) and logs through
+highsLogUser/highsLogDev with "%s" of a message formatted by
+util/printf.rs (`Log`, `log_user!`, `log_dev!`), so log files and
+callbacks see the same calls. The C++ originals are under
+`#ifndef HIGHS_RUST`; the glue is in HighsLpUtilsRust.cpp and
+HighsSolutionRust.cpp.
+
+In Rust: assessLp, lpDimensionsOk, assessCosts, assessBounds,
+assessMatrix(+Dimensions) (duplicates found with a stamp array instead of
+the C++ hash set; same result), cleanBounds, scaleLp (equilibration and
+max-value scaling), HighsLp::applyScale/unapplyScale (lp_utils.rs); the
+KKT checks getKktFailures, getVariableKktFailures, the basis and glpsol
+error measures, getComplementarityViolations, computeDualObjectiveValue,
+computeObjectiveValue, HighsLp::objectiveValue, lpKktCheck and
+reportKktFailures (solution.rs). The C++ min/max (not f64::min/max) are
+used for NaN fidelity. The LTO build vectorizes the objective sums:
+HighsLp::objectiveValue and computeObjectiveValue are `dot_blocked` by 4,
+the quadratic term of the dual objective by 8 (rounded products, fused
+tail), and `dobj += bound * dual` and `+= 0.5 * quad` are fused.
+
+Still C++ in lp_data: Highs.cpp and HighsInterface.cpp (run /
+optimizeModel orchestration, presolve/postsolve calls, the cleanup solve,
+basis handling, model modification), HighsSolve.cpp (solveLp dispatch),
+HighsOptions.cpp and HighsInfo.cpp (option setting, files, reports),
+HighsModelUtils.cpp (solution file writers), HMPSIO/FilereaderLp writers,
+HighsRanging.cpp, HighsIis.cpp, the remaining HighsLpUtils.cpp (semi
+variables, user scaling, solution/basis file reading and writing, LP
+reporting, vector edits), the IPX solution conversions and basis
+handling of HighsSolution.cpp, and app/.

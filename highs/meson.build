@@ -255,6 +255,7 @@ _srcs = [
     'lp_data/HighsRanging.cpp',
     'lp_data/HighsRunData.cpp',
     'lp_data/HighsSolution.cpp',
+    'lp_data/HighsSolutionRust.cpp',
     'lp_data/HighsSolutionDebug.cpp',
     'lp_data/HighsSolve.cpp',
     'lp_data/HighsStatus.cpp',

@@ -121,6 +121,7 @@ bool HighsLp::equalScaling(const HighsLp& lp) const {
   return equal;
 }
 
+#ifndef HIGHS_RUST
 double HighsLp::objectiveValue(const std::vector<double>& solution) const {
   assert((int)solution.size() >= this->num_col_);
   double objective_function_value = this->offset_;
@@ -128,6 +129,7 @@ double HighsLp::objectiveValue(const std::vector<double>& solution) const {
     objective_function_value += this->col_cost_[iCol] * solution[iCol];
   return objective_function_value;
 }
+#endif
 
 HighsCDouble HighsLp::objectiveCDoubleValue(
     const std::vector<double>& solution) const {

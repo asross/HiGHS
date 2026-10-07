@@ -6,6 +6,7 @@
 
 pub mod ffi;
 pub mod lp_utils;
+pub mod solution;
 
 use crate::util::printf::{sprintf, Arg};
 

@@ -70,6 +70,7 @@ void getLpKktFailures(const HighsOptions& options, const HighsLp& lp,
                             primal_dual_errors);
 }
 
+#ifndef HIGHS_RUST
 void getKktFailures(const HighsOptions& options, const bool is_qp,
                     const HighsLp& lp, const std::vector<double>& gradient,
                     const HighsSolution& solution, HighsInfo& highs_info,
@@ -575,12 +576,14 @@ void getKktFailures(const HighsOptions& options, const bool is_qp,
     }
   }
 }
+#endif
 
 // Gets the KKT failures for a variable.
 //
 // Value and dual are used compute the primal and dual infeasibility
 // It's up to the calling method to ignore these if the value or dual
 // are not valid.
+#ifndef HIGHS_RUST
 void getVariableKktFailures(const double primal_feasibility_tolerance,
                             const double dual_feasibility_tolerance,
                             const double mip_feasibility_tolerance,
@@ -676,7 +679,9 @@ void getVariableKktFailures(const double primal_feasibility_tolerance,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 void getPrimalDualGlpsolErrors(const HighsOptions& options, const HighsLp& lp,
                                const std::vector<double>& gradient,
                                const HighsSolution& solution,
@@ -887,7 +892,9 @@ void getPrimalDualGlpsolErrors(const HighsOptions& options, const HighsLp& lp,
   primal_dual_errors.glpsol_max_dual_infeasibility.relative_index =
       primal_dual_errors.glpsol_max_dual_infeasibility.absolute_index;
 }
+#endif
 
+#ifndef HIGHS_RUST
 void getPrimalDualBasisErrors(const HighsOptions& options, const HighsLp& lp,
                               const HighsSolution& solution,
                               const HighsBasis& basis,
@@ -1009,7 +1016,9 @@ void getPrimalDualBasisErrors(const HighsOptions& options, const HighsLp& lp,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool getComplementarityViolations(const HighsLp& lp,
                                   const HighsSolution& solution,
                                   const double optimality_tolerance,
@@ -1048,6 +1057,7 @@ bool getComplementarityViolations(const HighsLp& lp,
   }
   return true;
 }
+#endif
 
 void lpNoBasisKktCheck(HighsModelStatus& model_status, HighsInfo& info,
                        const HighsLp& lp, const HighsSolution& solution,
@@ -1062,6 +1072,7 @@ void lpNoBasisKktCheck(HighsModelStatus& model_status, HighsInfo& info,
 // infeasibilities are wanted: their counts, maxima and sums as
 // getKktFailures finds them, in one pass, without the relative measures,
 // the complementarity violations or the primal-dual objective error
+#ifndef HIGHS_RUST
 static void lpBasicInfeasibilities(HighsModelStatus& model_status,
                                    HighsInfo& info, const HighsLp& lp,
                                    const HighsSolution& solution,
@@ -1137,7 +1148,9 @@ static void lpBasicInfeasibilities(HighsModelStatus& model_status,
       num_primal == 0)
     model_status = HighsModelStatus::kUnbounded;
 }
+#endif
 
+#ifndef HIGHS_RUST
 void lpKktCheck(HighsModelStatus& model_status, HighsInfo& info,
                 const HighsLp& lp, const HighsSolution& solution,
                 const HighsBasis& basis, const HighsOptions& options,
@@ -1428,6 +1441,7 @@ void lpKktCheck(HighsModelStatus& model_status, HighsInfo& info,
   highsLogUser(log_options, HighsLogType::kInfo, "\n");
   return;
 }
+#endif
 
 bool computeDualObjectiveValue(const HighsModel& model,
                                const HighsSolution& solution,
@@ -1445,6 +1459,7 @@ bool computeDualObjectiveValue(const HighsModel& model,
                                    dual_objective_value);
 }
 
+#ifndef HIGHS_RUST
 bool computeDualObjectiveValue(const double* gradient, const HighsLp& lp,
                                const HighsSolution& solution,
                                double& dual_objective_value) {
@@ -1490,6 +1505,7 @@ bool computeDualObjectiveValue(const double* gradient, const HighsLp& lp,
   }
   return true;
 }
+#endif
 
 void HighsError::print(std::string message) {
   printf(
@@ -1513,6 +1529,7 @@ void HighsError::invalidate() {
   this->relative_index = kHighsIllegalErrorIndex;
 }
 
+#ifndef HIGHS_RUST
 double computeObjectiveValue(const HighsLp& lp, const HighsSolution& solution) {
   double objective_value = 0;
   for (HighsInt iCol = 0; iCol < lp.num_col_; iCol++)
@@ -1520,6 +1537,7 @@ double computeObjectiveValue(const HighsLp& lp, const HighsSolution& solution) {
   objective_value += lp.offset_;
   return objective_value;
 }
+#endif
 
 // Refine any HighsBasisStatus::kNonbasic settings according to the LP
 // and any solution values
@@ -2145,6 +2163,7 @@ bool isBasisRightSize(const HighsLp& lp, const HighsBasis& basis) {
          basis.row_status.size() == static_cast<size_t>(lp.num_row_);
 }
 
+#ifndef HIGHS_RUST
 bool reportKktFailures(const HighsLp& lp, const HighsOptions& options,
                        const HighsInfo& info, const std::string& message) {
   const HighsLogOptions& log_options = options.log_options;
@@ -2247,6 +2266,7 @@ bool reportKktFailures(const HighsLp& lp, const HighsOptions& options,
   }
   return has_kkt_failures;
 }
+#endif
 
 bool HighsSolution::hasUndefined() const {
   for (double value : this->col_value)
