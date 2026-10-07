@@ -215,10 +215,18 @@ rebuilds, probing, the end of run). Reductions are recorded in Rust in
 the HighsDataStack layout (record.rs) and appended to the C++ stack by
 `flush` (HighsPostsolveStack::rustAppend); the index maps are mirrored.
 Still C++ behind `Host` callbacks: logging, the timer, the presolve rule
-analysis setup, the HFactor of the dependent equations, and the MIP
-clique table, implications, domain and pools, including the probing loop
-of runProbing and the solution enumeration of enumerateSolutions (the
-other agents' ports can replace these callbacks). Orders that depend on
+analysis setup, the HFactor of the dependent equations, and the C++ parts
+of the MIP solver: the domain and clique setup of prepareProbing
+(setupDomainPropagation, extractCliques), the start of finaliseProbing
+(cleanupFixed, runCliqueMerging), the cut pool, the lifting opportunities
+of probing (storeLiftingOpportunity) and the glue of
+HighsImplications::runProbing. The probing loop of runProbing (probing.rs)
+and the enumeration of enumerateSolutions (enumeration.rs) run in Rust on
+the Rust clique table and implications (handles passed in `MipInfo`,
+borrowed only between calls into C++) and on the global domain through
+its view (`mip_env`: HighsDomain::rsView_, fetched after prepareProbing,
+since shrinkProblem reassigns the domain); the binaries' and rows' sort
+keys are distinct, so any sort gives pdqsort's order. Orders that depend on
 containers are emulated: the libc++ unordered_multimap buckets of
 detectParallelRowsAndCols keep their key groups (emplace_hint inserts
 before the last visited element in libc++, after it in libstdc++: with

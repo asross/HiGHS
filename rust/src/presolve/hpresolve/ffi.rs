@@ -3,6 +3,8 @@
 
 use super::driver::Input;
 use super::{MipInfo, Options, Presolve, RULE_COUNT};
+use crate::mip::clique::{CDom, CMip};
+use crate::mip::domain::CDomain;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
@@ -23,25 +25,6 @@ pub struct CModel {
     pub maximize: bool,
 }
 
-/// What the probing and enumeration loops in C++ read and write
-#[repr(C)]
-pub struct ProbingIo {
-    pub num_probes: *mut u16,
-    pub num_col: i32,
-    pub num_row: i32,
-    pub num_nonzeros: i32,
-    pub col_deleted: *const u8,
-    pub integrality: *const u8,
-    pub colsize_len: usize,
-    pub probing_contingent: *mut i64,
-    pub num_probed: *mut i32,
-    pub probing_num_del_col: *mut i32,
-    pub probing_early_abort: *mut bool,
-    /// out: the lifting opportunities stored by the probing loop
-    pub lifting: *const LiftOpp,
-    pub num_lifting: usize,
-}
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct LiftOpp {
@@ -51,14 +34,13 @@ pub struct LiftOpp {
     pub coef: f64,
 }
 
-/// HighsSubstitution
+/// The global domain's view and the clique table's contexts of the probing
+/// and enumeration loops, valid until the next presolve reduction
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ImplSubst {
-    pub substcol: i32,
-    pub staycol: i32,
-    pub scale: f64,
-    pub offset: f64,
+pub struct MipEnv {
+    pub domain: *const CDomain,
+    pub cdom: CDom,
+    pub cmip: CMip,
 }
 
 /// (pointer, length) of a C++ array
@@ -113,29 +95,19 @@ pub struct Host {
         *mut f64,
         *mut CSlice<i32>,
     ) -> i32,
-    pub clique_have_common_clique: extern "C" fn(Ctx, i32, i32, i32, i32) -> bool,
-    pub clique_num_cliques_col: extern "C" fn(Ctx, i32, i32) -> i32,
-    pub clique_num_cliques: extern "C" fn(Ctx) -> i32,
-    pub clique_set_presolve_flag: extern "C" fn(Ctx, bool),
-    pub clique_set_max_entries: extern "C" fn(Ctx, i32),
-    pub implications_column_transformed: extern "C" fn(Ctx, i32, f64, f64),
-    pub implications_add_vb: extern "C" fn(Ctx, bool, i32, i32, f64, f64, f64, bool),
     pub profiling: extern "C" fn(Ctx, bool, i32),
     pub probing_prepare: extern "C" fn(Ctx, i32, *mut bool) -> bool,
-    pub probing_loop: extern "C" fn(Ctx, *mut ProbingIo) -> i32,
+    pub mip_env: extern "C" fn(Ctx, *mut MipEnv),
+    /// implications.runProbing(col, numBoundChgs)
+    pub probe: extern "C" fn(Ctx, i32, *mut i32) -> bool,
+    /// start collecting the lifting opportunities of probing (true) or stop
+    pub set_lifting: extern "C" fn(Ctx, bool),
+    /// the lifting opportunities collected
+    pub lifting_opps: extern "C" fn(Ctx, *mut CSlice<LiftOpp>),
     /// cleanupFixed, extractCliques, runCliqueMerging: the deleted rows and
     /// the clique extensions (row, col, val)
     pub finalise_begin: extern "C" fn(Ctx, bool, *mut CSlice<i32>, *mut CSlice<i32>),
     pub domain_bounds: extern "C" fn(Ctx, *mut CSlice<f64>, *mut CSlice<f64>),
-    pub impl_substitutions: extern "C" fn(Ctx, *mut CSlice<ImplSubst>),
-    pub clear_impl_substitutions: extern "C" fn(Ctx),
-    /// (substcol, replace.col, replace.val) triples
-    pub clique_substitutions: extern "C" fn(Ctx, *mut CSlice<i32>),
-    pub clear_clique_substitutions: extern "C" fn(Ctx),
-    /// computeMaximalCliques of (col, val) pairs: the cliques as (col, val)
-    /// pairs and their starts
-    pub compute_maximal_cliques: extern "C" fn(Ctx, *const i32, usize, f64, *mut CSlice<i32>, *mut CSlice<usize>),
-    pub enumerate: extern "C" fn(Ctx, *mut ProbingIo) -> bool,
     pub mip_finish_presolve: extern "C" fn(Ctx, i32),
     pub add_cut: extern "C" fn(Ctx, *const i32, *const f64, usize, f64, bool),
     pub upper_limit: extern "C" fn(Ctx) -> f64,
@@ -223,37 +195,6 @@ impl Host {
         );
         (r, time_taken, v.to_vec())
     }
-    pub(crate) fn clique_have_common_clique(&self, c1: i32, v1: i32, c2: i32, v2: i32) -> bool {
-        (self.clique_have_common_clique)(self.ctx, c1, v1, c2, v2)
-    }
-    pub(crate) fn clique_num_cliques_col(&self, col: i32, val: i32) -> i32 {
-        (self.clique_num_cliques_col)(self.ctx, col, val)
-    }
-    pub(crate) fn clique_num_cliques(&self) -> i32 {
-        (self.clique_num_cliques)(self.ctx)
-    }
-    pub(crate) fn clique_set_presolve_flag(&self, f: bool) {
-        (self.clique_set_presolve_flag)(self.ctx, f)
-    }
-    pub(crate) fn clique_set_max_entries(&self, n: i32) {
-        (self.clique_set_max_entries)(self.ctx, n)
-    }
-    pub(crate) fn implications_column_transformed(&self, col: i32, scale: f64, constant: f64) {
-        (self.implications_column_transformed)(self.ctx, col, scale, constant)
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn implications_add_vb(
-        &self,
-        is_vub: bool,
-        col: i32,
-        bin_col: i32,
-        coef: f64,
-        constant: f64,
-        bound: f64,
-        is_int: bool,
-    ) {
-        (self.implications_add_vb)(self.ctx, is_vub, col, bin_col, coef, constant, bound, is_int)
-    }
     pub(crate) fn profiling(&self, start: bool, clock: i32) {
         (self.profiling)(self.ctx, start, clock)
     }
@@ -263,33 +204,29 @@ impl Host {
         let inf = (self.probing_prepare)(self.ctx, nnz, &mut first_call);
         (inf, first_call)
     }
-    fn probing_io(p: &mut Presolve) -> ProbingIo {
-        ProbingIo {
-            num_probes: p.num_probes.as_mut_ptr(),
-            num_col: p.num_col,
-            num_row: p.num_row,
-            num_nonzeros: p.num_nonzeros(),
-            col_deleted: p.col_deleted.as_ptr(),
-            integrality: p.integrality.as_ptr(),
-            colsize_len: p.colsize.len(),
-            probing_contingent: &mut p.probing_contingent,
-            num_probed: &mut p.num_probed,
-            probing_num_del_col: &mut p.probing_num_del_col,
-            probing_early_abort: &mut p.probing_early_abort,
-            lifting: std::ptr::null(),
-            num_lifting: 0,
-        }
+    pub(crate) fn mip_env(&self) -> MipEnv {
+        let mut env = std::mem::MaybeUninit::<MipEnv>::uninit();
+        (self.mip_env)(self.ctx, env.as_mut_ptr());
+        // SAFETY: the C++ fills every field
+        unsafe { env.assume_init() }
     }
-    /// the probing loop: (code, lifting opportunities (row, col, val, coef))
-    pub(crate) fn probing_loop(&self, p: &mut Presolve) -> (i32, Vec<(i32, (i32, i32), f64)>) {
-        let mut io = Self::probing_io(p);
-        let code = (self.probing_loop)(self.ctx, &mut io);
-        let lifting = CSlice { ptr: io.lifting, len: io.num_lifting }.to_vec();
-        (code, lifting.iter().map(|l| (l.row, (l.col, l.val), l.coef)).collect())
+    pub(crate) fn probe(&self, col: i32, num_bound_chgs: &mut i32) -> bool {
+        (self.probe)(self.ctx, col, num_bound_chgs)
     }
-    pub(crate) fn enumerate(&self, p: &mut Presolve) -> bool {
-        let mut io = Self::probing_io(p);
-        (self.enumerate)(self.ctx, &mut io)
+    pub(crate) fn set_lifting(&self, on: bool) {
+        (self.set_lifting)(self.ctx, on)
+    }
+    /// the lifting opportunities collected: (row, (col, val), coef)
+    pub(crate) fn lifting_opps(&self) -> Vec<(i32, (i32, i32), f64)> {
+        let mut s = CSlice::empty();
+        (self.lifting_opps)(self.ctx, &mut s);
+        s.to_vec().iter().map(|l| (l.row, (l.col, l.val), l.coef)).collect()
+    }
+    /// the number of lifting opportunities collected
+    pub(crate) fn num_lifting_opps(&self) -> usize {
+        let mut s = CSlice::empty();
+        (self.lifting_opps)(self.ctx, &mut s);
+        s.len
     }
     /// (deleted rows, clique extensions (row, col, val))
     pub(crate) fn finalise_begin(&self, first_call: bool) -> (Vec<i32>, Vec<(i32, i32, i32)>) {
@@ -304,35 +241,6 @@ impl Host {
         let mut u = CSlice::empty();
         (self.domain_bounds)(self.ctx, &mut l, &mut u);
         (l.to_vec(), u.to_vec())
-    }
-    pub(crate) fn impl_substitutions(&self) -> Vec<ImplSubst> {
-        let mut s = CSlice::empty();
-        (self.impl_substitutions)(self.ctx, &mut s);
-        s.to_vec()
-    }
-    pub(crate) fn clear_impl_substitutions(&self) {
-        (self.clear_impl_substitutions)(self.ctx)
-    }
-    pub(crate) fn clique_substitutions(&self) -> Vec<(i32, i32, i32)> {
-        let mut s = CSlice::empty();
-        (self.clique_substitutions)(self.ctx, &mut s);
-        s.to_vec().chunks(3).map(|c| (c[0], c[1], c[2])).collect()
-    }
-    pub(crate) fn clear_clique_substitutions(&self) {
-        (self.clear_clique_substitutions)(self.ctx)
-    }
-    pub(crate) fn compute_maximal_cliques(&self, cands: &[(i32, i32)], feastol: f64) -> Vec<Vec<(i32, i32)>> {
-        let flat: Vec<i32> = cands.iter().flat_map(|&(c, v)| [c, v]).collect();
-        let mut vars = CSlice::empty();
-        let mut starts = CSlice::empty();
-        (self.compute_maximal_cliques)(self.ctx, flat.as_ptr(), cands.len(), feastol, &mut vars, &mut starts);
-        let vars = vars.to_vec();
-        let starts = starts.to_vec();
-        let mut out = Vec::new();
-        for w in starts.windows(2) {
-            out.push((w[0]..w[1]).map(|k| (vars[2 * k], vars[2 * k + 1])).collect());
-        }
-        out
     }
     pub(crate) fn mip_finish_presolve(&self, nnz: i32) {
         (self.mip_finish_presolve)(self.ctx, nnz)

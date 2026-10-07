@@ -978,6 +978,39 @@ impl<'a> Dom<'a> {
         (*self.infeasible, *self.infeasible_reason, *self.infeasible_pos)
     }
 
+    // The accessors of presolve's probing and enumeration loops
+    // (presolve/hpresolve/probing.rs, enumeration.rs)
+
+    /// getChangedCols
+    pub(crate) fn changed_cols(&self) -> &[i32] {
+        self.changedcols.as_slice()
+    }
+
+    /// isChangedCol
+    pub(crate) fn is_changed_col(&self, col: usize) -> bool {
+        self.changedcolsflags[col] != 0
+    }
+
+    /// clearChangedCols(start)
+    pub(crate) fn clear_changed_cols(&mut self, start: usize) {
+        for i in start..self.changedcols.len() {
+            let col = self.changedcols[i] as usize;
+            self.changedcolsflags[col] = 0;
+        }
+        self.changedcols.truncate(start);
+    }
+
+    /// isBinary
+    pub(crate) fn is_binary(&self, col: usize) -> bool {
+        self.integrality[col] != 0 && self.col_lower[col] == 0.0 && self.col_upper[col] == 1.0
+    }
+
+    /// isRedundantRow
+    pub(crate) fn is_redundant_row(&self, row: usize) -> bool {
+        let (lower, upper) = self.row_bounds(row);
+        self.min_activity(row) >= lower - self.feastol && self.max_activity(row) <= upper + self.feastol
+    }
+
     pub(crate) fn row_bounds(&self, row: usize) -> (f64, f64) {
         (self.row_lower[row], self.row_upper[row])
     }

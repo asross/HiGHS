@@ -539,7 +539,7 @@ impl<'h> Presolve<'h> {
 
         if !self.opt.presolve_off {
             if self.mip.is_some() {
-                self.host.clique_set_presolve_flag(true);
+                self.cliquetable().in_presolve = true;
             }
             if self.opt.presolve_rule_test != 0 {
                 self.presolve_rule_test()?;
@@ -619,7 +619,7 @@ impl<'h> Presolve<'h> {
                 self.fast_presolve_loop()?;
 
                 if self.mip.is_some() && num_cliques_before_probing == -1 {
-                    num_cliques_before_probing = self.host.clique_num_cliques();
+                    num_cliques_before_probing = self.cliquetable().num_cliques_total();
                     self.store_current_problem_size();
                     self.dominated_columns()?;
                     if self.problem_size_reduction() > 0.0 {
@@ -669,7 +669,7 @@ impl<'h> Presolve<'h> {
                 }
 
                 if self.mip.is_some()
-                    && self.host.clique_num_cliques() > num_cliques_before_probing
+                    && self.cliquetable().num_cliques_total() > num_cliques_before_probing
                     && !domcol_after_probing_called
                 {
                     domcol_after_probing_called = true;
