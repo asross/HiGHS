@@ -20,6 +20,7 @@
 
 #include "Highs.h"
 #include "lp_data/HighsInfoDebug.h"
+#include "lp_data/HighsModelUtils.h"
 #include "lp_data/HighsSolutionDebug.h"
 #include "mip/HighsMipSolver.h"
 #include "model/HighsHessianUtils.h"
@@ -830,5 +831,161 @@ HighsStatus Highs::setSolution(const HighsInt num_entries,
     new_solution.col_value[index[iX]] = value[iX];
   return interpretCallStatus(options_.log_options, setSolution(new_solution),
                              return_status, "setSolution");
+}
+
+extern "C" double highs_rs_user_scale_solution(
+    const HighsUserScaleData* d, RsMut<uint8_t> integrality, bool primal,
+    bool dual, RsMut<double> col_value, RsMut<double> row_value,
+    RsMut<double> col_dual, RsMut<double> row_dual, double objective,
+    double offset);
+
+HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
+                                     bool update_kkt) {
+  HighsStatus return_status = HighsStatus::kOk;
+  if (!data.user_objective_scale && !data.user_bound_scale)
+    return HighsStatus::kOk;
+  const HighsLp& lp = this->model_.lp_;
+  const bool primal = info_.primal_solution_status != kSolutionStatusNone;
+  const bool dual = info_.dual_solution_status != kSolutionStatusNone;
+  auto part = [](std::vector<double>& v, const bool use, const HighsInt n) {
+    return use ? RsMut<double>{v.data(), size_t(n)} : RsMut<double>{nullptr, 0};
+  };
+  const double objective_function_value = highs_rs_user_scale_solution(
+      &data, rsMut(lp.integrality_), primal, dual,
+      part(solution_.col_value, primal, lp.num_col_),
+      part(solution_.row_value, primal, lp.num_row_),
+      part(solution_.col_dual, dual, lp.num_col_),
+      part(solution_.row_dual, dual, lp.num_row_),
+      info_.objective_function_value, lp.offset_);
+  if (!update_kkt) return return_status;
+  info_.objective_function_value = objective_function_value;
+  getKktFailures(options_, model_, solution_, basis_, info_);
+  return reportKktFailures(model_.lp_, options_, info_,
+                           "After removing user scaling")
+             ? HighsStatus::kWarning
+             : return_status;
+}
+
+// Infinite costs, basisForSolution and reportModelStats
+// (rust/src/lp_data/model.rs)
+struct RsInfCostMods {
+  RsMut<HighsInt> index;
+  RsMut<double> cost, lower, upper;
+  HighsInt num;
+};
+
+extern "C" {
+int highs_rs_handle_inf_cost(const RsLog* log, double inf_cost, bool minimize,
+                             bool is_mip, RsMut<uint8_t> integrality,
+                             RsMut<double> cost, RsMut<double> col_lower,
+                             RsMut<double> col_upper, RsInfCostMods* m);
+void highs_rs_restore_inf_cost(RsMut<HighsInt> index, RsMut<double> saved_cost,
+                               RsMut<double> saved_lower,
+                               RsMut<double> saved_upper,
+                               RsMut<double> col_value,
+                               RsMut<uint8_t> col_status, RsMut<double> cost,
+                               RsMut<double> col_lower,
+                               RsMut<double> col_upper, double* objective);
+HighsInt highs_rs_basis_for_solution(
+    const RsLog* log, double tol, RsMut<double> col_lower,
+    RsMut<double> col_upper, RsMut<double> col_value, RsMut<double> row_lower,
+    RsMut<double> row_upper, RsMut<double> row_value,
+    RsMut<uint8_t> col_status, RsMut<uint8_t> row_status);
+void highs_rs_report_model_stats(const RsLog* log, bool dev, const char* name,
+                                 size_t name_len, HighsInt num_col,
+                                 HighsInt num_row, HighsInt a_num_nz,
+                                 HighsInt hessian_dim, HighsInt q_num_nz,
+                                 RsMut<uint8_t> integrality,
+                                 RsMut<double> col_lower,
+                                 RsMut<double> col_upper);
+}
+
+static RsMut<uint8_t> rsBasisStatusOf(std::vector<HighsBasisStatus>& s) {
+  return {reinterpret_cast<uint8_t*>(s.data()), s.size()};
+}
+
+HighsStatus Highs::handleInfCost() {
+  HighsLp& lp = this->model_.lp_;
+  if (!lp.has_infinite_cost_) return HighsStatus::kOk;
+  const size_t n = lp.num_col_;
+  std::vector<HighsInt> index(n);
+  std::vector<double> cost(n), lower(n), upper(n);
+  RsInfCostMods m = {rsMut(index), rsMut(cost), rsMut(lower), rsMut(upper),
+                     0};
+  const RsLog log = rsLog(options_.log_options);
+  if (HighsStatus(highs_rs_handle_inf_cost(
+          &log, options_.infinite_cost, lp.sense_ == ObjSense::kMinimize,
+          lp.isMip(), rsMut(lp.integrality_), rsMut(lp.col_cost_),
+          rsMut(lp.col_lower_), rsMut(lp.col_upper_), &m)) ==
+      HighsStatus::kError)
+    return HighsStatus::kError;
+  HighsLpMods& mods = lp.mods_;
+  mods.save_inf_cost_variable_index.insert(
+      mods.save_inf_cost_variable_index.end(), index.begin(),
+      index.begin() + m.num);
+  mods.save_inf_cost_variable_cost.insert(
+      mods.save_inf_cost_variable_cost.end(), cost.begin(),
+      cost.begin() + m.num);
+  mods.save_inf_cost_variable_lower.insert(
+      mods.save_inf_cost_variable_lower.end(), lower.begin(),
+      lower.begin() + m.num);
+  mods.save_inf_cost_variable_upper.insert(
+      mods.save_inf_cost_variable_upper.end(), upper.begin(),
+      upper.begin() + m.num);
+  lp.has_infinite_cost_ = false;
+  return HighsStatus::kOk;
+}
+
+void Highs::restoreInfCost(HighsStatus& return_status) {
+  HighsLp& lp = this->model_.lp_;
+  HighsLpMods& mods = lp.mods_;
+  if (mods.save_inf_cost_variable_index.size() == 0) return;
+  highs_rs_restore_inf_cost(
+      rsMut(mods.save_inf_cost_variable_index),
+      rsMut(mods.save_inf_cost_variable_cost),
+      rsMut(mods.save_inf_cost_variable_lower),
+      rsMut(mods.save_inf_cost_variable_upper),
+      solution_.value_valid ? rsMut(solution_.col_value)
+                            : RsMut<double>{nullptr, 0},
+      basis_.valid ? rsBasisStatusOf(basis_.col_status)
+                   : RsMut<uint8_t>{nullptr, 0},
+      rsMut(lp.col_cost_), rsMut(lp.col_lower_), rsMut(lp.col_upper_),
+      &this->info_.objective_function_value);
+  lp.has_infinite_cost_ = true;
+  if (this->model_status_ == HighsModelStatus::kInfeasible) {
+    this->model_status_ = HighsModelStatus::kUnknown;
+    setHighsModelStatusAndClearSolutionAndBasis(this->model_status_);
+    return_status = highsStatusFromHighsModelStatus(model_status_);
+  }
+}
+
+HighsStatus Highs::basisForSolution() {
+  HighsLp& lp = model_.lp_;
+  assert(!lp.isMip() || options_.solve_relaxation);
+  assert(solution_.value_valid);
+  invalidateBasis();
+  HighsBasis basis;
+  basis.col_status.resize(lp.num_col_);
+  basis.row_status.resize(lp.num_row_);
+  const RsLog log = rsLog(options_.log_options);
+  highs_rs_basis_for_solution(
+      &log, options_.primal_feasibility_tolerance, rsMut(lp.col_lower_),
+      rsMut(lp.col_upper_), rsMut(solution_.col_value), rsMut(lp.row_lower_),
+      rsMut(lp.row_upper_), rsMut(solution_.row_value),
+      rsBasisStatusOf(basis.col_status), rsBasisStatusOf(basis.row_status));
+  return this->setBasis(basis);
+}
+
+void Highs::reportModelStats() const {
+  const HighsLp& lp = this->model_.lp_;
+  const HighsHessian& hessian = this->model_.hessian_;
+  const HighsLogOptions& log_options = this->options_.log_options;
+  if (!*log_options.output_flag) return;
+  const RsLog log = rsLog(log_options);
+  highs_rs_report_model_stats(
+      &log, *log_options.log_dev_level != 0, lp.model_name_.data(),
+      lp.model_name_.size(), lp.num_col_, lp.num_row_, lp.a_matrix_.numNz(),
+      hessian.dim_, hessian.dim_ > 0 ? hessian.numNz() : 0,
+      rsMut(lp.integrality_), rsMut(lp.col_lower_), rsMut(lp.col_upper_));
 }
 #endif

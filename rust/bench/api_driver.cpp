@@ -461,6 +461,9 @@ int main(int argc, char** argv) {
       {{"simplex_strategy", "4"}},
       {{"simplex_iteration_limit", "20"}},
       {{"allow_unbounded_or_infeasible", "true"}},
+      {{"user_bound_scale", "-3"}, {"user_objective_scale", "4"}},
+      {{"user_bound_scale", "700"}},
+      {{"user_objective_scale", "-2"}, {"solver", "ipm"}},
   };
   for (const auto& f : lps)
     for (size_t v = 0; v < variants.size(); v++)
@@ -469,6 +472,9 @@ int main(int argc, char** argv) {
                         "qjh.mps", "qptestnw.lp"}) {
     solveFile(instances + "/" + f, {}, false);
     solveFile(instances + "/" + f, {{"solve_relaxation", "true"}}, false);
+    solveFile(instances + "/" + f,
+              {{"user_bound_scale", "2"}, {"user_objective_scale", "-1"}},
+              false);
   }
   modelEdits(instances);
   solutionAndBasis(instances);

@@ -488,6 +488,8 @@ void HighsLp::deleteRows(const HighsIndexCollection& index_collection) {
   this->num_row_ = new_num_row;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/semi.rs)
 void HighsLp::unapplyMods() {
   // Restore any non-semi types
   const HighsInt num_non_semi = this->mods_.save_non_semi_variable_index.size();
@@ -554,6 +556,8 @@ void HighsLp::unapplyMods() {
 
   this->mods_.clear();
 }
+
+#endif
 
 void HighsLpMods::clear() {
   this->save_non_semi_variable_index.clear();

@@ -478,6 +478,8 @@ HighsStatus assessBounds(const HighsOptions& options, const char* type,
 }
 #endif
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/semi.rs)
 HighsStatus assessSemiVariables(HighsLp& lp, const HighsOptions& options,
                                 bool& made_semi_variable_mods) {
   made_semi_variable_mods = false;
@@ -730,6 +732,8 @@ bool activeModifiedUpperBounds(const HighsOptions& options, const HighsLp& lp,
   return (num_active_modified_upper != 0);
 }
 
+#endif
+
 #ifndef HIGHS_RUST
 HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
   double max_residual = 0;
@@ -789,6 +793,8 @@ HighsStatus userScaleLp(HighsLp& lp, HighsUserScaleData& data,
   return return_status;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/user_scale.rs)
 void userScaleLp(HighsLp& lp, HighsUserScaleData& data, const bool apply) {
   userScaleCosts(lp.integrality_, lp.col_cost_, data, apply);
   userScaleColBounds(lp.integrality_, lp.col_lower_, lp.col_upper_, data,
@@ -933,6 +939,8 @@ HighsStatus userScaleStatus(const HighsLogOptions& log_options,
   }
   return return_status;
 }
+
+#endif
 
 bool considerScaling(const HighsOptions& options, HighsLp& lp) {
   // Indicate whether new scaling has been determined in the return value.
@@ -3762,6 +3770,8 @@ void HighsUserScaleData::initialise(const HighsInt& user_objective_scale_,
   this->applied = false;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/user_scale.rs)
 bool HighsUserScaleData::scaleError(std::string& message) const {
   if (this->num_infinite_costs + this->num_infinite_hessian_values +
           this->num_infinite_col_bounds + this->num_infinite_row_bounds +
@@ -3840,3 +3850,5 @@ bool HighsUserScaleData::scaleWarning(std::string& message) const {
   message = ss.str();
   return true;
 }
+
+#endif

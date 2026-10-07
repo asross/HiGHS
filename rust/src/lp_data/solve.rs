@@ -619,7 +619,7 @@ pub fn assess_excessive_objective_bound_scaling(log: &Log, lp: &CLp, hessian_val
     let dl_user_bound_scale = outer_rounded_log(suggested_bound_scaling, 2);
     d.suggested_user_bound_scale = d.user_bound_scale + dl_user_bound_scale;
     let suggested_bound_scale_order_of_magnitude = outer_rounded_log(suggested_bound_scaling, 10);
-    let suggested_user_bound_scale_value = 2.0f64.powi(d.suggested_user_bound_scale);
+    let suggested_user_bound_scale_value = 2f64.powf(d.suggested_user_bound_scale as f64);
     min_noncontinuous_col_cost *= suggested_user_bound_scale_value;
     max_noncontinuous_col_cost *= suggested_user_bound_scale_value;
     min_col_cost = cmin(min_continuous_col_cost, min_noncontinuous_col_cost);

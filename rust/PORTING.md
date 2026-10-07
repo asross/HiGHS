@@ -497,7 +497,13 @@ checks and messages of getBasisInverseRow/Col, getBasisSolve,
 getBasisTransposeSolve, getReducedRow/Column, the reduced row and the
 extraction of basisSolveInterface's solution, setSolution, and
 getRangingData (HighsRanging.cpp; the FTRAN of each nonbasic column is a
-callback). clang fuses `objective + sense * x` in the ranging (x a
+callback). Also user objective and bound scaling (user_scale.rs:
+userScaleLp and its parts, userScaleStatus, HighsUserScaleData's
+messages, the solution part of userScaleSolution), the semi-variables
+(semi.rs: assessSemiVariables, relaxSemiVariables,
+activeModifiedUpperBounds, HighsLp::unapplyMods; C++ appends the records
+Rust returns to HighsLpMods) and model.rs (handleInfCost / restoreInfCost,
+basisForSolution's statuses, reportModelStats). clang fuses `objective + sense * x` in the ranging (x a
 product, or a product times a dual), `xi - delta * a_in`, the reduced row's
 dot products, the unconstrained LP's objective and the row activities of
 free rows in the IPX conversions. `rust/bench/api_compare.sh` builds
@@ -507,13 +513,14 @@ maximizations), model edits, setSolution / setBasis and presolve /
 postsolve through the API.
 
 Still C++ in lp_data: Highs.cpp and HighsInterface.cpp outside the above
-(run()'s file handling and user scaling, the model passing, the API
+(run()'s file handling, the model passing, getStandardFormLp,
+completeSolutionFromDiscreteAssignment, callSolveMip's post-processing, the API
 wrappers that only call other Highs methods, getDualRay / getPrimalRay's
 re-solves, setBasis, the IIS, ill-conditioning and multiobjective
 solves), HighsModelUtils.cpp (solution file writers), HMPSIO/FilereaderLp
 writers, writeRangingFile, HighsIis.cpp, the remaining HighsLpUtils.cpp
-(semi variables, user scaling, solution/basis file reading and writing, LP
-reporting, getSubVectors), and the rest of app/.
+(solution/basis file reading and writing, LP reporting, getSubVectors),
+and the rest of app/.
 
 sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls, with no
 arithmetic of their own worth moving across the FFI; they now call the

@@ -48,6 +48,8 @@ void highs_rs_append_nonbasic_cols(HighsInt num_col, HighsInt num_row,
 }
 #endif
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/model.rs)
 void Highs::reportModelStats() const {
   const HighsLp& lp = this->model_.lp_;
   const HighsHessian& hessian = this->model_.hessian_;
@@ -150,6 +152,8 @@ void Highs::reportModelStats() const {
                  stats_line.str().c_str());
   }
 }
+
+#endif
 
 HighsStatus Highs::formStandardFormLp() {
   this->clearStandardFormLp();
@@ -375,6 +379,8 @@ HighsStatus Highs::formStandardFormLp() {
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/model.rs)
 HighsStatus Highs::basisForSolution() {
   HighsLp& lp = model_.lp_;
   assert(!lp.isMip() || options_.solve_relaxation);
@@ -417,6 +423,8 @@ HighsStatus Highs::basisForSolution() {
               (int)lp.num_col_, (int)num_basic_row, (int)lp.num_row_);
   return this->setBasis(basis);
 }
+
+#endif
 
 HighsStatus Highs::addColsInterface(
     HighsInt ext_num_new_col, const double* ext_col_cost,
@@ -3096,6 +3104,8 @@ HighsStatus Highs::invertRequirementError(std::string method_name) const {
   return HighsStatus::kError;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/model.rs)
 HighsStatus Highs::handleInfCost() {
   HighsLp& lp = this->model_.lp_;
   if (!lp.has_infinite_cost_) return HighsStatus::kOk;
@@ -3183,12 +3193,16 @@ HighsStatus Highs::handleInfCost() {
   return HighsStatus::kOk;
 }
 
+#endif
+
 HighsStatus Highs::optionChangeAction() {
   if (this->iis_.valid_ && options_.iis_strategy != this->iis_.strategy_)
     this->iis_.clear();
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/model.rs)
 void Highs::restoreInfCost(HighsStatus& return_status) {
   HighsLp& lp = this->model_.lp_;
   HighsBasis& basis = this->basis_;
@@ -3228,6 +3242,8 @@ void Highs::restoreInfCost(HighsStatus& return_status) {
     return_status = highsStatusFromHighsModelStatus(model_status_);
   }
 }
+
+#endif
 
 HighsStatus Highs::userScale(HighsUserScaleData& data) {
   if (!options_.user_objective_scale && !options_.user_bound_scale)
@@ -3297,6 +3313,8 @@ HighsStatus Highs::userScaleModel(HighsUserScaleData& data) {
   return return_status;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/user_scale.rs)
 HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
                                      bool update_kkt) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -3339,6 +3357,8 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
              ? HighsStatus::kWarning
              : return_status;
 }
+
+#endif
 
 void HighsIllConditioning::clear() { this->record.clear(); }
 
