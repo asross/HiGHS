@@ -41,7 +41,81 @@ struct HighsCommandLineOptions {
   std::string cmd_write_solution_file = "";
   std::string cmd_write_model_file = "";
   std::string cmd_ranging = "";
+#ifdef HIGHS_RUST
+  // CLI11's app.count() of the options read as numbers
+  int count_threads = 0;
+  int count_time_limit = 0;
+  int count_random_seed = 0;
+#endif
 };
+
+#ifdef HIGHS_RUST
+// The command line is parsed by Rust (rust/src/lp_data/options_cli.rs), as
+// CLI11 parsed it
+struct RsCommandLine {
+  bool version, notice;
+  double time_limit;
+  int random_seed, threads;
+  int count_threads, count_time_limit, count_random_seed;
+  int exit_code;
+};
+extern "C" int highs_rs_parse_command_line(
+    int argc, const char* const* argv, RsCommandLine* out, void* ctx,
+    void (*set)(void*, int, const char*, size_t));
+
+enum class HighsCommandLineParse {
+  kOk = 0,
+  kHelp,
+  kExtras,
+  kArgumentMismatch,
+  kParseError
+};
+
+// Parses argv into cmd_options; message is the help text or CLI11's
+// error message, exit_code that of a kParseError
+inline HighsCommandLineParse parseCommandLine(
+    int argc, char** argv, HighsCommandLineOptions& cmd_options,
+    std::string& message, int& exit_code) {
+  struct Ctx {
+    HighsCommandLineOptions* c;
+    std::string* message;
+  } ctx{&cmd_options, &message};
+  auto set = [](void* p, int field, const char* s, size_t n) {
+    Ctx& x = *static_cast<Ctx*>(p);
+    HighsCommandLineOptions& c = *x.c;
+    std::string* fields[] = {&c.model_file,
+                             &c.options_file,
+                             &c.cmd_read_solution_file,
+                             &c.cmd_read_basis_file,
+                             &c.cmd_write_model_file,
+                             &c.cmd_write_solution_file,
+                             &c.cmd_write_basis_file,
+                             &c.cmd_presolve,
+                             &c.cmd_solver,
+                             &c.cmd_parallel,
+                             nullptr,
+                             &c.cmd_crossover,
+                             nullptr,
+                             nullptr,
+                             &c.cmd_ranging};
+    std::string* target =
+        field == 100 ? x.message : (field < 15 ? fields[field] : nullptr);
+    if (target) target->assign(s, n);
+  };
+  RsCommandLine out;
+  const int kind = highs_rs_parse_command_line(argc, argv, &out, &ctx, set);
+  cmd_options.cmd_version = out.version;
+  cmd_options.cmd_notice = out.notice;
+  cmd_options.cmd_time_limit = out.time_limit;
+  cmd_options.cmd_random_seed = out.random_seed;
+  cmd_options.cmd_threads = out.threads;
+  cmd_options.count_threads = out.count_threads;
+  cmd_options.count_time_limit = out.count_time_limit;
+  cmd_options.count_random_seed = out.count_random_seed;
+  exit_code = out.exit_code;
+  return HighsCommandLineParse(kind);
+}
+#else
 
 void setupCommandLineOptions(CLI::App& app,
                              HighsCommandLineOptions& cmd_options) {
@@ -150,9 +224,15 @@ void setupCommandLineOptions(CLI::App& app,
   app.get_formatter()->label("INT", "int");
   app.get_formatter()->label("OPTIONS", "options");
 }
+#endif
 
+#ifdef HIGHS_RUST
+bool loadOptions(const HighsLogOptions& report_log_options,
+                 const HighsCommandLineOptions& c, HighsOptions& options) {
+#else
 bool loadOptions(const CLI::App& app, const HighsLogOptions& report_log_options,
                  const HighsCommandLineOptions& c, HighsOptions& options) {
+#endif
   if (c.cmd_version || c.cmd_notice) {
     std::cout << "HiGHS version " << HIGHS_VERSION_MAJOR << "."
               << HIGHS_VERSION_MINOR << "." << HIGHS_VERSION_PATCH;
@@ -248,7 +328,11 @@ bool loadOptions(const CLI::App& app, const HighsLogOptions& report_log_options,
   }
 
   // Threads option.
+#ifdef HIGHS_RUST
+  if (c.count_threads > 0) {
+#else
   if (app.count("--" + kThreadsString) > 0) {
+#endif
     HighsInt value = c.cmd_threads;
     if (setLocalOptionValue(report_log_options, kThreadsString, options.records,
                             value) != OptionStatus::kOk)
@@ -264,7 +348,11 @@ bool loadOptions(const CLI::App& app, const HighsLogOptions& report_log_options,
   }
 
   // Time limit option.
+#ifdef HIGHS_RUST
+  if (c.count_time_limit > 0) {
+#else
   if (app.count("--" + kTimeLimitString) > 0) {
+#endif
     if (setLocalOptionValue(report_log_options, kTimeLimitString,
                             options.records,
                             c.cmd_time_limit) != OptionStatus::kOk)
@@ -272,7 +360,11 @@ bool loadOptions(const CLI::App& app, const HighsLogOptions& report_log_options,
   }
 
   // Random seed option.
+#ifdef HIGHS_RUST
+  if (c.count_random_seed > 0) {
+#else
   if (app.count("--" + kRandomSeedString) > 0) {
+#endif
     HighsInt value = c.cmd_random_seed;
     if (setLocalOptionValue(report_log_options, kRandomSeedString,
                             options.records, value) != OptionStatus::kOk)

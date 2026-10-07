@@ -11,6 +11,8 @@
 
 #include "util/stringutil.h"
 
+#ifndef HIGHS_RUST
+// Ported to Rust (lp_data/HighsOptionsRust.cpp)
 // For extended options to be parsed from a file. Assuming options file is
 // specified.
 HighsLoadOptionsStatus loadOptionsFromFile(
@@ -60,3 +62,4 @@ HighsLoadOptionsStatus loadOptionsFromFile(
 
   return HighsLoadOptionsStatus::kOk;
 }
+#endif

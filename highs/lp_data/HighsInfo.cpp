@@ -14,6 +14,8 @@
 
 #include "lp_data/HighsOptions.h"
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsOptionsRust.cpp, rust/src/lp_data/info.rs)
 void HighsInfo::invalidate() {
   valid = false;
   mip_node_count = -1;
@@ -433,3 +435,4 @@ void reportInfo(FILE* file, const InfoRecordDouble& info,
     fprintf(file, "%-30s = %g\n", info.name.c_str(), *info.value);
   }
 }
+#endif

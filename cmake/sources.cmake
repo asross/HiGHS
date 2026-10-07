@@ -366,6 +366,7 @@ set(highs_sources
     lp_data/HighsLpUtilsRust.cpp
     lp_data/HighsModelUtils.cpp
     lp_data/HighsOptions.cpp
+    lp_data/HighsOptionsRust.cpp
     lp_data/HighsRanging.cpp
     lp_data/HighsRunData.cpp
     lp_data/HighsSolution.cpp

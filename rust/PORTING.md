@@ -428,10 +428,43 @@ HighsLp::objectiveValue and computeObjectiveValue are `dot_blocked` by 4,
 the quadratic term of the dual objective by 8 (rounded products, fused
 tail), and `dobj += bound * dual` and `+= 0.5 * quad` are fused.
 
+Options and info (options.rs, info.rs, glue in HighsOptionsRust.cpp):
+the logic of HighsOptions.cpp, HighsInfo.cpp and io/LoadOptions.cpp
+(finding, checking, setting from bool/int/double/string with every
+validation message, getting, resetting, passing, reporting in the full,
+markdown and minimal formats, reading options files, HighsInfo's
+invalidate/equal, getInfoValue, writeInfo). The records stay in the C++
+headers (HighsOptions and HighsInfo are public API, read by highspy and
+the C API); each call passes Rust a table of views of them
+(`COptionRecord`: name, description, bounds, defaults, a pointer to the
+value field) built from `records`. Rust writes bool, int and double values
+through the pointers and strings through a C++ callback; highsOpenLogFile
+and HiPO's availability stay C++ callbacks. sscanf's %d, atoi and atof are
+mirrored (strtol saturated to 64 bits, truncated to 32). The one
+difference: a non-numeric value for an integer option logs (at
+log_dev_level > 0) the conversion's result as 0 where the C++ prints
+sscanf's uninitialised variables. `rust/bench/options_compare.sh` builds
+options_driver.cpp against both libraries and diffs its output and files;
+`cli_compare.sh` diffs the app on the command lines of cli_cases.txt
+(stdout, stderr, exit code, written files; times masked).
+
+The app's command line (options_cli.rs) is parsed by Rust as CLI11 2.5.0
+parsed it for the options HighsRuntimeOptions.h defines: classification
+of `--name[=value]`, `-x[rest]`, negative numbers and `--`, the model file
+as the positional, CLI11's checks in its order (help, existing-file
+validators, more than one value, conversions with strtoll base 0, `_`/`'`
+separators, 0o/0b, trailing spaces and strtold), leftovers, the error
+messages and exit codes, and the help text (column 33, HiGHS's patched
+paragraph formatter). C++ keeps printing them in RunHighs.cpp and the
+setting of options in loadOptions. CLI11.hpp is still included for the
+third-party notice and the "Command line parsed using CLI11" log line,
+which stay identical. Limits: strtold is strtod (x86_64's 80-bit strtold
+could round a halfway --time_limit twice), and glibc 2.38's C23 strtoll
+(which g++ may bind) also reads a leading "-0b".
+
 Still C++ in lp_data: Highs.cpp and HighsInterface.cpp (run /
 optimizeModel orchestration, presolve/postsolve calls, the cleanup solve,
 basis handling, model modification), HighsSolve.cpp (solveLp dispatch),
-HighsOptions.cpp and HighsInfo.cpp (option setting, files, reports),
 HighsModelUtils.cpp (solution file writers), HMPSIO/FilereaderLp writers,
 HighsRanging.cpp, HighsIis.cpp, the remaining HighsLpUtils.cpp (semi
 variables, user scaling, solution/basis file reading and writing, LP
@@ -443,3 +476,5 @@ arithmetic of their own worth moving across the FFI; they now call the
 Rust LP relaxation through its C++ handle. Porting them means a callback
 per HighsSearch / HighsDomain step (the local domains are C++), which is
 left for when the domain's C++ class goes.
+
+handling of HighsSolution.cpp, and the rest of app/.
