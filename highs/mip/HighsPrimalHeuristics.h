@@ -11,6 +11,7 @@
 #include <array>
 #include <vector>
 
+#include "HConfig.h"
 #include "lp_data/HStruct.h"
 #include "lp_data/HighsLp.h"
 #include "util/HighsRandom.h"
@@ -19,6 +20,72 @@ class HighsMipSolver;
 class HighsMipWorker;
 class HighsLpRelaxation;
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct Heuristics;
+}
+
+// The heuristics' state and logic are Rust's (rust/src/mip/primal.rs and
+// graph_lns.rs); they reach the C++ objects through HighsMipRust.h
+class HighsPrimalHeuristics {
+ private:
+  const HighsMipSolver& mipsolver;
+  highs_rs::Heuristics* rs_;
+
+ public:
+  HighsPrimalHeuristics(HighsMipSolver& mipsolver);
+  ~HighsPrimalHeuristics();
+  HighsPrimalHeuristics(const HighsPrimalHeuristics&) = delete;
+  HighsPrimalHeuristics& operator=(const HighsPrimalHeuristics&) = delete;
+
+  void setupIntCols();
+
+  void graphLNS(HighsMipWorker& worker,
+                const std::vector<double>& relaxationsol, bool deep,
+                int64_t maxLpIters = -1);
+
+  // returns the number of integer columns where the solutions differ
+  HighsInt crossover(HighsMipWorker& worker, const std::vector<double>& other,
+                     double otherObjective, double timeCap);
+
+  void rootReducedCost(HighsMipWorker& worker);
+
+  void RENS(HighsMipWorker& worker, const std::vector<double>& relaxationsol);
+
+  void RINS(HighsMipWorker& worker, const std::vector<double>& relaxationsol);
+
+  void feasibilityPump(HighsMipWorker& worker);
+
+  void centralRounding(HighsMipWorker& worker);
+
+  void flushStatistics(HighsMipSolver& mipsolver, HighsMipWorker& worker);
+
+  bool tryRoundedPoint(HighsMipWorker& worker, const std::vector<double>& point,
+                       const int solution_source);
+
+  bool linesearchRounding(HighsMipWorker& worker,
+                          const std::vector<double>& point1,
+                          const std::vector<double>& point2,
+                          const int solution_source);
+
+  void randomizedRounding(HighsMipWorker& worker,
+                          const std::vector<double>& relaxationsol);
+
+  void shifting(HighsMipWorker& worker,
+                const std::vector<double>& relaxationsol);
+
+  void ziRound(HighsMipWorker& worker,
+               const std::vector<double>& relaxationsol);
+
+  bool addIncumbent(const std::vector<double>& sol, double solobj,
+                    const int solution_source, HighsMipWorker& worker);
+
+  bool trySolution(const std::vector<double>& solution,
+                   const int solution_source, HighsMipWorker& worker);
+
+  HighsInt getHeuristicRandom(const HighsInt sup);
+};
+#else
 class HighsPrimalHeuristics {
  private:
   const HighsMipSolver& mipsolver;
@@ -123,5 +190,7 @@ class HighsPrimalHeuristics {
     return randgen.integer(sup);
   }
 };
+
+#endif  // HIGHS_RUST
 
 #endif

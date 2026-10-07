@@ -51,6 +51,8 @@ class HighsRedcostFixing {
   }
   ~HighsRedcostFixing() { highs_rs::highs_rs_redcost_free(rs_); }
 
+  highs_rs::RedcostFixing* rust() const { return rs_; }
+
   std::vector<std::pair<double, HighsDomainChange>> getLurkingBounds(
       const HighsMipSolver& mipsolver, const HighsDomain& globaldom) const;
 

@@ -12,6 +12,7 @@
 
 #include "../extern/pdqsort/pdqsort.h"
 #include "lp_data/HighsModelUtils.h"
+#include "mip/HighsMipRust.h"
 #include "mip/HighsPseudocost.h"
 #include "mip/HighsRedcostFixing.h"
 #include "mip/MipTimer.h"
@@ -30,50 +31,60 @@ HighsMipSolverData::HighsMipSolverData(HighsMipSolver& mipsolver)
       implications(mipsolver),
       objectiveFunction(mipsolver),
       presolve_status(HighsPresolveStatus::kNotSet),
-      cliquesExtracted(false),
-      rowMatrixSet(false),
-      analyticCenterComputed(false),
+      cliquesExtracted(sc_.cliquesExtracted),
+      rowMatrixSet(sc_.rowMatrixSet),
+      analyticCenterComputed(sc_.analyticCenterComputed),
       analyticCenterStatus(HighsModelStatus::kNotset),
-      detectSymmetries(false),
-      numRestarts(0),
-      numRestartsRoot(0),
-      numCliqueEntriesAfterPresolve(0),
-      numCliqueEntriesAfterFirstPresolve(0),
-      feastol(0.0),
-      epsilon(0.0),
-      heuristic_effort(0.0),
-      dispfreq(0),
-      firstlpsolobj(-kHighsInf),
-      rootlpsolobj(-kHighsInf),
-      numintegercols(0),
-      maxTreeSizeLog2(0),
-      pruned_treeweight(0),
-      avgrootlpiters(0.0),
-      disptime(0.0),
-      last_disptime(0.0),
-      firstrootlpiters(0),
-      num_nodes(0),
-      num_leaves(0),
-      num_leaves_before_run(0),
-      num_nodes_before_run(0),
-      total_repair_lp(0),
-      total_repair_lp_feasible(0),
-      total_repair_lp_iterations(0),
-      total_lp_iterations(0),
-      heuristic_lp_iterations(0),
-      sepa_lp_iterations(0),
-      sb_lp_iterations(0),
-      total_lp_iterations_before_run(0),
-      heuristic_lp_iterations_before_run(0),
-      sepa_lp_iterations_before_run(0),
-      sb_lp_iterations_before_run(0),
-      num_disp_lines(0),
-      numImprovingSols(0),
-      lower_bound(-kHighsInf),
-      upper_bound(kHighsInf),
-      upper_limit(kHighsInf),
-      optimality_limit(kHighsInf),
-      debugSolution(mipsolver) {
+      detectSymmetries(sc_.detectSymmetries),
+      numRestarts(sc_.numRestarts),
+      numRestartsRoot(sc_.numRestartsRoot),
+      numCliqueEntriesAfterPresolve(sc_.numCliqueEntriesAfterPresolve),
+      numCliqueEntriesAfterFirstPresolve(
+          sc_.numCliqueEntriesAfterFirstPresolve),
+      feastol(sc_.feastol),
+      epsilon(sc_.epsilon),
+      heuristic_effort(sc_.heuristic_effort),
+      dispfreq(sc_.dispfreq),
+      firstlpsolobj(sc_.firstlpsolobj),
+      rootlpsolobj(sc_.rootlpsolobj),
+      numintegercols(sc_.numintegercols),
+      maxTreeSizeLog2(sc_.maxTreeSizeLog2),
+      pruned_treeweight(sc_.pruned_treeweight),
+      avgrootlpiters(sc_.avgrootlpiters),
+      disptime(sc_.disptime),
+      last_disptime(sc_.last_disptime),
+      firstrootlpiters(sc_.firstrootlpiters),
+      num_nodes(sc_.num_nodes),
+      num_leaves(sc_.num_leaves),
+      num_leaves_before_run(sc_.num_leaves_before_run),
+      num_nodes_before_run(sc_.num_nodes_before_run),
+      total_repair_lp(sc_.total_repair_lp),
+      total_repair_lp_feasible(sc_.total_repair_lp_feasible),
+      total_repair_lp_iterations(sc_.total_repair_lp_iterations),
+      total_lp_iterations(sc_.total_lp_iterations),
+      heuristic_lp_iterations(sc_.heuristic_lp_iterations),
+      sepa_lp_iterations(sc_.sepa_lp_iterations),
+      sb_lp_iterations(sc_.sb_lp_iterations),
+      total_lp_iterations_before_run(sc_.total_lp_iterations_before_run),
+      heuristic_lp_iterations_before_run(
+          sc_.heuristic_lp_iterations_before_run),
+      sepa_lp_iterations_before_run(sc_.sepa_lp_iterations_before_run),
+      sb_lp_iterations_before_run(sc_.sb_lp_iterations_before_run),
+      num_disp_lines(sc_.num_disp_lines),
+      numImprovingSols(sc_.numImprovingSols),
+      lower_bound(sc_.lower_bound),
+      upper_bound(sc_.upper_bound),
+      upper_limit(sc_.upper_limit),
+      optimality_limit(sc_.optimality_limit),
+      primal_dual_integral(sc_.primal_dual_integral),
+      debugSolution(mipsolver),
+      lns_tree_next(sc_.lns_tree_next),
+      lns_tree_wait(sc_.lns_tree_wait),
+      lns_quick_improved(sc_.lns_quick_improved),
+      lns_quick_lp_iterations(sc_.lns_quick_lp_iterations),
+      concurrent_lns_seen(sc_.concurrent_lns_seen),
+      crossoverStartLogged(sc_.crossoverStartLogged),
+      rootCutsImported(sc_.rootCutsImported) {
   conflictpools.emplace_back(5 * mipsolver.options_mip_->mip_pool_age_limit,
                              mipsolver.options_mip_->mip_pool_soft_limit);
   cutpools.emplace_back(mipsolver.numCol(),
@@ -166,6 +177,12 @@ std::string HighsMipSolverData::solutionSourceToString(
 
 bool HighsMipSolverData::checkSolution(
     const std::vector<double>& solution) const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_solution(highs_rs::mipFns(), &rsm, 0, solution.data(), solution.size(), 0);
+  }
+#endif
   for (HighsInt i = 0; i != mipsolver.numCol(); ++i) {
     if (solution[i] < mipsolver.model_->col_lower_[i] - feastol) return false;
     if (solution[i] > mipsolver.model_->col_upper_[i] + feastol) return false;
@@ -217,6 +234,12 @@ HighsMipSolverData::getInfeasibleRows(
 
 bool HighsMipSolverData::trySolution(const std::vector<double>& solution,
                                      const int solution_source) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_solution(highs_rs::mipFns(), &rsm, 2, solution.data(), solution.size(), solution_source);
+  }
+#endif
   if (int(solution.size()) != mipsolver.numCol()) return false;
 
   HighsCDouble obj = 0;
@@ -248,6 +271,12 @@ bool HighsMipSolverData::trySolution(const std::vector<double>& solution,
 
 bool HighsMipSolverData::solutionRowFeasible(
     const std::vector<double>& solution) const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_solution(highs_rs::mipFns(), &rsm, 1, solution.data(), solution.size(), 0);
+  }
+#endif
   for (HighsInt i = 0; i != mipsolver.numRow(); ++i) {
     HighsCDouble c_double_rowactivity = HighsCDouble(0.0);
 
@@ -266,6 +295,12 @@ bool HighsMipSolverData::solutionRowFeasible(
 }
 
 HighsModelStatus HighsMipSolverData::trivialHeuristics() {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return HighsModelStatus(int(highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 2)));
+  }
+#endif
   //  printf("\nHighsMipSolverData::trivialHeuristics() Number of continuous
   //  columns is %d\n",
   //	 int(continuous_cols.size()));
@@ -615,6 +650,12 @@ void HighsMipSolverData::finishSymmetryDetection(
 double HighsMipSolverData::limitsToGap(const double use_lower_bound,
                                        const double use_upper_bound, double& lb,
                                        double& ub) const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_limits_to_gap(highs_rs::mipFns(), &rsm, use_lower_bound, use_upper_bound, &lb, &ub);
+  }
+#endif
   double offset = mipsolver.model_->offset_;
   lb = use_lower_bound + offset;
   if (std::abs(lb) <= epsilon) lb = 0;
@@ -634,6 +675,12 @@ double HighsMipSolverData::limitsToGap(const double use_lower_bound,
 
 double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
                                                 double mip_rel_gap) const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_new_upper_limit(highs_rs::mipFns(), &rsm, ub, mip_abs_gap, mip_rel_gap);
+  }
+#endif
   double new_upper_limit;
   if (objectiveFunction.isIntegral()) {
     new_upper_limit =
@@ -674,6 +721,12 @@ double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
 }
 
 bool HighsMipSolverData::moreHeuristicsAllowed() const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 0) != 0;
+  }
+#endif
   // the quick graph-LNS search, early in the root node, has a budget of
   // its own
   const int64_t heur_lp_iterations =
@@ -741,6 +794,13 @@ bool HighsMipSolverData::moreHeuristicsAllowed() const {
 }
 
 void HighsMipSolverData::removeFixedIndices() {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 3);
+    return;
+  }
+#endif
   integral_cols.erase(
       std::remove_if(integral_cols.begin(), integral_cols.end(),
                      [&](HighsInt col) { return getDomain().isFixed(col); }),
@@ -1169,6 +1229,12 @@ void HighsMipSolverData::runSetup() {
 double HighsMipSolverData::transformNewIntegerFeasibleSolution(
     const std::vector<double>& sol,
     const bool possibly_store_as_new_incumbent) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_transform(highs_rs::mipFns(), &rsm, sol.data(), sol.size(), possibly_store_as_new_incumbent);
+  }
+#endif
   HighsSolution solution;
   solution.col_value = sol;
   solution.value_valid = true;
@@ -1318,6 +1384,12 @@ try_again:
 }
 
 double HighsMipSolverData::percentageInactiveIntegers() const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 1);
+  }
+#endif
   return 100.0 *
          (1.0 - static_cast<double>(integer_cols.size() -
                                     cliquetable.getSubstitutions().size()) /
@@ -1514,6 +1586,12 @@ bool HighsMipSolverData::addIncumbent(const std::vector<double>& sol,
                                       double solobj, const int solution_source,
                                       const bool print_display_line,
                                       const bool is_user_solution) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_add_incumbent(highs_rs::mipFns(), &rsm, sol.data(), sol.size(), solobj, solution_source, print_display_line, is_user_solution);
+  }
+#endif
   assert(!parallelLockActive());
   const bool execute_mip_solution_callback =
       !is_user_solution && !mipsolver.submip &&
@@ -1734,6 +1812,13 @@ void HighsMipSolverData::printSolutionSourceKey() const {
 }
 
 void HighsMipSolverData::printDisplayLine(const int solution_source) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    highs_rs::highs_rs_mip_print_display_line(highs_rs::mipFns(), &rsm, solution_source);
+    return;
+  }
+#endif
   // MIP logging method
   //
   // Note that if the original problem is a maximization, the cost
@@ -1890,6 +1975,12 @@ bool HighsMipSolverData::rootSeparationRound(
 
 HighsLpRelaxation::Status HighsMipSolverData::evaluateRootLp(
     HighsMipWorker& worker) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return HighsLpRelaxation::Status(highs_rs::highs_rs_mip_evaluate_root_lp(highs_rs::mipFns(), &rsm, &worker));
+  }
+#endif
   do {
     getDomain().propagate();
 
@@ -2202,6 +2293,14 @@ void HighsMipSolverData::stopConcurrentLns() {
 }
 
 void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
+#ifdef HIGHS_RUST
+  {
+    highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    highs_rs::highs_rs_mip_evaluate_root_node(highs_rs::mipFns(), &rsm,
+                                              &worker);
+    return;
+  }
+#endif
   // not in a concurrent LNS helper, which only searches for solutions, nor
   // in a main solver that has one: the analytic centre (an IPX solve that
   // can take long, without checking whether the helper has closed the gap)
@@ -2839,6 +2938,12 @@ restart:
 }
 
 bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    return highs_rs::highs_rs_mip_check_limits(highs_rs::mipFns(), &rsm, nodeOffset);
+  }
+#endif
   const HighsOptions& options = *mipsolver.options_mip_;
 
   // A concurrent LNS helper stops when its main solver does, and the main
@@ -3019,6 +3124,13 @@ void HighsMipSolverData::saveReportMipSolution(const double new_upper_limit) {
 void HighsMipSolverData::limitsToBounds(double& dual_bound,
                                         double& primal_bound,
                                         double& mip_rel_gap) const {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    highs_rs::highs_rs_mip_limits_to_bounds(highs_rs::mipFns(), &rsm, &dual_bound, &primal_bound, &mip_rel_gap);
+    return;
+  }
+#endif
   mip_rel_gap = limitsToGap(lower_bound, upper_bound, dual_bound, primal_bound);
   primal_bound =
       std::min(mipsolver.options_mip_->objective_bound, primal_bound);
@@ -3032,6 +3144,13 @@ void HighsMipSolverData::limitsToBounds(double& dual_bound,
 void HighsMipSolverData::updateLowerBound(double new_lower_bound,
                                           const bool check_bound_change,
                                           const bool check_prev_data) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    highs_rs::highs_rs_mip_update_lower_bound(highs_rs::mipFns(), &rsm, new_lower_bound, check_bound_change, check_prev_data);
+    return;
+  }
+#endif
   // Update lower bound
   double prev_lower_bound = lower_bound;
   lower_bound = new_lower_bound;
@@ -3185,6 +3304,13 @@ void HighsMipSolverData::updatePrimalDualIntegral(const double from_lower_bound,
                                                   const double to_upper_bound,
                                                   const bool check_bound_change,
                                                   const bool check_prev_data) {
+#ifdef HIGHS_RUST
+  {
+    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
+    highs_rs::highs_rs_mip_update_pdi(highs_rs::mipFns(), &rsm, from_lower_bound, to_lower_bound, from_upper_bound, to_upper_bound, check_bound_change, check_prev_data);
+    return;
+  }
+#endif
   // Parameters to updatePrimalDualIntegral are lower and upper bounds
   // before/after a change
   //

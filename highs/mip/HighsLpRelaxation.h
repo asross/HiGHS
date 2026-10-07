@@ -397,6 +397,7 @@ class HighsLpRelaxation {
   double getObjective() const { return sh_->objective; }
 
   highs_rs::LpRelax* rust() const { return rs_; }
+  highs_rs::LpShared* rustShared() const { return sh_; }
 
   void setIterationLimit(HighsInt limit = kHighsIInf) {
     lpsolver.setOptionValue("simplex_iteration_limit", limit);
