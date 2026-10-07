@@ -1173,6 +1173,8 @@ HighsStatus Highs::optimizeModel() {
 // Checks the options calls presolve and postsolve if needed.
 //
 // LP solvers are called with callSolveLp(..)
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)
 HighsStatus Highs::calledOptimizeModel() {
   // Level 2b of Highs::run()
   //
@@ -2063,6 +2065,8 @@ HighsStatus Highs::calledOptimizeModel() {
   return returnFromOptimizeModel(return_status, undo_mods);
 }
 
+#endif
+
 HighsStatus Highs::getStandardFormLp(HighsInt& num_col, HighsInt& num_row,
                                      HighsInt& num_nz, double& offset,
                                      double* cost, double* rhs, HighsInt* start,
@@ -2286,6 +2290,8 @@ HighsStatus Highs::getBasisInverseRowSparse(const HighsInt row,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/query.rs)
 HighsStatus Highs::getBasisInverseRow(const HighsInt row, double* row_vector,
                                       HighsInt* row_num_nz,
                                       HighsInt* row_indices) {
@@ -2484,6 +2490,8 @@ HighsStatus Highs::getReducedColumn(const HighsInt col, double* col_vector,
   return HighsStatus::kOk;
 }
 
+#endif
+
 HighsStatus Highs::getKappa(double& kappa, const bool exact,
                             const bool report) const {
   if (!ekk_instance_.status_.has_invert)
@@ -2492,6 +2500,8 @@ HighsStatus Highs::getKappa(double& kappa, const bool exact,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/query.rs)
 HighsStatus Highs::setSolution(const HighsSolution& solution) {
   HighsStatus return_status = HighsStatus::kOk;
   // Determine whether a new solution will be defined. If so,
@@ -2550,6 +2560,8 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
   return returnFromHighs(return_status);
 }
 
+#endif
+
 HighsStatus Highs::getColOrRowName(const HighsLp& lp, const bool is_col,
                                    const HighsInt index,
                                    std::string& name) const {
@@ -2576,6 +2588,8 @@ HighsStatus Highs::getColOrRowName(const HighsLp& lp, const bool is_col,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/query.rs)
 HighsStatus Highs::setSolution(const HighsInt num_entries,
                                const HighsInt* index, const double* value) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -2626,6 +2640,8 @@ HighsStatus Highs::setSolution(const HighsInt num_entries,
   return interpretCallStatus(options_.log_options, setSolution(new_solution),
                              return_status, "setSolution");
 }
+
+#endif
 
 HighsStatus Highs::setCallback(HighsCallbackFunctionType user_callback,
                                void* user_callback_data) {
@@ -3750,6 +3766,8 @@ void Highs::deprecationMessage(const std::string& method_name,
   }
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)
 HighsPresolveStatus Highs::runPresolve(const bool force_lp_presolve,
                                        const bool force_presolve) {
   presolve_.clear();
@@ -3896,6 +3914,8 @@ HighsPostsolveStatus Highs::runPostsolve() {
   presolve_.postsolve_status_ = postsolve_status;
   return postsolve_status;
 }
+
+#endif
 
 void Highs::clearDerivedModelProperties() {
   this->clearPresolve();
@@ -4784,6 +4804,8 @@ HighsStatus Highs::returnFromWriteSolution(FILE* file,
 }
 
 // Applies checks before returning from optimizeModel()
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)
 HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
                                            const bool undo_mods) {
   assert(!called_return_from_optimize_model);
@@ -5063,6 +5085,8 @@ void Highs::reportSolvedLpQpStats() {
                  "HiGHS run time      : %13.2f\n", run_time);
   }
 }
+
+#endif
 
 HighsStatus Highs::crossover(const HighsSolution& user_solution) {
   HighsStatus return_status = HighsStatus::kOk;

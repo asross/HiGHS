@@ -5,12 +5,21 @@
 //! (`Log`), so messages are those of the C++ formats, byte for byte.
 
 pub mod ffi;
+pub mod basis;
+pub mod edit;
 pub mod info;
 pub mod lp_utils;
+pub mod model;
 pub mod options;
 pub mod options_cli;
+pub mod query;
+pub mod ranging;
+pub mod run;
+pub mod semi;
+pub mod solve;
 pub mod solution;
 pub mod writers;
+pub mod user_scale;
 
 use crate::util::printf::{sprintf, Arg};
 

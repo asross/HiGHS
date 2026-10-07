@@ -18,6 +18,7 @@
 #include "io/HMPSIO.h"
 #include "io/HighsIO.h"
 #include "lp_data/HighsModelUtils.h"
+#include "lp_data/HighsRust.h"
 #include "lp_data/HighsSolution.h"
 #include "lp_data/HighsStatus.h"
 #include "util/HighsCDouble.h"
@@ -477,6 +478,8 @@ HighsStatus assessBounds(const HighsOptions& options, const char* type,
 }
 #endif
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/semi.rs)
 HighsStatus assessSemiVariables(HighsLp& lp, const HighsOptions& options,
                                 bool& made_semi_variable_mods) {
   made_semi_variable_mods = false;
@@ -729,6 +732,8 @@ bool activeModifiedUpperBounds(const HighsOptions& options, const HighsLp& lp,
   return (num_active_modified_upper != 0);
 }
 
+#endif
+
 #ifndef HIGHS_RUST
 HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
   double max_residual = 0;
@@ -788,6 +793,8 @@ HighsStatus userScaleLp(HighsLp& lp, HighsUserScaleData& data,
   return return_status;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/user_scale.rs)
 void userScaleLp(HighsLp& lp, HighsUserScaleData& data, const bool apply) {
   userScaleCosts(lp.integrality_, lp.col_cost_, data, apply);
   userScaleColBounds(lp.integrality_, lp.col_lower_, lp.col_upper_, data,
@@ -932,6 +939,8 @@ HighsStatus userScaleStatus(const HighsLogOptions& log_options,
   }
   return return_status;
 }
+
+#endif
 
 bool considerScaling(const HighsOptions& options, HighsLp& lp) {
   // Indicate whether new scaling has been determined in the return value.
@@ -1649,6 +1658,8 @@ void appendRowsToLpVectors(HighsLp& lp, const HighsInt num_new_row,
   }
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
 void deleteScale(vector<double>& scale,
                  const HighsIndexCollection& index_collection) {
   assert(ok(index_collection));
@@ -1814,6 +1825,8 @@ void changeLpCosts(HighsLp& lp, const HighsIndexCollection& index_collection,
     lp.has_infinite_cost_ = lp.hasInfiniteCost(infinite_cost);
 }
 
+#endif
+
 void changeLpColBounds(HighsLp& lp,
                        const HighsIndexCollection& index_collection,
                        const vector<double>& new_col_lower,
@@ -1830,6 +1843,8 @@ void changeLpRowBounds(HighsLp& lp,
                new_row_upper);
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
 void changeBounds(vector<double>& lower, vector<double>& upper,
                   const HighsIndexCollection& index_collection,
                   const vector<double>& new_lower,
@@ -1865,6 +1880,8 @@ void changeBounds(vector<double>& lower, vector<double>& upper,
     upper[ix] = new_upper[usr_ix];
   }
 }
+
+#endif
 
 HighsInt getNumInt(const HighsLp& lp) {
   HighsInt num_int = 0;
@@ -1908,6 +1925,8 @@ void getLpRowBounds(const HighsLp& lp, const HighsInt from_row,
   }
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
 // Get a single coefficient from the matrix
 void getLpMatrixCoefficient(const HighsLp& lp, const HighsInt Xrow,
                             const HighsInt Xcol, double* val) {
@@ -1928,6 +1947,8 @@ void getLpMatrixCoefficient(const HighsLp& lp, const HighsInt Xrow,
     *val = lp.a_matrix_.value_[get_el];
   }
 }
+
+#endif
 
 // Methods for reporting an LP, including its row and column data and matrix
 //
@@ -2996,6 +3017,8 @@ HighsStatus readBasisStream(const HighsLogOptions& log_options, HighsLp& lp,
   return return_status;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
 HighsStatus calculateColDualsQuad(const HighsLp& lp, HighsSolution& solution) {
   const bool correct_size = int(solution.row_dual.size()) == lp.num_row_;
   const bool is_colwise = lp.a_matrix_.isColwise();
@@ -3027,6 +3050,8 @@ HighsStatus calculateColDualsQuad(const HighsLp& lp, HighsSolution& solution) {
   return HighsStatus::kOk;
 }
 
+#endif
+
 HighsStatus calculateRowValuesQuad(const HighsLp& lp,
                                    const std::vector<double>& col_value,
                                    std::vector<double>& row_value,
@@ -3036,6 +3061,14 @@ HighsStatus calculateRowValuesQuad(const HighsLp& lp,
   const bool data_error = !correct_size || !is_colwise;
   assert(!data_error);
   if (data_error) return HighsStatus::kError;
+#ifdef HIGHS_RUST
+  // The debugging report of a row stays C++
+  if (report_row < 0) {
+    row_value.resize(lp.num_row_);
+    highsRsCalculateRowValuesQuad(lp, col_value, row_value);
+    return HighsStatus::kOk;
+  }
+#endif
 
   std::vector<HighsCDouble> row_value_quad;
   row_value_quad.assign(lp.num_row_, HighsCDouble{0.0});
@@ -3116,6 +3149,8 @@ bool isMatrixDataNull(const HighsLogOptions& log_options,
   return null_data;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)
 void reportPresolveReductions(const HighsLogOptions& log_options,
                               HighsPresolveStatus presolve_status,
                               const HighsLp& lp, const HighsLp& presolved_lp) {
@@ -3177,6 +3212,8 @@ void reportPresolveReductions(const HighsLogOptions& log_options,
                (num_col_from - num_col_to), num_nz_to, nz_sign_char, delta_nz,
                message.c_str());
 }
+
+#endif
 
 bool isLessInfeasibleDSECandidate(const HighsLogOptions& log_options,
                                   const HighsLp& lp) {
@@ -3736,6 +3773,8 @@ void HighsUserScaleData::initialise(const HighsInt& user_objective_scale_,
   this->applied = false;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/user_scale.rs)
 bool HighsUserScaleData::scaleError(std::string& message) const {
   if (this->num_infinite_costs + this->num_infinite_hessian_values +
           this->num_infinite_col_bounds + this->num_infinite_row_bounds +
@@ -3814,3 +3853,5 @@ bool HighsUserScaleData::scaleWarning(std::string& message) const {
   message = ss.str();
   return true;
 }
+
+#endif

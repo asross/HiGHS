@@ -1539,6 +1539,8 @@ double computeObjectiveValue(const HighsLp& lp, const HighsSolution& solution) {
 }
 #endif
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsSolutionRust.cpp, rust/src/lp_data/basis.rs)
 // Refine any HighsBasisStatus::kNonbasic settings according to the LP
 // and any solution values
 void refineBasis(const HighsLp& lp, const HighsSolution& solution,
@@ -1960,6 +1962,8 @@ HighsStatus ipxBasicSolutionToHighsBasicSolution(
   return HighsStatus::kOk;
 }
 
+#endif
+
 HighsStatus formSimplexLpBasisAndFactorReturn(
     const HighsStatus return_status, HighsLpSolverObject& solver_object) {
   HighsLp& lp = solver_object.lp_;
@@ -2107,6 +2111,8 @@ void resetModelStatusAndHighsInfo(HighsModelStatus& model_status,
   highs_info.invalidateKkt();
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsSolutionRust.cpp, rust/src/lp_data/basis.rs)
 bool isBasisConsistent(const HighsLp& lp, const HighsBasis& basis) {
   if (!isBasisRightSize(lp, basis)) return false;
 
@@ -2121,6 +2127,8 @@ bool isBasisConsistent(const HighsLp& lp, const HighsBasis& basis) {
   }
   return num_basic_variables == lp.num_row_;
 }
+
+#endif
 
 bool isColPrimalSolutionRightSize(const HighsLp& lp,
                                   const HighsSolution& solution) {
