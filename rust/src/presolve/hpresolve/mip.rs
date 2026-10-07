@@ -1,9 +1,10 @@
 //! The MIP reductions: dominated columns, probing (prepareProbing, the
-//! probing loop in C++, finaliseProbing, lifting for probing), solution
-//! enumeration, the substitutions of the conflict graph, variable bounds,
+//! probing loop of probing.rs, finaliseProbing, lifting for probing),
+//! solution enumeration (enumeration.rs), the substitutions of the conflict graph, variable bounds,
 //! implied integers and the scaling of MIP rows and columns.
 
 use super::*;
+use crate::mip::clique::CliqueVar;
 use crate::mip::cuts::sort::pdqsort;
 use crate::presolve::postsolve::EQ;
 use crate::util::hash::HighsHash;
@@ -199,11 +200,9 @@ impl Presolve<'_> {
                     if direction > 0 { self.is_upper_implied(col) } else { self.is_lower_implied(col) };
                 if try_to_fix
                     && (current_bound_implied
-                        || self.host.clique_have_common_clique(
-                            col,
-                            if direction > 0 { 1 } else { 0 },
-                            k,
-                            if direction_k > 0 { 1 } else { 0 },
+                        || self.cliquetable().have_common_clique(
+                            CliqueVar::new(col, (direction > 0) as i32),
+                            CliqueVar::new(k, (direction_k > 0) as i32),
                         ))
                 {
                     self.dom_fix_col(ctx, k, -direction_k)?;
@@ -343,8 +342,8 @@ impl Presolve<'_> {
 
             let lower_implied = self.is_lower_implied(j);
             let upper_implied = self.is_upper_implied(j);
-            let has_neg_cliques = self.is_binary(j) && self.host.clique_num_cliques_col(j, 0) > 0;
-            let has_pos_cliques = self.is_binary(j) && self.host.clique_num_cliques_col(j, 1) > 0;
+            let has_neg_cliques = self.is_binary(j) && self.cliquetable().num_cliques(CliqueVar::new(j, 0)) > 0;
+            let has_pos_cliques = self.is_binary(j) && self.cliquetable().num_cliques(CliqueVar::new(j, 1)) > 0;
 
             if best_row_minus != -1 && (allow_pred_bnd_analysis || lower_implied || has_neg_cliques) {
                 self.dom_check_row(&mut ctx, best_row_minus, j, -1, aj_best_row_minus, lower_implied, has_neg_cliques)?;
@@ -382,7 +381,7 @@ impl Presolve<'_> {
         self.shrink_problem();
         self.to_csc_and_back();
         let nnz = self.num_nonzeros();
-        self.host.clique_set_max_entries(nnz);
+        self.cliquetable().set_max_entries(nnz);
 
         let huge_bound = self.primal_feastol / TINY;
         for i in 0..self.num_col {
@@ -464,7 +463,7 @@ impl Presolve<'_> {
     }
 
     pub(crate) fn apply_conflict_graph_substitutions(&mut self, num_del_col: &mut i32) -> R {
-        let subs = self.host.impl_substitutions();
+        let subs = self.implications().substitutions.clone();
         for s in &subs {
             if self.col_deleted[s.substcol as usize] != 0 || self.col_deleted[s.staycol as usize] != 0 {
                 continue;
@@ -490,10 +489,11 @@ impl Presolve<'_> {
             self.substitute_cols(s.substcol, s.staycol, s.offset, s.scale);
             self.check_limits()?;
         }
-        self.host.clear_impl_substitutions();
+        self.implications().substitutions.clear();
 
-        let subs = self.host.clique_substitutions();
-        for &(substcol, rcol, rval) in &subs {
+        let subs = self.cliquetable().substitutions.clone();
+        for s in &subs {
+            let (substcol, rcol, rval) = (s.substcol, s.replace.col(), s.replace.val());
             if self.col_deleted[substcol as usize] != 0 || self.col_deleted[rcol as usize] != 0 {
                 continue;
             }
@@ -519,7 +519,7 @@ impl Presolve<'_> {
             self.substitute_cols(substcol, rcol, offset, scale);
             self.check_limits()?;
         }
-        self.host.clear_clique_substitutions();
+        self.cliquetable().substitutions.clear();
         Ok(())
     }
 
@@ -536,20 +536,10 @@ impl Presolve<'_> {
             }
         };
 
-        let (code, lifting) = self.host.probing_loop(self);
-        match code {
-            1 => return Err(Stop::PrimalInfeasible),
-            2 => return Err(Stop::Stopped),
-            3 => {
-                // no binaries
-                self.host.profiling(false, 0);
-                return self.check_limits();
-            }
-            _ => {}
-        }
-        for &(row, key, coef) in &lifting {
-            let (_, inserted) = self.lifting.entry(row).insert_or_get(key, coef);
-            debug_assert!(inserted);
+        if !self.probing_loop()? {
+            // no binaries
+            self.host.profiling(false, 0);
+            return self.check_limits();
         }
 
         let mut counts = [0i32; 4];
@@ -644,7 +634,13 @@ impl Presolve<'_> {
                 }
             }
             if candidates.len() > 1 {
-                let cliques = self.host.compute_maximal_cliques(&candidates, self.primal_feastol);
+                let vars: Vec<CliqueVar> = candidates.iter().map(|&(c, v)| CliqueVar::new(c, v)).collect();
+                let cliques: Vec<Vec<(i32, i32)>> = self
+                    .cliquetable()
+                    .compute_maximal_cliques(&vars, self.primal_feastol)
+                    .iter()
+                    .map(|c| c.iter().map(|v| (v.col(), v.val())).collect())
+                    .collect();
                 for clique in &cliques {
                     let mut score = CDouble::from(0.0);
                     let mut nfill = 0;
@@ -739,9 +735,7 @@ impl Presolve<'_> {
                 return Err(e);
             }
         };
-        if self.host.enumerate(self) {
-            return Err(Stop::PrimalInfeasible);
-        }
+        self.enumeration_loop()?;
         let mut counts = [0i32; 4];
         self.finalise_probing(first_call, &mut counts)?;
         if counts[0] > 0 || counts[1] > 0 || counts[2] > 0 {
@@ -767,6 +761,7 @@ impl Presolve<'_> {
         if !use_lhs && !use_rhs {
             return;
         }
+        let feastol = self.mip.expect("MIP presolve").feastol;
         let mut bin_col = -1;
         let mut bin_coef = 0.0;
         for (ci, v) in row_iter!(self, row) {
@@ -820,10 +815,10 @@ impl Presolve<'_> {
             let vb_coef = -bin_coef / v;
             let is_int = self.integrality[c] != CONTINUOUS;
             if vlb_constant != -INF {
-                self.host.implications_add_vb(false, ci, bin_col, vb_coef, vlb_constant, self.col_lower[c], is_int);
+                self.implications().add_vlb(ci, bin_col, vb_coef, vlb_constant, self.col_lower[c], is_int, feastol);
             }
             if vub_constant != INF {
-                self.host.implications_add_vb(true, ci, bin_col, vb_coef, vub_constant, self.col_upper[c], is_int);
+                self.implications().add_vub(ci, bin_col, vb_coef, vub_constant, self.col_upper[c], is_int, feastol);
             }
             if !use_lhs && !use_rhs {
                 break;

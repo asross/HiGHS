@@ -10,9 +10,12 @@
 //! C++: the reductions are recorded here (record.rs) and appended to it by
 //! `flush`. What runs in C++ is called through [`Host`]: logging, the
 //! timer, the analysis setup, the HFactor of the dependent equations, and
-//! the MIP solver's clique table, implications, domain, cut pool and the
-//! probing and enumeration loops on them (ffi.rs, highs/presolve/
-//! HPresolveRust.cpp).
+//! the MIP solver's C++ parts: the setup of the domain and clique table for
+//! probing, the cut pool, and the glue of the domain, the clique table and
+//! implications.runProbing (ffi.rs, highs/presolve/HPresolveRust.cpp). The
+//! probing and enumeration loops (probing.rs, enumeration.rs) work on the
+//! Rust clique table and implications directly and on the domain through
+//! its Rust view (mip/domain.rs).
 //!
 //! The matrix is stored as in the C++: triplets with a linked list per
 //! column and a splay tree per row (keyed by the column), whose shapes
@@ -26,7 +29,11 @@ mod record;
 mod reduce;
 mod rows;
 mod driver;
+mod enumeration;
+mod probing;
 
+use crate::mip::clique::CliqueTable;
+use crate::mip::implications::Implications;
 use crate::util::cdouble::CDouble;
 use crate::util::fma::ClangFma;
 use crate::util::linear_sum_bounds::LinearSumBounds;
@@ -149,6 +156,12 @@ pub struct Options {
 #[derive(Clone, Copy)]
 pub struct MipInfo {
     pub epsilon: f64,
+    /// mipdata_->feastol
+    pub feastol: f64,
+    /// the MIP solver's clique table and implications (Rust-owned, the C++
+    /// classes hold these handles)
+    pub cliquetable: *mut CliqueTable,
+    pub implications: *mut Implications,
     pub orig_num_row: i32,
     pub num_restarts: i32,
     pub submip: bool,
@@ -1549,6 +1562,23 @@ impl Presolve<'_> {
 
     pub(crate) fn silent_log(&self) -> bool {
         matches!(self.mip, Some(m) if m.num_restarts > 0)
+    }
+
+    /// The MIP solver's clique table. Calls into C++ (bound changes,
+    /// implications.runProbing, shrinking) may change it: no borrow may
+    /// live across one
+    #[allow(clippy::mut_from_ref)]
+    pub(crate) fn cliquetable(&self) -> &mut CliqueTable {
+        // SAFETY: a live table for the presolve run (MipInfo), only reached
+        // here and from C++ calls, across which no borrow is held
+        unsafe { &mut *self.mip.expect("MIP presolve").cliquetable }
+    }
+
+    /// The MIP solver's implications, as cliquetable
+    #[allow(clippy::mut_from_ref)]
+    pub(crate) fn implications(&self) -> &mut Implications {
+        // SAFETY: as in cliquetable
+        unsafe { &mut *self.mip.expect("MIP presolve").implications }
     }
 }
 
