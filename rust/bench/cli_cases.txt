@@ -129,3 +129,9 @@ $I/qptestnw.lp
 --read_solution_file $F/egout.sol $I/egout.mps
 --read_solution_file $F/adl.bas $I/adlittle.mps
 --read_basis_file $F/adl.sol $I/adlittle.mps
+--options_file iis.set $I/galenet.mps
+--options_file iis.set --presolve off $I/woodinfe.mps
+--options_file iis2.set $I/forest6.mps
+--options_file iis.set $I/klein1.mps
+--options_file iis2.set $I/avgas.mps
+--options_file iis.set $I/infeasible-mip0.mps

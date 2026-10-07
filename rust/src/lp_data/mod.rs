@@ -8,6 +8,7 @@ pub mod ffi;
 pub mod app;
 pub mod basis;
 pub mod edit;
+pub mod iis;
 pub mod info;
 pub mod lp_utils;
 pub mod model;
