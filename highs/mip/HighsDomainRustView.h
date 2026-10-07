@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,22 @@ DSlice<T> dslice(std::vector<T>& v) {
 template <typename T>
 DSlice<T> dslice(const std::vector<T>& v) {
   // The Rust side only reads the vectors it gets as const
+  return {nonNull(const_cast<T*>(v.data())), (int)v.size()};
+}
+
+// a Rust-owned vector (HighsRsArray, defined in mip/HighsRsSpan.h)
+template <typename A>
+auto dslice(A& v) -> DSlice<typename std::remove_reference<decltype(v[0])>::type> {
+  using T = typename std::remove_reference<decltype(v[0])>::type;
+  return {nonNull(v.data()), (int)v.size()};
+}
+
+template <typename A>
+auto dslice(const A& v)
+    -> DSlice<typename std::remove_const<
+        typename std::remove_reference<decltype(v[0])>::type>::type> {
+  using T = typename std::remove_const<
+      typename std::remove_reference<decltype(v[0])>::type>::type;
   return {nonNull(const_cast<T*>(v.data())), (int)v.size()};
 }
 
@@ -153,6 +170,7 @@ struct Domain {
   ReserveFn reserve_reason;
   ReserveFn reserve_prev;
   ReserveFn reserve_pair;
+  ReserveFn reserve_pool_i32;
 };
 
 // Mirror of CBounds: what the const methods read

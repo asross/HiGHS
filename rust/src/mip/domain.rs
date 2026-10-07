@@ -6,8 +6,13 @@
 //!
 //! # The view
 //!
-//! HighsDomain keeps owning its data (external code reads col_lower_,
-//! col_upper_, the domain change stack, ... everywhere).
+//! HighsDomain's own vectors (bounds, positions, the domain change stack
+//! with its reasons and previous bounds, the changed columns, the row
+//! activities, flags and thresholds, the scratch of propagate()) are
+//! Rust's: a [`DomainVecs`] owned by the C++ HighsDomain, whose members
+//! refer to its fields in place (HighsRsArray: the begin/end/capacity
+//! layout of [`StdVec`], read by C++ and grown only by Rust). The pools'
+//! propagation data and the objective propagation stay C++ vectors.
 //! `highs_rs::DomainAccess` (highs/mip/HighsDomainRust.h) fills a
 //! `#[repr(C)]` [`CDomain`] with pointer+length pairs of the model matrices
 //! (column-wise from the model, row-wise from mipdata), of the domain's
@@ -17,11 +22,12 @@
 //! ([`objprop::CObjProp`]). The vectors that grow during propagation (the
 //! domain change stack, its reasons and previous bounds, the branching
 //! positions, the changed columns, the lists of rows/cuts/conflicts to
-//! propagate) are passed as pointers to the std::vector objects
-//! ([`StdVec`], the begin/end/capacity layout of libc++ and libstdc++,
-//! checked on the C++ side): Rust reads their live size and appends in
-//! place, calling a C++ `reserve` when full. Activities are HighsCDouble
-//! arrays, laid out as [`CDouble`] {hi, lo}.
+//! propagate) are passed as pointers to the vector objects ([`StdVec`]):
+//! Rust reads their live size and appends in place, growing the
+//! DomainVecs ones with the Rust allocator and the pools' std::vectors
+//! (the begin/end/capacity layout of libc++ and libstdc++, checked on the
+//! C++ side) with a C++ `reserve`; the two never exchange buffers.
+//! Activities are HighsCDouble arrays, laid out as [`CDouble`] {hi, lo}.
 //!
 //! HighsDomain caches the view (rsView_) and drops it wherever a vector
 //! with a cached length may move or resize: copy, assignment,
@@ -320,6 +326,239 @@ impl<T: Copy> std::ops::Index<usize> for StdVec<T> {
     }
 }
 
+impl<T: Copy> StdVec<T> {
+    /// A Rust-owned StdVec holding the Vec's buffer
+    pub fn from_vec(v: Vec<T>) -> Self {
+        let mut v = std::mem::ManuallyDrop::new(v);
+        let (p, len, cap) = (v.as_mut_ptr(), v.len(), v.capacity());
+        // SAFETY: within (or one past) the Vec's allocation
+        unsafe { StdVec { begin: p, end: p.add(len), cap: p.add(cap) } }
+    }
+
+    /// The Vec of a Rust-owned StdVec, which is left empty
+    ///
+    /// # Safety
+    /// `self` from from_vec (or grown by rs_reserve)
+    pub unsafe fn take_vec(&mut self) -> Vec<T> {
+        let len = self.len();
+        let cap = self.cap.offset_from(self.begin) as usize;
+        let v = Vec::from_raw_parts(self.begin, len, cap);
+        *self = StdVec::from_vec(Vec::new());
+        v
+    }
+
+    /// A Rust-owned copy
+    pub fn to_owned_vec(&self) -> StdVec<T> {
+        StdVec::from_vec(self.as_slice().to_vec())
+    }
+
+    /// clear, then the elements of `src` (a copy, not a swap: `src` may be
+    /// a C++ vector and self a Rust one)
+    #[inline]
+    pub fn copy_from(&mut self, src: &[T], reserve: ReserveFn) {
+        self.clear();
+        self.reserve(src.len(), reserve);
+        for &x in src {
+            self.push(x, reserve);
+        }
+    }
+}
+
+/// The ReserveFn of a Rust-owned StdVec: capacity at least n and at least
+/// twice the old
+///
+/// # Safety
+/// `v` a Rust-owned StdVec<T>
+pub unsafe extern "C" fn rs_reserve<T: Copy>(v: *mut c_void, n: usize) {
+    let sv = &mut *(v as *mut StdVec<T>);
+    let mut x = sv.take_vec();
+    let want = n.max(2 * x.capacity());
+    x.reserve_exact(want - x.len());
+    *sv = StdVec::from_vec(x);
+}
+
+/// HighsDomain's own vectors (see the module comment); the layout of
+/// highs_rs::DomainVecs in highs/mip/HighsDomainRustView.h
+#[repr(C)]
+pub struct DomainVecs {
+    pub col_lower: StdVec<f64>,
+    pub col_upper: StdVec<f64>,
+    pub col_lower_pos: StdVec<i32>,
+    pub col_upper_pos: StdVec<i32>,
+    pub branch_pos: StdVec<i32>,
+    pub changedcolsflags: StdVec<u8>,
+    pub changedcols: StdVec<i32>,
+    pub domchgstack: StdVec<DomChg>,
+    pub domchgreason: StdVec<Reason>,
+    pub prevboundval: StdVec<PrevBound>,
+    pub activitymin: StdVec<CDouble>,
+    pub activitymax: StdVec<CDouble>,
+    pub activitymininf: StdVec<i32>,
+    pub activitymaxinf: StdVec<i32>,
+    pub capacity_threshold: StdVec<f64>,
+    pub propagateflags: StdVec<u8>,
+    pub propagateinds: StdVec<i32>,
+    pub scratch_counts: StdVec<[i32; 2]>,
+    pub scratch_inds: StdVec<i32>,
+    pub scratch_bounds: StdVec<DomChg>,
+}
+
+macro_rules! domain_vecs {
+    ($m:ident) => {
+        $m!(col_lower, col_upper, col_lower_pos, col_upper_pos, branch_pos, changedcolsflags, changedcols,
+            domchgstack, domchgreason, prevboundval, activitymin, activitymax, activitymininf,
+            activitymaxinf, capacity_threshold, propagateflags, propagateinds, scratch_counts,
+            scratch_inds, scratch_bounds)
+    };
+}
+
+impl Clone for DomainVecs {
+    /// A copy of each vector (std::vector's copy)
+    fn clone(&self) -> Self {
+        macro_rules! cl {
+            ($($f:ident),*) => { DomainVecs { $($f: self.$f.to_owned_vec()),* } };
+        }
+        domain_vecs!(cl)
+    }
+}
+
+impl Drop for DomainVecs {
+    fn drop(&mut self) {
+        macro_rules! dr {
+            ($($f:ident),*) => {
+                // SAFETY: every vector is Rust-owned
+                unsafe { $(drop(self.$f.take_vec());)* }
+            };
+        }
+        domain_vecs!(dr)
+    }
+}
+
+/// std::vector::resize of a Rust-owned StdVec (new elements `fill`)
+fn resize<T: Copy>(v: &mut StdVec<T>, n: usize, fill: T) {
+    // SAFETY: Rust-owned
+    let mut x = unsafe { v.take_vec() };
+    x.resize(n, fill);
+    *v = StdVec::from_vec(x);
+}
+
+/// HighsDomain(mipsolver): the model's bounds, no bound changed
+///
+/// # Safety
+/// `lower`, `upper` valid for `ncol` reads
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_new(ncol: i32, lower: *const f64, upper: *const f64) -> *mut DomainVecs {
+    let n = ncol as usize;
+    fn e<T: Copy>() -> StdVec<T> {
+        StdVec::from_vec(Vec::new())
+    }
+    Box::into_raw(Box::new(DomainVecs {
+        col_lower: StdVec::from_vec(sl(lower, ncol).to_vec()),
+        col_upper: StdVec::from_vec(sl(upper, ncol).to_vec()),
+        col_lower_pos: StdVec::from_vec(vec![-1; n]),
+        col_upper_pos: StdVec::from_vec(vec![-1; n]),
+        branch_pos: e(),
+        changedcolsflags: StdVec::from_vec(vec![0; n]),
+        changedcols: StdVec::from_vec(Vec::with_capacity(n)),
+        domchgstack: e(),
+        domchgreason: e(),
+        prevboundval: e(),
+        activitymin: e(),
+        activitymax: e(),
+        activitymininf: e(),
+        activitymaxinf: e(),
+        capacity_threshold: e(),
+        propagateflags: e(),
+        propagateinds: e(),
+        scratch_counts: e(),
+        scratch_inds: e(),
+        scratch_bounds: e(),
+    }))
+}
+
+/// HighsDomain's copy
+///
+/// # Safety
+/// `v` live
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_clone(v: *const DomainVecs) -> *mut DomainVecs {
+    Box::into_raw(Box::new((*v).clone()))
+}
+
+/// HighsDomain's assignment (the scratch vectors are kept)
+///
+/// # Safety
+/// `dst`, `src` live
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_assign(dst: *mut DomainVecs, src: *const DomainVecs) {
+    if std::ptr::eq(dst, src) {
+        return;
+    }
+    let (d, s) = (&mut *dst, &*src);
+    macro_rules! asg {
+        ($($f:ident),*) => {$(
+            let mut x = d.$f.take_vec();
+            x.clear();
+            x.extend_from_slice(s.$f.as_slice());
+            d.$f = StdVec::from_vec(x);
+        )*};
+    }
+    asg!(col_lower, col_upper, col_lower_pos, col_upper_pos, branch_pos, changedcolsflags, changedcols,
+         domchgstack, domchgreason, prevboundval, activitymin, activitymax, activitymininf,
+         activitymaxinf, capacity_threshold, propagateflags, propagateinds);
+}
+
+/// ~HighsDomain
+///
+/// # Safety
+/// `v` from highs_rs_domain_vecs_new/clone, or null
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_free(v: *mut DomainVecs) {
+    if !v.is_null() {
+        drop(Box::from_raw(v));
+    }
+}
+
+/// computeRowActivities' sizes: the row arrays resized to `nrow`, room for
+/// `nrow` rows to propagate
+///
+/// # Safety
+/// `v` live
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_size_rows(v: *mut DomainVecs, nrow: i32) {
+    let d = &mut *v;
+    let n = nrow as usize;
+    resize(&mut d.activitymin, n, CDouble::default());
+    resize(&mut d.activitymininf, n, 0);
+    resize(&mut d.activitymax, n, CDouble::default());
+    resize(&mut d.activitymaxinf, n, 0);
+    resize(&mut d.capacity_threshold, n, 0.0);
+    resize(&mut d.propagateflags, n, 0);
+    d.propagateinds.reserve(n, rs_reserve::<i32>);
+}
+
+/// The ReserveFns of the Rust-owned vectors, for the view
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_i32(v: *mut c_void, n: usize) {
+    rs_reserve::<i32>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_domchg(v: *mut c_void, n: usize) {
+    rs_reserve::<DomChg>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_reason(v: *mut c_void, n: usize) {
+    rs_reserve::<Reason>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_prev(v: *mut c_void, n: usize) {
+    rs_reserve::<PrevBound>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_pair(v: *mut c_void, n: usize) {
+    rs_reserve::<[i32; 2]>(v, n)
+}
+
 /// A CutpoolPropagation and its cut pool's matrix, mirrored by
 /// highs_rs::CutProp in highs/mip/HighsDomainRustView.h
 #[repr(C)]
@@ -430,6 +669,8 @@ pub struct CDomain {
     reserve_reason: ReserveFn,
     reserve_prev: ReserveFn,
     reserve_pair: ReserveFn,
+    /// for the pools' std::vectors of rows to propagate
+    reserve_pool_i32: ReserveFn,
 }
 
 /// The data of the const methods (computeMin/MaxActivity,
@@ -1333,7 +1574,8 @@ impl<'a> Dom<'a> {
             && (cp.activitycutsinf[cut] == 1
                 || (cp.rhs[cut] - cp.activitycuts[cut].to_f64() <= cp.capacity_threshold[cut]))
         {
-            self.push_i32(cp.propagatecutinds, cut as i32);
+            let mut v = cp.propagatecutinds;
+            v.push(cut as i32, self.reserve_pool_i32);
             cp.propagatecutflags[cut] |= 1;
         }
     }
@@ -1358,7 +1600,8 @@ impl<'a> Dom<'a> {
     #[inline]
     fn mark_propagate_conflict(&self, cp: &mut CConfProp, conflict: usize) {
         if cp.conflict_flag[conflict] < 2 {
-            self.push_i32(cp.propagate_conflict_inds, conflict as i32);
+            let mut v = cp.propagate_conflict_inds;
+            v.push(conflict as i32, self.reserve_pool_i32);
             cp.conflict_flag[conflict] |= 4;
         }
     }
@@ -2068,8 +2311,11 @@ impl Ctx {
                         if inds.is_empty() {
                             break;
                         }
+                        // the std::vector's rows into the Rust scratch
+                        // (the C++ swaps the two)
                         let mut scratch = d.scratch_inds;
-                        scratch.swap(&mut inds);
+                        scratch.copy_from(inds.as_slice(), d.reserve_i32);
+                        inds.clear();
                         scratch.len()
                     };
                     for k in 0..n {
@@ -2138,7 +2384,8 @@ impl Ctx {
                         continue;
                     }
                     let mut scratch = d.scratch_inds;
-                    scratch.swap(&mut cp.propagatecutinds);
+                    scratch.copy_from(cp.propagatecutinds.as_slice(), d.reserve_i32);
+                    cp.propagatecutinds.clear();
                     for &cut in scratch.as_slice() {
                         cp.propagatecutflags[cut as usize] &= 2;
                     }
@@ -2292,5 +2539,32 @@ mod tests {
         assert_eq!(b.propagate_row(&index, &value, 4.0, act, ninf, false, &mut chg), 2);
         assert_eq!(chg[0], DomChg { boundval: 4.0, column: 0, boundtype: UPPER });
         assert_eq!(chg[1], DomChg { boundval: 2.0, column: 1, boundtype: UPPER });
+    }
+
+    #[test]
+    fn domain_vecs_own_their_buffers() {
+        unsafe {
+            let (lo, up) = ([0.0, 1.0], [5.0, 6.0]);
+            let v = highs_rs_domain_vecs_new(2, lo.as_ptr(), up.as_ptr());
+            let d = &mut *v;
+            assert_eq!(d.col_upper.as_slice(), &[5.0, 6.0]);
+            assert_eq!(d.col_lower_pos.as_slice(), &[-1, -1]);
+            for i in 0..100 {
+                d.domchgstack.push(DomChg { boundval: i as f64, column: 0, boundtype: LOWER }, highs_rs_reserve_domchg);
+            }
+            highs_rs_domain_vecs_size_rows(v, 3);
+            assert_eq!(d.activitymin.len(), 3);
+            let c = highs_rs_domain_vecs_clone(v);
+            assert_eq!((*c).domchgstack.len(), 100);
+            (*c).domchgstack.truncate(1);
+            highs_rs_domain_vecs_assign(c, v);
+            assert_eq!((&(*c).domchgstack)[99].boundval, 99.0);
+            let mut s = StdVec::from_vec(vec![7, 8]);
+            s.copy_from(&[1, 2, 3], highs_rs_reserve_i32);
+            assert_eq!(s.as_slice(), &[1, 2, 3]);
+            drop(s.take_vec());
+            highs_rs_domain_vecs_free(c);
+            highs_rs_domain_vecs_free(v);
+        }
     }
 }

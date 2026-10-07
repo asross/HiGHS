@@ -24,7 +24,9 @@
 class HighsCutPool;
 #ifdef HIGHS_RUST
 #include "mip/HighsDomainRustView.h"
+#include "mip/HighsRsSpan.h"
 namespace highs_rs {
+struct DomainVecs;
 struct DomainAccess;
 struct CliqueAccess;
 struct SymmetryAccess;
@@ -312,6 +314,26 @@ class HighsDomain {
     void recomputeCapacityThreshold();
   };
 
+#ifdef HIGHS_RUST
+  // the vectors are Rust's (rust/src/mip/domain.rs DomainVecs), owned by
+  // this domain; the members below refer to them in place
+  highs_rs::DomainVecs* rsv_;
+
+  HighsRsArray<uint8_t>& changedcolsflags_;
+  HighsRsArray<HighsInt>& changedcols_;
+
+  HighsRsArray<HighsDomainChange>& domchgstack_;
+  HighsRsArray<Reason>& domchgreason_;
+  HighsRsArray<std::pair<double, HighsInt>>& prevboundval_;
+
+  HighsRsArray<HighsCDouble>& activitymin_;
+  HighsRsArray<HighsCDouble>& activitymax_;
+  HighsRsArray<HighsInt>& activitymininf_;
+  HighsRsArray<HighsInt>& activitymaxinf_;
+  HighsRsArray<double>& capacityThreshold_;
+  HighsRsArray<uint8_t>& propagateflags_;
+  HighsRsArray<HighsInt>& propagateinds_;
+#else
   std::vector<uint8_t> changedcolsflags_;
   std::vector<HighsInt> changedcols_;
 
@@ -328,6 +350,7 @@ class HighsDomain {
   std::vector<double> capacityThreshold_;
   std::vector<uint8_t> propagateflags_;
   std::vector<HighsInt> propagateinds_;
+#endif
   ObjectivePropagation objProp_;
 
   HighsMipSolver* mipsolver;
@@ -343,9 +366,6 @@ class HighsDomain {
 #ifdef HIGHS_RUST
   // the view of this domain passed to Rust
   highs_rs::DomainCache rsView_;
-  // the scratch of propagate() (with propRowNumChangedBounds_)
-  std::vector<HighsInt> rsScratchInds_;
-  std::vector<HighsDomainChange> rsScratchBounds_;
 #endif
   void invalidateRustView() {
 #ifdef HIGHS_RUST
@@ -369,13 +389,28 @@ class HighsDomain {
 
   double doChangeBound(const HighsDomainChange& boundchg);
 
+#ifdef HIGHS_RUST
+  HighsRsArray<HighsInt>& colLowerPos_;
+  HighsRsArray<HighsInt>& colUpperPos_;
+  HighsRsArray<HighsInt>& branchPos_;
+#else
   std::vector<HighsInt> colLowerPos_;
   std::vector<HighsInt> colUpperPos_;
   std::vector<HighsInt> branchPos_;
+#endif
   HighsHashTable<HighsInt> redundantRows_;
   bool recordRedundantRows_ = false;
 
  public:
+#ifdef HIGHS_RUST
+  HighsRsArray<double>& col_lower_;
+  HighsRsArray<double>& col_upper_;
+
+  HighsDomain(HighsMipSolver& mipsolver);
+  HighsDomain(const HighsDomain& other);
+  HighsDomain& operator=(const HighsDomain& other);
+  ~HighsDomain();
+#else
   std::vector<double> col_lower_;
   std::vector<double> col_upper_;
 
@@ -445,6 +480,7 @@ class HighsDomain {
     if (objProp_.domain) objProp_.domain = this;
     return *this;
   }
+#endif
 
   void computeMinActivity(HighsInt start, HighsInt end, const HighsInt* ARindex,
                           const double* ARvalue, HighsInt& ninfmin,
@@ -480,7 +516,19 @@ class HighsDomain {
                              const HighsCDouble& maxactivity, HighsInt ninfmax,
                              HighsDomainChange* boundchgs) const;
 
-  const std::vector<HighsInt>& getChangedCols() const { return changedcols_; }
+#ifdef HIGHS_RUST
+  using IntArray = HighsRsArray<HighsInt>;
+  using DomChgArray = HighsRsArray<HighsDomainChange>;
+  using ReasonArray = HighsRsArray<Reason>;
+  using PrevBoundArray = HighsRsArray<std::pair<double, HighsInt>>;
+#else
+  using IntArray = std::vector<HighsInt>;
+  using DomChgArray = std::vector<HighsDomainChange>;
+  using ReasonArray = std::vector<Reason>;
+  using PrevBoundArray = std::vector<std::pair<double, HighsInt>>;
+#endif
+
+  const IntArray& getChangedCols() const { return changedcols_; }
 
   void addCutpool(HighsCutPool& cutpool);
 
@@ -571,21 +619,13 @@ class HighsDomain {
 
   HighsDomainChange backtrack();
 
-  const std::vector<HighsInt>& getBranchingPositions() const {
-    return branchPos_;
-  }
+  const IntArray& getBranchingPositions() const { return branchPos_; }
 
-  const std::vector<std::pair<double, HighsInt>>& getPreviousBounds() const {
-    return prevboundval_;
-  }
+  const PrevBoundArray& getPreviousBounds() const { return prevboundval_; }
 
-  const std::vector<HighsDomainChange>& getDomainChangeStack() const {
-    return domchgstack_;
-  }
+  const DomChgArray& getDomainChangeStack() const { return domchgstack_; }
 
-  const std::vector<Reason>& getDomainChangeReason() const {
-    return domchgreason_;
-  }
+  const ReasonArray& getDomainChangeReason() const { return domchgreason_; }
 
   double getObjectiveLowerBound() const {
     if (objProp_.isActive() && objProp_.numInfObjLower == 0)
@@ -722,5 +762,46 @@ class HighsDomain {
 
   bool isRedundantRow(HighsInt row) const;
 };
+
+#ifdef HIGHS_RUST
+namespace highs_rs {
+// rust/src/mip/domain.rs DomainVecs
+struct DomainVecs {
+  HighsRsArray<double> col_lower;
+  HighsRsArray<double> col_upper;
+  HighsRsArray<HighsInt> col_lower_pos;
+  HighsRsArray<HighsInt> col_upper_pos;
+  HighsRsArray<HighsInt> branch_pos;
+  HighsRsArray<uint8_t> changedcolsflags;
+  HighsRsArray<HighsInt> changedcols;
+  HighsRsArray<HighsDomainChange> domchgstack;
+  HighsRsArray<HighsDomain::Reason> domchgreason;
+  HighsRsArray<std::pair<double, HighsInt>> prevboundval;
+  HighsRsArray<HighsCDouble> activitymin;
+  HighsRsArray<HighsCDouble> activitymax;
+  HighsRsArray<HighsInt> activitymininf;
+  HighsRsArray<HighsInt> activitymaxinf;
+  HighsRsArray<double> capacity_threshold;
+  HighsRsArray<uint8_t> propagateflags;
+  HighsRsArray<HighsInt> propagateinds;
+  HighsRsArray<std::pair<HighsInt, HighsInt>> scratch_counts;
+  HighsRsArray<HighsInt> scratch_inds;
+  HighsRsArray<HighsDomainChange> scratch_bounds;
+};
+extern "C" {
+DomainVecs* highs_rs_domain_vecs_new(HighsInt ncol, const double* lower,
+                                     const double* upper);
+DomainVecs* highs_rs_domain_vecs_clone(const DomainVecs* v);
+void highs_rs_domain_vecs_assign(DomainVecs* dst, const DomainVecs* src);
+void highs_rs_domain_vecs_free(DomainVecs* v);
+void highs_rs_domain_vecs_size_rows(DomainVecs* v, HighsInt nrow);
+void highs_rs_reserve_i32(void* v, size_t n);
+void highs_rs_reserve_domchg(void* v, size_t n);
+void highs_rs_reserve_reason(void* v, size_t n);
+void highs_rs_reserve_prev(void* v, size_t n);
+void highs_rs_reserve_pair(void* v, size_t n);
+}
+}  // namespace highs_rs
+#endif
 
 #endif

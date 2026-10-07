@@ -67,6 +67,85 @@ static inline double boundRange(double upper_bound, double lower_bound,
                       : tolerance);
 }
 
+#ifdef HIGHS_RUST
+HighsDomain::HighsDomain(HighsMipSolver& mipsolver)
+    : rsv_(highs_rs::highs_rs_domain_vecs_new(
+          mipsolver.numCol(), mipsolver.model_->col_lower_.data(),
+          mipsolver.model_->col_upper_.data())),
+      changedcolsflags_(rsv_->changedcolsflags),
+      changedcols_(rsv_->changedcols),
+      domchgstack_(rsv_->domchgstack),
+      domchgreason_(rsv_->domchgreason),
+      prevboundval_(rsv_->prevboundval),
+      activitymin_(rsv_->activitymin),
+      activitymax_(rsv_->activitymax),
+      activitymininf_(rsv_->activitymininf),
+      activitymaxinf_(rsv_->activitymaxinf),
+      capacityThreshold_(rsv_->capacity_threshold),
+      propagateflags_(rsv_->propagateflags),
+      propagateinds_(rsv_->propagateinds),
+      mipsolver(&mipsolver),
+      colLowerPos_(rsv_->col_lower_pos),
+      colUpperPos_(rsv_->col_upper_pos),
+      branchPos_(rsv_->branch_pos),
+      col_lower_(rsv_->col_lower),
+      col_upper_(rsv_->col_upper) {
+  infeasible_reason = Reason::unspecified();
+  infeasible_ = false;
+}
+
+HighsDomain::HighsDomain(const HighsDomain& other)
+    : rsv_(highs_rs::highs_rs_domain_vecs_clone(other.rsv_)),
+      changedcolsflags_(rsv_->changedcolsflags),
+      changedcols_(rsv_->changedcols),
+      domchgstack_(rsv_->domchgstack),
+      domchgreason_(rsv_->domchgreason),
+      prevboundval_(rsv_->prevboundval),
+      activitymin_(rsv_->activitymin),
+      activitymax_(rsv_->activitymax),
+      activitymininf_(rsv_->activitymininf),
+      activitymaxinf_(rsv_->activitymaxinf),
+      capacityThreshold_(rsv_->capacity_threshold),
+      propagateflags_(rsv_->propagateflags),
+      propagateinds_(rsv_->propagateinds),
+      objProp_(other.objProp_),
+      mipsolver(other.mipsolver),
+      cutpoolpropagation(other.cutpoolpropagation),
+      conflictPoolPropagation(other.conflictPoolPropagation),
+      infeasible_(other.infeasible_),
+      infeasible_reason(other.infeasible_reason),
+      infeasible_pos(other.infeasible_pos),
+      colLowerPos_(rsv_->col_lower_pos),
+      colUpperPos_(rsv_->col_upper_pos),
+      branchPos_(rsv_->branch_pos),
+      col_lower_(rsv_->col_lower),
+      col_upper_(rsv_->col_upper) {
+  for (CutpoolPropagation& cutpoolprop : cutpoolpropagation)
+    cutpoolprop.domain = this;
+  for (ConflictPoolPropagation& conflictprop : conflictPoolPropagation)
+    conflictprop.domain = this;
+  if (objProp_.domain) objProp_.domain = this;
+}
+
+HighsDomain& HighsDomain::operator=(const HighsDomain& other) {
+  highs_rs::highs_rs_domain_vecs_assign(rsv_, other.rsv_);
+  objProp_ = other.objProp_;
+  mipsolver = other.mipsolver;
+  cutpoolpropagation = other.cutpoolpropagation;
+  conflictPoolPropagation = other.conflictPoolPropagation;
+  infeasible_ = other.infeasible_;
+  infeasible_reason = other.infeasible_reason;
+  invalidateRustView();
+  for (CutpoolPropagation& cutpoolprop : cutpoolpropagation)
+    cutpoolprop.domain = this;
+  for (ConflictPoolPropagation& conflictprop : conflictPoolPropagation)
+    conflictprop.domain = this;
+  if (objProp_.domain) objProp_.domain = this;
+  return *this;
+}
+
+HighsDomain::~HighsDomain() { highs_rs::highs_rs_domain_vecs_free(rsv_); }
+#else
 HighsDomain::HighsDomain(HighsMipSolver& mipsolver) : mipsolver(&mipsolver) {
   col_lower_ = mipsolver.model_->col_lower_;
   col_upper_ = mipsolver.model_->col_upper_;
@@ -77,6 +156,7 @@ HighsDomain::HighsDomain(HighsMipSolver& mipsolver) : mipsolver(&mipsolver) {
   infeasible_reason = Reason::unspecified();
   infeasible_ = false;
 }
+#endif
 
 void HighsDomain::addCutpool(HighsCutPool& cutpool) {
   invalidateRustView();
@@ -2052,6 +2132,9 @@ void HighsDomain::markPropagate(HighsInt row) {
 
 void HighsDomain::computeRowActivities() {
   invalidateRustView();
+#ifdef HIGHS_RUST
+  highs_rs::highs_rs_domain_vecs_size_rows(rsv_, mipsolver->numRow());
+#else
   activitymin_.resize(mipsolver->numRow());
   activitymininf_.resize(mipsolver->numRow());
   activitymax_.resize(mipsolver->numRow());
@@ -2059,6 +2142,7 @@ void HighsDomain::computeRowActivities() {
   capacityThreshold_.resize(mipsolver->numRow());
   propagateflags_.resize(mipsolver->numRow());
   propagateinds_.reserve(mipsolver->numRow());
+#endif
 
 #ifdef HIGHS_RUST
   {

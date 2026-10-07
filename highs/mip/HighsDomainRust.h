@@ -222,9 +222,9 @@ struct DomainAccess {
     d.domchgstack = &dom.domchgstack_;
     d.domchgreason = &dom.domchgreason_;
     d.prevboundval = &dom.prevboundval_;
-    d.scratch_inds = &dom.rsScratchInds_;
-    d.scratch_bounds = &dom.rsScratchBounds_;
-    d.scratch_counts = &dom.propRowNumChangedBounds_;
+    d.scratch_inds = &dom.rsv_->scratch_inds;
+    d.scratch_bounds = &dom.rsv_->scratch_bounds;
+    d.scratch_counts = &dom.rsv_->scratch_counts;
     d.infeasible = &dom.infeasible_;
     d.infeasible_reason = &dom.infeasible_reason;
     d.infeasible_pos = &dom.infeasible_pos;
@@ -266,11 +266,13 @@ struct DomainAccess {
     d.redundant_row = redundantRow;
     d.cut_reset_age = cutResetAge;
     d.conflict_reset_age = conflictResetAge;
-    d.reserve_i32 = reserve<HighsInt>;
-    d.reserve_domchg = reserve<HighsDomainChange>;
-    d.reserve_reason = reserve<HighsDomain::Reason>;
-    d.reserve_prev = reserve<std::pair<double, HighsInt>>;
-    d.reserve_pair = reserve<std::pair<HighsInt, HighsInt>>;
+    // the domain's vectors are Rust's, the pools' std::vectors
+    d.reserve_i32 = highs_rs_reserve_i32;
+    d.reserve_domchg = highs_rs_reserve_domchg;
+    d.reserve_reason = highs_rs_reserve_reason;
+    d.reserve_prev = highs_rs_reserve_prev;
+    d.reserve_pair = highs_rs_reserve_pair;
+    d.reserve_pool_i32 = reserve<HighsInt>;
   }
 
   template <typename T>
