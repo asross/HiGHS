@@ -1,5 +1,14 @@
 # Porting HiGHS to Rust
 
+The Rust port will become **Crestline**: its own public repository
+(github.com/asross/crestline, crate `crestline`, CLI `crest`) once the
+command-line binary is pure Rust. Extraction plan: `git filter-repo
+--subdirectory-filter rust` to keep history; a pinned HiGHS C++ commit as a
+CI test oracle for bit-identical paths; MIT licence with the HiGHS
+copyright notice and attribution kept; README states it is a Rust port of
+HiGHS, bit-compatible with HiGHS v1.15. Until then development continues
+on the `rust-port` branch here.
+
 Bottom-up, one subsystem at a time, always shippable. The C++ build with
 `-DHIGHS_RUST=ON` calls the Rust code for every ported piece; without it, the
 original C++ runs. The C++ of a ported piece is deleted only once the Rust is
