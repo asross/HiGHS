@@ -10,6 +10,36 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, symmetry detection, orbitopes and orbital fixing
+
+HighsSymmetry in Rust (presolve/symmetry.rs, on top of rust-port with the
+search core and heuristics); see PORTING.md. M1, heavily loaded (load
+20-55), 1 rep, so cycles are rough. Symmetric instances, `cyc.py 2` with
+mip_max_nodes 60 (same path on all):
+
+| Case | Symmetry | C++ | Rust | Rust / C++ |
+|---|---|---|---|---|
+| neos-3004026-krka | 64 generators | 29.44G | 29.23G | 0.993 |
+| neos-1456979 | 4 generators | 110.19G | 107.05G | 0.971 |
+| fastxgemm-n2r6s0t2 | 39 generators | 21.13G | 20.24G | 0.958 |
+| ns1208400 | 1 full orbitope (764 cols) | 121.19G | 111.60G | 0.921 |
+
+Same nodes and LP iterations also at 500 nodes (clang: krka, fastxgemm,
+neos-1456979, ns1208400; gcc/libstdc++: krka, fastxgemm, neos-1456979),
+at 60 nodes on graph20-20-1rand (orbitope; clang, gcc, x86_64) and
+ns1208400 (gcc), and on x86_64 (Rosetta) on krka, neos-1456979 and
+fastxgemm. `perf.py --reps 1`: all cases same path.
+
+| Group | Geomean Rust / C++ |
+|---|---|
+| MIP | 0.863 |
+| LP dual simplex | 0.799 |
+| LP primal simplex | 0.983 |
+| IPM (IPX) | 0.989 |
+| PDLP | 0.936 |
+| Read model (time_limit 0) | 0.388 |
+| **All** | **0.837** |
+
 ## 2026-10-07, primal heuristics: feasibility jump, ziRound, shifting, graph LNS
 
 Feasibility jump in Rust (mip/feasjump.rs), ziRound and shifting
