@@ -156,9 +156,9 @@ red-black trees (HighsRbTree ported exactly: the trees are built by the C++
 constructor and updated in Rust), conflict analysis (ConflictSet: the
 frontiers are BTreeMaps by stack position) and tightenCoefficients. Still
 C++: the clique table's and implications' fixings of a fixed binary (called
-back through one function, which re-enters changeBound), the conflict and
-cut pools (adding a conflict, resetAge), the pseudocosts and node queue
-read by conflict analysis, getPropagationConstraint/getCutoffConstraint for
+back through one function, which re-enters changeBound), adding a
+conflict and resetAge (through the C++ pool handles, see the
+branch-and-bound section), getPropagationConstraint/getCutoffConstraint for
 external callers, and the debug solution (HIGHS_DEBUGSOL is not supported).
 
 The view (highs/mip/HighsDomainRust.h, HighsDomainRustView.h) is cached in
@@ -203,6 +203,56 @@ constant` and `1 + coef * coef` (getBestVub/Vlb), `m * c - f` and
 `-m * a + t` (strengthenVarBound) and `s0 * v0 + s1 * v1` (implied bound
 cuts). Debug-solution checks run only for the public addVUB/addVLB and
 addClique.
+
+## The branch-and-bound search (MIP)
+
+HighsSearch, HighsNodeQueue, HighsPseudocost, HighsRedcostFixing,
+HighsCutPool (with HighsDynamicRowMatrix) and HighsConflictPool run in
+Rust (mip/search.rs, nodequeue.rs, pseudocost.rs, redcost.rs, cutpool.rs,
+conflictpool.rs). Each C++ class is a handle (`rust()` gives the Rust
+object) with its old API; HighsDynamicRowMatrix is a view of the Rust
+pool's arrays (getMatrix() returns it by value) and the pools' entry and
+rhs vectors are `HighsRsSpan`s, valid until the pool changes. The Rust
+domain reads the conflict pool directly and gets the cut pool's arrays in
+its view (refilled on cutAdded as before); conflict analysis uses the
+pseudocosts and node queue directly. The pools tell their C++
+propagation domains (CutpoolPropagation, ConflictPoolPropagation, still
+C++) of added and deleted rows through callbacks that read the pool, so
+the Rust holds no borrow across them. The thread safe calls of the cut
+pool (resetAge, lpCutRemoved, increaseNumLps, separate) touch only atomics,
+as in the C++.
+
+The node queue's red-black trees and std::sets order nodes by keys that
+end with the node index, so BTreeSets of the keys give the same orders
+(doubles compared with `<`, so -0 == 0). The lurking bounds of reduced cost
+fixing are std::multimaps where an element inserted at the hint
+lower_bound(key) precedes its equal keys (in libc++ and libstdc++): a
+decreasing sequence number in the key does the same (rootReducedCost sorts
+them unstably by key, so the order matters). The cut pool's hash-to-cut
+std::unordered_multimap is only searched for any match and erased by
+value, so its group order (different in libstdc++) does not matter.
+
+HighsSearch keeps the local domain (external code uses it), the LP
+pointer and the conflict scratch; the node stack, statistics (C++ reads
+nnodes etc. through references into the Rust struct) and branching state
+are Rust's. The search calls C++ through `CSearchFns` for the domain
+operations, the LP relaxation (strong branching's Playground is boxed; the
+fallback LP of branch() is created and swapped in C++ in steps), the
+symmetries, the conflicts from LP proofs (addBoundExceedingConflict,
+addInfeasibleConflict), reduced cost fixing at a node, incumbents, limits
+and logging. Node bases and stabilizer orbits are std::shared_ptrs boxed on
+the C++ heap (`Shared`, cloned and freed by callbacks). No callback
+re-enters the search. clang fuses `cost += (1 - w) * avg` and the score
+sums of the pseudocosts, `avg * count + sum` of flushPseudoCost, `minrel -
+r * (minrel - 1)` of branch, the reductions over a cut in the cut pool
+(none vectorized), `0.5 * lb + 0.5 * estimate` of the node queue, and `1 -
+10 * feastol` and `frac * redcost + lpobj` of addRootRedcost.
+
+Still C++: the propagation domains of the pools, HighsCutSet filling
+(separate returns the selected cuts), pruneInfeasibleNodes' domain loop,
+setRINS/RENSNeighbourhood, checkLimits, and the implications' and
+separators' node queue and pseudocost callbacks (which call the Rust
+through the handles).
 
 ## Presolve (HPresolve)
 
@@ -252,3 +302,50 @@ stack, so thread_safe undoPrimal needs no copy. C++ resizes the solution
 and basis vectors to the original space; Rust does the rest. The fused
 products in plain double are `x - a*d` of ForcingRow, `x + s*y` and
 `v - s*y` of DuplicateColumn, and `x + s*y` of transformToPresolvedSpace.
+
+## Primal heuristics (MIP)
+
+Feasibility jump runs in Rust (mip/feasjump.rs): HighsMipSolverData::
+feasibilityJump (HighsFeasibilityJump.cpp) still builds the bounds,
+initial point and row-wise matrix, then calls `highs_rs_feasibility_jump`
+instead of extern feasibilityjump.hh, which only the C++ build compiles.
+std::mt19937 and libc++'s uniform_real_distribution are ported; the effort
+limits are the wrapper's (nnz << 10 in all, nnz << 8 since the last
+improvement), and the dev log lines go back through a C++ callback. The
+arithmetic is the C++'s (clang fuses the LHS updates, the residual
+`lhs - c*x`, the score accumulations and the jump scan's `score +=
+(v - cur) * slope`; `move.score += diff` in the weight update is a separate
+statement and stays unfused); the layout is CSR both ways, per-constraint
+fields in one struct, no allocation per jump value, and the scores of a
+constraint's old and new LHS once per constraint. Jump candidates with
+equal keys can only differ in the sign of a zero, so their sort order does
+not matter. Nothing here depends on the standard library's order:
+libstdc++'s generate_canonical takes the same two draws to the same sum
+(it only clamps a result of 1, which the `< 0.001` and `< 0.01` tests
+cannot tell apart), and its mt19937 result_type is wider but holds the
+same values.
+
+ziRound and shifting run in Rust (mip/heuristics.rs) when the model is
+column-wise: they return the rounded point, and the C++ tries it
+(trySolution, tryRoundedPoint, ziRound after shifting). Row activities
+(double-double, as calculateRowValuesQuad and getInfeasibleRows) are
+recomputed only for rows whose columns moved; shifting reads the LP
+relaxation's fractional integers instead of copying the whole relaxation,
+and draws from the C++ HighsRandom in place. Its std::unordered_map of
+shifts is only looked up, never iterated, so it needs no libstdc++
+variant.
+
+Graph LNS (HighsGraphLns.cpp): the decision columns, the neighbourhoods
+(seed choice from the flip promise, disagreement with the LP, or random,
+and the breadth-first search, with the short-row variant), the promise
+update from the reduced costs, the move type bandit (UCB, `base + 0.5 *
+sqrt(...)` fused) and the flip candidates and partners (byGain is a total
+order on distinct columns, so any sort reproduces pdqsort's) are in Rust
+(mip/lns.rs, an `Lns` handle per graphLNS call). Still C++: the dives, the
+neighbourhood branch and bound, the flip search's moves and propagation
+screen, the LP re-solves and the sub-MIPs, and all of RENS, RINS,
+rootReducedCost, randomizedRounding, centralRounding / linesearchRounding,
+tryRoundedPoint, the feasibility pump, crossover and solveSubMip: these are
+sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls (the
+first is being ported separately), with no arithmetic of their own worth
+moving across the FFI.

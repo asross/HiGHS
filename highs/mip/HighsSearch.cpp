@@ -14,6 +14,7 @@
 #include "mip/HighsDomainChange.h"
 #include "mip/HighsMipSolverData.h"
 
+#ifndef HIGHS_RUST
 HighsSearch::HighsSearch(HighsMipWorker& mipworker, HighsPseudocost& pseudocost)
     : mipworker(mipworker),
       mipsolver(mipworker.getMipSolver()),
@@ -38,6 +39,7 @@ HighsSearch::HighsSearch(HighsMipWorker& mipworker, HighsPseudocost& pseudocost)
   assert(!this->localdom.infeasible());
   this->localdom.setDomainChangeStack(std::vector<HighsDomainChange>());
 }
+#endif  // HIGHS_RUST
 
 double HighsSearch::checkSol(const std::vector<double>& sol,
                              bool& integerfeasible) const {
@@ -57,6 +59,7 @@ double HighsSearch::checkSol(const std::vector<double>& sol,
   return double(objval);
 }
 
+#ifndef HIGHS_RUST
 bool HighsSearch::orbitsValidInChildNode(
     const HighsDomainChange& branchChg) const {
   HighsInt branchCol = branchChg.column;
@@ -75,6 +78,7 @@ bool HighsSearch::orbitsValidInChildNode(
 
   return false;
 }
+#endif  // HIGHS_RUST
 
 double HighsSearch::getCutoffBound() const {
   return std::min(getUpperLimit(), upper_limit);
@@ -123,17 +127,22 @@ void HighsSearch::setRENSNeighbourhood(const std::vector<double>& lpsol) {
   }
 }
 
+#ifndef HIGHS_RUST
 void HighsSearch::createNewNode() {
   nodestack.emplace_back();
   nodestack.back().domgchgStackPos = localdom.getDomainChangeStack().size();
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsSearch::cutoffNode() { nodestack.back().opensubtrees = 0; }
 
 void HighsSearch::setMinReliable(HighsInt minreliable) {
   pseudocost.setMinReliable(minreliable);
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsSearch::branchDownwards(HighsInt col, double newub,
                                   double branchpoint) {
   NodeData& currnode = nodestack.back();
@@ -156,7 +165,9 @@ void HighsSearch::branchDownwards(HighsInt col, double newub,
       passStabilizerToChildNode ? currnode.stabilizerOrbits : nullptr);
   nodestack.back().domgchgStackPos = domchgPos;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsSearch::branchUpwards(HighsInt col, double newlb,
                                 double branchpoint) {
   NodeData& currnode = nodestack.back();
@@ -179,6 +190,7 @@ void HighsSearch::branchUpwards(HighsInt col, double newlb,
       passStabilizerToChildNode ? currnode.stabilizerOrbits : nullptr);
   nodestack.back().domgchgStackPos = domchgPos;
 }
+#endif  // HIGHS_RUST
 
 void HighsSearch::addBoundExceedingConflict() {
   if (getUpperLimit() != kHighsInf) {
@@ -244,6 +256,7 @@ void HighsSearch::addInfeasibleConflict() {
   }
 }
 
+#ifndef HIGHS_RUST
 HighsInt HighsSearch::selectBranchingCandidate(int64_t maxSbIters,
                                                double& downNodeLb,
                                                double& upNodeLb) {
@@ -709,13 +722,17 @@ HighsInt HighsSearch::selectBranchingCandidate(int64_t maxSbIters,
     }
   }
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 const HighsSearch::NodeData* HighsSearch::getParentNodeData() const {
   if (nodestack.size() <= 1) return nullptr;
 
   return &nodestack[nodestack.size() - 2];
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsSearch::currentNodeToQueue(HighsNodeQueue& nodequeue) {
   auto oldchangedcols = localdom.getChangedCols().size();
   bool prune = nodestack.back().lower_bound > getCutoffBound();
@@ -742,7 +759,9 @@ void HighsSearch::currentNodeToQueue(HighsNodeQueue& nodequeue) {
   }
   nodestack.back().opensubtrees = 0;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsSearch::openNodesToQueue(HighsNodeQueue& nodequeue) {
   if (nodestack.empty()) return;
 
@@ -792,6 +811,7 @@ void HighsSearch::openNodesToQueue(HighsNodeQueue& nodequeue) {
     lp->recoverBasis();
   }
 }
+#endif  // HIGHS_RUST
 
 void HighsSearch::flushStatistics(HighsMipSolver& mipsolver) {
   mipsolver.mipdata_->num_nodes += nnodes;
@@ -821,11 +841,13 @@ int64_t HighsSearch::getTotalLpIterations() const {
   return lpiterations + mipsolver.mipdata_->total_lp_iterations;
 }
 
+#ifndef HIGHS_RUST
 int64_t HighsSearch::getLocalLpIterations() const { return lpiterations; }
 
 int64_t& HighsSearch::getLocalNodes() { return nnodes; }
 
 int64_t& HighsSearch::getLocalLeaves() { return nleaves; }
+#endif  // HIGHS_RUST
 
 int64_t HighsSearch::getStrongBranchingLpIterations() const {
   return sblpiterations + mipsolver.mipdata_->sb_lp_iterations;
@@ -845,6 +867,7 @@ void HighsSearch::resetLocalDomain() {
 #endif
 }
 
+#ifndef HIGHS_RUST
 void HighsSearch::installNode(HighsNodeQueue::OpenNode&& node) {
   localdom.setDomainChangeStack(node.domchgstack, node.branchings);
   bool globalSymmetriesValid = true;
@@ -870,7 +893,9 @@ void HighsSearch::installNode(HighsNodeQueue::OpenNode&& node) {
   subrootsol.clear();
   depthoffset = node.depth - 1;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 HighsSearch::NodeResult HighsSearch::evaluateNode() {
   assert(!nodestack.empty());
   NodeData& currnode = nodestack.back();
@@ -1095,7 +1120,9 @@ HighsSearch::NodeResult HighsSearch::evaluateNode() {
 
   return result;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 HighsSearch::NodeResult HighsSearch::branch() {
   assert(localdom.getChangedCols().empty());
 
@@ -1504,7 +1531,9 @@ HighsSearch::NodeResult HighsSearch::branch() {
 
   return NodeResult::kBranched;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 bool HighsSearch::backtrack(bool recoverBasis) {
   if (nodestack.empty()) return false;
   assert(!nodestack.empty());
@@ -1624,7 +1653,9 @@ bool HighsSearch::backtrack(bool recoverBasis) {
 
   return true;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 bool HighsSearch::backtrackPlunge(HighsNodeQueue& nodequeue) {
   const std::vector<HighsDomainChange>& domchgstack =
       localdom.getDomainChangeStack();
@@ -1806,7 +1837,9 @@ bool HighsSearch::backtrackPlunge(HighsNodeQueue& nodequeue) {
 
   return true;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 bool HighsSearch::backtrackUntilDepth(HighsInt targetDepth) {
   if (nodestack.empty()) return false;
   assert(!nodestack.empty());
@@ -1871,7 +1904,9 @@ bool HighsSearch::backtrackUntilDepth(HighsInt targetDepth) {
 
   return true;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 HighsSearch::NodeResult HighsSearch::dive(int64_t nodeLim) {
   reliableatnode.clear();
 
@@ -1888,7 +1923,9 @@ HighsSearch::NodeResult HighsSearch::dive(int64_t nodeLim) {
     if (nnodes >= nodeLim) return result;
   } while (true);
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsSearch::solveDepthFirst(int64_t maxbacktracks) {
   do {
     if (maxbacktracks == 0) break;
@@ -1901,6 +1938,7 @@ void HighsSearch::solveDepthFirst(int64_t maxbacktracks) {
 
   } while (backtrack());
 }
+#endif  // HIGHS_RUST
 
 double HighsSearch::getFeasTol() const { return mipsolver.mipdata_->feastol; }
 
@@ -2000,3 +2038,577 @@ bool HighsSearch::addIncumbent(const std::vector<double>& sol, double solobj,
                                             print_display_line);
   }
 }
+
+#ifdef HIGHS_RUST
+namespace highs_rs {
+
+static_assert(sizeof(std::pair<HighsInt, double>) == 16,
+              "std::pair<HighsInt, double> is FracInt");
+
+// a std::shared_ptr (HighsBasis or StabilizerOrbits) boxed for Rust
+struct SharedBox {
+  std::shared_ptr<const void> p;
+};
+
+template <typename T>
+void* boxShared(std::shared_ptr<const T> p) {
+  if (!p) return nullptr;
+  return new SharedBox{std::move(p)};
+}
+
+template <typename T>
+const T* unboxed(void* b) {
+  return static_cast<const T*>(static_cast<SharedBox*>(b)->p.get());
+}
+
+template <typename T>
+std::shared_ptr<const T> takeShared(void* b) {
+  if (!b) return nullptr;
+  SharedBox* box = static_cast<SharedBox*>(b);
+  std::shared_ptr<const T> p = std::static_pointer_cast<const T>(box->p);
+  delete box;
+  return p;
+}
+
+// Mirror of CModel
+struct SearchModel {
+  HighsInt num_col;
+  const double* col_cost;
+  const uint8_t* integrality;
+  const double* root_lp_sol;
+  HighsInt num_root_lp_sol;
+  const HighsInt* integral_cols;
+  HighsInt num_integral_cols;
+  int source_heuristic;
+  int source_branching;
+  int source_evaluate_node;
+};
+
+// Mirror of CSearchFns
+struct SearchFns {
+  void* (*shared_clone)(void*);
+  void (*shared_free)(void*);
+  void (*change_bound)(void*, HighsDomainChange);
+  void (*propagate)(void*);
+  bool (*infeasible)(void*);
+  HighsDomainChange (*backtrack)(void*);
+  void (*backtrack_to_global)(void*);
+  const HighsDomainChange* (*stack)(void*, HighsInt*);
+  HighsInt (*num_changed_cols)(void*);
+  void (*clear_changed_cols)(void*, HighsInt);
+  void (*conflict_analysis)(void*);
+  void (*bounds)(void*, const double**, const double**);
+  double (*objective_lower_bound)(void*);
+  HighsInt (*col_pos)(void*, HighsInt, bool);
+  bool (*is_binary)(void*, HighsInt, bool);
+  void (*set_stack)(void*, const HighsDomainChange*, HighsInt,
+                    const HighsInt*, HighsInt);
+  const HighsInt* (*branching_positions)(void*, HighsInt*);
+  double (*node_to_queue)(void*, void*, double, double, HighsInt);
+  void (*lp_flush_domain)(void*);
+  void (*lp_set_objective_limit)(void*, double);
+  int (*lp_resolve)(void*);
+  int64_t (*lp_num_iterations)(void*);
+  int (*lp_status)(void*);
+  bool (*lp_query)(void*, int, int);
+  double (*lp_objective)(void*);
+  const double* (*lp_solution)(void*, int, HighsInt*);
+  const std::pair<HighsInt, double>* (*lp_frac_ints)(void*, HighsInt*);
+  void* (*lp_store_basis)(void*, bool);
+  void (*lp_set_stored_basis)(void*, void*);
+  void (*lp_recover_basis)(void*);
+  HighsInt (*basis_rows)(void*);
+  HighsInt (*lp_rows)(void*, int);
+  void (*lp_perform_aging)(void*);
+  double (*lp_best_estimate)(void*);
+  void (*lp_degenerate_duals)(void*, double);
+  double (*lp_degeneracy)(void*);
+  void* (*playground_new)(void*);
+  int (*playground_solve)(void*, void*);
+  void (*playground_free)(void*);
+  void (*lp_fallback)(void*, int);
+  HighsInt (*num_perms)(void*);
+  void* (*global_orbits)(void*);
+  HighsInt (*column_position)(void*, HighsInt);
+  void* (*compute_stabilizer_orbits)(void*);
+  bool (*orbits_query)(void*, HighsInt);
+  void (*orbital_fixing)(void*, void*);
+  void (*propagate_orbitopes)(void*);
+  double (*mip_value)(void*, int);
+  int64_t (*mip_stat)(void*, int);
+  bool (*check_limits)(void*, int64_t);
+  void (*add_incumbent)(void*, const double*, HighsInt, double, int);
+  void (*add_bound_exceeding_conflict)(void*);
+  void (*add_infeasible_conflict)(void*);
+  void (*propagate_redcost)(void*);
+  void (*log_frac_error)(void*, bool, double, double, double, double, double);
+  void (*model)(void*, SearchModel*);
+};
+
+
+extern "C" {
+Search* highs_rs_search_new(const SearchFns* fns, void* ctx,
+                            const SearchModel* model, bool submip);
+void highs_rs_search_free(Search* s);
+SearchStats* highs_rs_search_stats(Search* s);
+void highs_rs_search_op(Search* s, Pseudocost* ps, const NodeQueue* nq,
+                        int which, HighsInt i, double x, double y, int64_t n,
+                        void* q);
+int highs_rs_search_run(Search* s, Pseudocost* ps, const NodeQueue* nq,
+                        int which, HighsInt i, int64_t n, void* q);
+double highs_rs_search_value(const Search* s, int which);
+HighsInt highs_rs_search_select(Search* s, Pseudocost* ps,
+                                const NodeQueue* nq, int64_t maxSbIters,
+                                double* downLb, double* upLb);
+void highs_rs_search_install(Search* s, Pseudocost* ps, const NodeQueue* nq,
+                             const HighsDomainChange* domchgs,
+                             HighsInt ndomchgs, const HighsInt* branchings,
+                             HighsInt nbranchings, double lower_bound,
+                             double estimate, HighsInt depth);
+}
+
+// The C++ side of the Rust search
+struct SearchAccess {
+  static HighsSearch& s(void* p) { return *static_cast<HighsSearch*>(p); }
+
+  static void* sharedClone(void* b) {
+    return new SharedBox{static_cast<SharedBox*>(b)->p};
+  }
+  static void sharedFree(void* b) { delete static_cast<SharedBox*>(b); }
+
+  static void changeBound(void* p, HighsDomainChange d) {
+    s(p).localdom.changeBound(d);
+  }
+  static void propagate(void* p) { s(p).localdom.propagate(); }
+  static bool infeasible(void* p) { return s(p).localdom.infeasible(); }
+  static HighsDomainChange backtrack(void* p) {
+    return s(p).localdom.backtrack();
+  }
+  static void backtrackToGlobal(void* p) { s(p).localdom.backtrackToGlobal(); }
+  static const HighsDomainChange* stack(void* p, HighsInt* n) {
+    const auto& st = s(p).localdom.getDomainChangeStack();
+    *n = st.size();
+    return st.data();
+  }
+  static HighsInt numChangedCols(void* p) {
+    return s(p).localdom.getChangedCols().size();
+  }
+  static void clearChangedCols(void* p, HighsInt start) {
+    if (start < 0)
+      s(p).localdom.clearChangedCols();
+    else
+      s(p).localdom.clearChangedCols(start);
+  }
+  static void conflictAnalysis(void* p) {
+    HighsSearch& x = s(p);
+    x.localdom.conflictAnalysis(x.getConflictPool(),
+                                x.mipworker.getGlobalDomain(), x.pseudocost);
+  }
+  static void bounds(void* p, const double** lower, const double** upper) {
+    *lower = s(p).localdom.col_lower_.data();
+    *upper = s(p).localdom.col_upper_.data();
+  }
+  static double objectiveLowerBound(void* p) {
+    return s(p).localdom.getObjectiveLowerBound();
+  }
+  static HighsInt colPos(void* p, HighsInt col, bool upper) {
+    HighsDomain& d = s(p).localdom;
+    HighsInt pos;
+    if (upper)
+      d.getColUpperPos(col, d.getNumDomainChanges(), pos);
+    else
+      d.getColLowerPos(col, d.getNumDomainChanges(), pos);
+    return pos;
+  }
+  static bool isBinary(void* p, HighsInt col, bool global) {
+    return global ? s(p).getDomain().isBinary(col)
+                  : s(p).localdom.isGlobalBinary(col);
+  }
+  static void setStack(void* p, const HighsDomainChange* d, HighsInt n,
+                       const HighsInt* b, HighsInt nb) {
+    s(p).localdom.setDomainChangeStack(std::vector<HighsDomainChange>(d, d + n),
+                                       std::vector<HighsInt>(b, b + nb));
+  }
+  static const HighsInt* branchingPositions(void* p, HighsInt* n) {
+    const auto& b = s(p).localdom.getBranchingPositions();
+    *n = b.size();
+    return b.data();
+  }
+  static double nodeToQueue(void* p, void* q, double lb, double estimate,
+                            HighsInt depth) {
+    std::vector<HighsInt> branchPositions;
+    auto domchgStack =
+        s(p).localdom.getReducedDomainChangeStack(branchPositions);
+    return static_cast<HighsNodeQueue*>(q)->emplaceNode(
+        std::move(domchgStack), std::move(branchPositions), lb, estimate,
+        depth);
+  }
+
+  static void lpFlushDomain(void* p) { s(p).lp->flushDomain(s(p).localdom); }
+  static void lpSetObjectiveLimit(void* p, double x) {
+    s(p).lp->setObjectiveLimit(x);
+  }
+  static int lpResolve(void* p) {
+    return int(s(p).lp->resolveLp(&s(p).localdom));
+  }
+  static int64_t lpNumIterations(void* p) {
+    return s(p).lp->getNumLpIterations();
+  }
+  static int lpStatus(void* p) { return int(s(p).lp->getStatus()); }
+  static bool lpQuery(void* p, int which, int status) {
+    HighsLpRelaxation& lp = *s(p).lp;
+    auto st = HighsLpRelaxation::Status(status);
+    switch (which) {
+      case 0:
+        return lp.scaledOptimal(st);
+      case 1:
+        return lp.unscaledPrimalFeasible(st);
+      case 2:
+        return lp.unscaledDualFeasible(st);
+      case 3:
+        return st == HighsLpRelaxation::Status::kInfeasible;
+      case 4:
+        return st == HighsLpRelaxation::Status::kOptimal;
+      default:
+        return lp.getLpSolver().getModelStatus() ==
+               HighsModelStatus::kObjectiveBound;
+    }
+  }
+  static double lpObjective(void* p) { return s(p).lp->getObjective(); }
+  static const double* lpSolution(void* p, int which, HighsInt* n) {
+    const std::vector<double>& v =
+        which == 0   ? s(p).lp->getSolution().col_value
+        : which == 1 ? s(p).lp->getSolution().col_dual
+                     : s(p).lp->getLpSolver().getSolution().col_value;
+    *n = v.size();
+    return v.data();
+  }
+  static const std::pair<HighsInt, double>* lpFracInts(void* p, HighsInt* n) {
+    const auto& f = s(p).lp->getFractionalIntegers();
+    *n = f.size();
+    return f.data();
+  }
+  static void* lpStoreBasis(void* p, bool get) {
+    if (!get) {
+      s(p).lp->storeBasis();
+      return nullptr;
+    }
+    return boxShared(s(p).lp->getStoredBasis());
+  }
+  static void lpSetStoredBasis(void* p, void* b) {
+    s(p).lp->setStoredBasis(takeShared<HighsBasis>(b));
+  }
+  static void lpRecoverBasis(void* p) { s(p).lp->recoverBasis(); }
+  static HighsInt basisRows(void* b) {
+    return unboxed<HighsBasis>(b)->row_status.size();
+  }
+  static HighsInt lpRows(void* p, int which) {
+    return which == 0 ? s(p).lp->numRows() : s(p).lp->getLp().num_row_;
+  }
+  static void lpPerformAging(void* p) { s(p).lp->performAging(); }
+  static double lpBestEstimate(void* p) {
+    return s(p).lp->computeBestEstimate(s(p).pseudocost);
+  }
+  static void lpDegenerateDuals(void* p, double threshold) {
+    HighsSearch& x = s(p);
+    x.lp->computeBasicDegenerateDuals(threshold, x.localdom, x.getDomain(),
+                                      x.getConflictPool(),
+                                      x.mipworker.getPseudocost(), true);
+  }
+  static double lpDegeneracy(void* p) {
+    return s(p).lp->computeLPDegneracy(s(p).localdom);
+  }
+  static void* playgroundNew(void* p) {
+    return new HighsLpRelaxation::Playground(s(p).lp->playground());
+  }
+  static int playgroundSolve(void* p, void* pg) {
+    return int(static_cast<HighsLpRelaxation::Playground*>(pg)->solveLp(
+        s(p).localdom));
+  }
+  static void playgroundFree(void* pg) {
+    delete static_cast<HighsLpRelaxation::Playground*>(pg);
+  }
+  static void lpFallback(void* p, int step) {
+    HighsSearch& x = s(p);
+    switch (step) {
+      case 0: {
+        x.lp->setIterationLimit();
+        // create a fresh LP only with model rows since all integer columns
+        // are fixed, the cutting planes are not required and the LP could
+        // not be solved so we want to make it as easy as possible
+        x.fallbackLp_.reset(new HighsLpRelaxation(x.mipsolver));
+        HighsLpRelaxation& lpCopy = *x.fallbackLp_;
+        lpCopy.setProfiling(x.mipsolver.profiling_);
+        lpCopy.loadModel();
+        lpCopy.getLpSolver().changeColsBounds(0, x.mipsolver.numCol() - 1,
+                                              x.localdom.col_lower_.data(),
+                                              x.localdom.col_upper_.data());
+        // temporarily use the fresh LP for the search
+        x.fallbackSwapped_ = x.lp;
+        x.lp = &lpCopy;
+        // reevaluate the node with LP presolve enabled
+        x.lp->getLpSolver().setOptionValue("presolve", kHighsOnString);
+        break;
+      }
+      case 1:
+        // LP still not solved, reevaluate with primal simplex
+        x.lp->getLpSolver().clearSolver();
+        x.lp->getLpSolver().setOptionValue("simplex_strategy",
+                                           kSimplexStrategyPrimal);
+        break;
+      case 2:
+        x.lp->getLpSolver().setOptionValue("simplex_strategy",
+                                           kSimplexStrategyDual);
+        break;
+      case 3:
+        // LP still not solved, reevaluate with IPM instead of simplex
+        x.lp->getLpSolver().clearSolver();
+        x.lp->getLpSolver().setOptionValue("solver", "ipm");
+        break;
+      case 4:
+        highsLogUser(x.mipsolver.options_mip_->log_options,
+                     HighsLogType::kWarning,
+                     "Failed to solve node with all integer columns "
+                     "fixed. Declaring node infeasible.\n");
+        break;
+      default:
+        // restore old lp relaxation
+        x.lp = x.fallbackSwapped_;
+        x.fallbackLp_.reset();
+    }
+  }
+  static HighsInt numPerms(void* p) { return s(p).getSymmetries().numPerms; }
+  static void* globalOrbits(void* p) {
+    return boxShared(s(p).mipsolver.mipdata_->globalOrbits);
+  }
+  static HighsInt columnPosition(void* p, HighsInt col) {
+    return s(p).getSymmetries().columnPosition[col];
+  }
+  static void* computeStabilizerOrbits(void* p) {
+    return boxShared(s(p).getSymmetries().computeStabilizerOrbits(
+        s(p).localdom, s(p).stabilizerOrbitWorkspace));
+  }
+  static bool orbitsQuery(void* b, HighsInt col) {
+    const StabilizerOrbits* o = unboxed<StabilizerOrbits>(b);
+    return col < 0 ? o->orbitCols.empty() : o->isStabilized(col);
+  }
+  static void orbitalFixing(void* p, void* b) {
+    unboxed<StabilizerOrbits>(b)->orbitalFixing(s(p).localdom);
+  }
+  static void propagateOrbitopes(void* p) {
+    s(p).getSymmetries().propagateOrbitopes(s(p).localdom);
+  }
+  static double mipValue(void* p, int which) {
+    switch (which) {
+      case 0:
+        return s(p).getFeasTol();
+      case 1:
+        return s(p).getEpsilon();
+      case 2:
+        return s(p).getUpperLimit();
+      default:
+        return s(p).getOptimalityLimit();
+    }
+  }
+  static int64_t mipStat(void* p, int which) {
+    const HighsMipSolverData& d = *s(p).mipsolver.mipdata_;
+    switch (which) {
+      case 0:
+        return d.heuristic_lp_iterations;
+      case 1:
+        return d.total_lp_iterations;
+      case 2:
+        return d.sb_lp_iterations;
+      default:
+        return d.lns_tree_next >= 0;
+    }
+  }
+  static bool checkLimits(void* p, int64_t offset) {
+    return s(p).checkLimits(offset);
+  }
+  static void addIncumbent(void* p, const double* sol, HighsInt n, double obj,
+                           int source) {
+    s(p).addIncumbent(std::vector<double>(sol, sol + n), obj, source);
+  }
+  static void addBoundExceedingConflict(void* p) {
+    s(p).addBoundExceedingConflict();
+  }
+  static void addInfeasibleConflict(void* p) { s(p).addInfeasibleConflict(); }
+  static void propagateRedcost(void* p) {
+    HighsSearch& x = s(p);
+    HighsRedcostFixing::propagateRedCost(
+        x.mipsolver, x.localdom, x.mipworker.getGlobalDomain(), *x.lp,
+        x.getConflictPool(), x.mipworker.getPseudocost(), x.getUpperLimit());
+  }
+  static void logFracError(void* p, bool upper, double fracval, double bound,
+                           double colbound, double feastol, double residual) {
+    if (!upper)
+      highsLogUser(s(p).mipsolver.options_mip_->log_options,
+                   HighsLogType::kError,
+                   "HighsSearch::selectBranchingCandidate Error fracval = %g "
+                   "<= %g = %g + %g = "
+                   "localdom.col_lower_[col] + getFeasTol(): "
+                   "Residual %g\n",
+                   fracval, bound, colbound, feastol, residual);
+    else
+      highsLogUser(s(p).mipsolver.options_mip_->log_options,
+                   HighsLogType::kError,
+                   "HighsSearch::selectBranchingCandidate Error fracval = %g "
+                   ">= %g = %g - %g = "
+                   "localdom.col_upper_[col] - getFeasTol(): "
+                   "Residual %g\n",
+                   fracval, bound, colbound, feastol, residual);
+  }
+
+  static void modelData(void* p, SearchModel* m) {
+    fillModel(s(p).mipsolver, m);
+  }
+
+  static void fillModel(const HighsMipSolver& mipsolver, SearchModel* m) {
+    const HighsLp& model = *mipsolver.model_;
+    const HighsMipSolverData& d = *mipsolver.mipdata_;
+    m->num_col = mipsolver.numCol();
+    m->col_cost = model.col_cost_.data();
+    m->integrality =
+        reinterpret_cast<const uint8_t*>(model.integrality_.data());
+    m->root_lp_sol = d.rootlpsol.data();
+    m->num_root_lp_sol = d.rootlpsol.size();
+    m->integral_cols = d.integral_cols.data();
+    m->num_integral_cols = d.integral_cols.size();
+    m->source_heuristic = kSolutionSourceHeuristic;
+    m->source_branching = kSolutionSourceBranching;
+    m->source_evaluate_node = kSolutionSourceEvaluateNode;
+  }
+
+  static const SearchFns fns;
+};
+
+const SearchFns SearchAccess::fns = {
+    sharedClone,
+    sharedFree,
+    changeBound,
+    propagate,
+    infeasible,
+    backtrack,
+    backtrackToGlobal,
+    stack,
+    numChangedCols,
+    clearChangedCols,
+    conflictAnalysis,
+    bounds,
+    objectiveLowerBound,
+    colPos,
+    isBinary,
+    setStack,
+    branchingPositions,
+    nodeToQueue,
+    lpFlushDomain,
+    lpSetObjectiveLimit,
+    lpResolve,
+    lpNumIterations,
+    lpStatus,
+    lpQuery,
+    lpObjective,
+    lpSolution,
+    lpFracInts,
+    lpStoreBasis,
+    lpSetStoredBasis,
+    lpRecoverBasis,
+    basisRows,
+    lpRows,
+    lpPerformAging,
+    lpBestEstimate,
+    lpDegenerateDuals,
+    lpDegeneracy,
+    playgroundNew,
+    playgroundSolve,
+    playgroundFree,
+    lpFallback,
+    numPerms,
+    globalOrbits,
+    columnPosition,
+    computeStabilizerOrbits,
+    orbitsQuery,
+    orbitalFixing,
+    propagateOrbitopes,
+    mipValue,
+    mipStat,
+    checkLimits,
+    addIncumbent,
+    addBoundExceedingConflict,
+    addInfeasibleConflict,
+    propagateRedcost,
+    logFracError,
+    modelData,
+};
+
+static Search* newSearch(HighsSearch* s, const HighsMipSolver& mipsolver) {
+  SearchModel m;
+  SearchAccess::fillModel(mipsolver, &m);
+  return highs_rs_search_new(&SearchAccess::fns, s, &m, mipsolver.submip);
+}
+}  // namespace highs_rs
+
+HighsSearch::HighsSearch(HighsMipWorker& mipworker, HighsPseudocost& pseudocost)
+    : rs_(highs_rs::newSearch(this, mipworker.getMipSolver())),
+      st_(highs_rs::highs_rs_search_stats(rs_)),
+      mipworker(mipworker),
+      mipsolver(mipworker.getMipSolver()),
+      lp(nullptr),
+      localdom(mipworker.getGlobalDomain()),
+      pseudocost(pseudocost),
+      nnodes(st_->nnodes),
+      nleaves(st_->nleaves),
+      lpiterations(st_->lpiterations),
+      heurlpiterations(st_->heurlpiterations),
+      sblpiterations(st_->sblpiterations),
+      upper_limit(st_->upper_limit),
+      treeweight(st_->treeweight),
+      depthoffset(st_->depthoffset),
+      inbranching(st_->inbranching),
+      inheuristic(st_->inheuristic),
+      countTreeWeight(st_->countTreeWeight) {
+  // the infeasibility flag is overwritten and lost when setDomainChangeStack is
+  // called. therefore, assert that localdom is not infeasible here.
+  assert(!this->localdom.infeasible());
+  this->localdom.setDomainChangeStack(std::vector<HighsDomainChange>());
+}
+
+HighsSearch::~HighsSearch() { highs_rs::highs_rs_search_free(rs_); }
+
+void HighsSearch::op(int which, HighsInt i, double x, double y, int64_t n,
+                     HighsNodeQueue* q) {
+  highs_rs::highs_rs_search_op(rs_, pseudocost.rust(),
+                               mipsolver.mipdata_->nodequeue.rust(), which, i,
+                               x, y, n, q);
+}
+
+int HighsSearch::run(int which, HighsInt i, int64_t n, HighsNodeQueue* q) {
+  return highs_rs::highs_rs_search_run(rs_, pseudocost.rust(),
+                                       mipsolver.mipdata_->nodequeue.rust(),
+                                       which, i, n, q);
+}
+
+double HighsSearch::getCurrentEstimate() const {
+  return highs_rs::highs_rs_search_value(rs_, 0);
+}
+
+double HighsSearch::getCurrentLowerBound() const {
+  return highs_rs::highs_rs_search_value(rs_, 1);
+}
+
+HighsInt HighsSearch::selectBranchingCandidate(int64_t maxSbIters,
+                                               double& downNodeLb,
+                                               double& upNodeLb) {
+  return highs_rs::highs_rs_search_select(
+      rs_, pseudocost.rust(), mipsolver.mipdata_->nodequeue.rust(),
+      maxSbIters, &downNodeLb, &upNodeLb);
+}
+
+void HighsSearch::installNode(HighsNodeQueue::OpenNode&& node) {
+  highs_rs::highs_rs_search_install(
+      rs_, pseudocost.rust(), mipsolver.mipdata_->nodequeue.rust(),
+      node.domchgstack.data(), node.domchgstack.size(), node.branchings.data(),
+      node.branchings.size(), node.lower_bound, node.estimate, node.depth);
+}
+#endif  // HIGHS_RUST

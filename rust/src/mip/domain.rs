@@ -48,6 +48,7 @@
 //! (HighsCDouble arithmetic via util::cdouble); the only contraction clang
 //! makes here is `bound +- 1000.0 * feastol` in adjustedUb/adjustedLb.
 
+use super::conflictpool::ConflictPool;
 use super::objprop::CObjProp;
 use crate::ffi::{sl, sl_mut};
 use crate::util::cdouble::CDouble;
@@ -351,9 +352,24 @@ pub struct CConfProp {
     watched: CSlice<WatchedLiteral>,
     conflict_flag: CSlice<u8>,
     propagate_conflict_inds: Ptr<StdVec<i32>>,
-    // HighsConflictPool (read live: syncConflictPool clears them)
-    entries: Ptr<StdVec<DomChg>>,
-    ranges: Ptr<StdVec<[i32; 2]>>,
+    /// the pool (its conflicts are read live: syncConflictPool clears them)
+    pool: *mut ConflictPool,
+}
+
+impl CConfProp {
+    /// The pool's entries, independent of the view's borrow
+    #[inline(always)]
+    fn entries<'a>(&self) -> &'a [DomChg] {
+        // SAFETY: the live pool; conflicts are not added while a domain
+        // propagates
+        unsafe { &(*self.pool).entries }
+    }
+
+    #[inline(always)]
+    fn ranges<'a>(&self) -> &'a [[i32; 2]] {
+        // SAFETY: as entries
+        unsafe { &(*self.pool).ranges }
+    }
 }
 
 /// HighsDomain's data, filled by highs_rs::DomainAccess, mirrored by
@@ -1076,9 +1092,9 @@ impl<'a> Dom<'a> {
     /// The entries of a conflict
     pub(crate) fn conflict<'x>(&self, pool: usize, conflict: usize) -> &'x [DomChg] {
         let cp = self.conflictpool(pool);
-        let [s, e] = cp.ranges[conflict];
+        let [s, e] = cp.ranges()[conflict];
         // SAFETY: the pool's entries, not changed while this is used
-        unsafe { &*(&cp.entries.as_slice()[s as usize..e as usize] as *const [DomChg]) }
+        unsafe { &*(&cp.entries()[s as usize..e as usize] as *const [DomChg]) }
     }
 
     /// HighsDomain::isActive
@@ -1788,16 +1804,17 @@ impl<'a> Dom<'a> {
         if *self.infeasible {
             return None;
         }
-        let [start, end] = cp.ranges[conflict];
+        let [start, end] = cp.ranges()[conflict];
         if start == -1 {
             Self::unlink_watched_literal(cp, 2 * conflict);
             Self::unlink_watched_literal(cp, 2 * conflict + 1);
             return None;
         }
+        let entries = cp.entries();
         let mut inactive = [0usize; 2];
         let mut num_inactive = 0;
         for i in start as usize..end as usize {
-            if self.is_active(&cp.entries[i]) {
+            if self.is_active(&entries[i]) {
                 continue;
             }
             inactive[num_inactive] = i;
@@ -1816,7 +1833,7 @@ impl<'a> Dom<'a> {
                 None
             }
             1 => {
-                let domchg = self.flip(&cp.entries[inactive[0]]);
+                let domchg = self.flip(&entries[inactive[0]]);
                 if !self.is_active(&domchg) {
                     Some(domchg)
                 } else {
@@ -1826,7 +1843,7 @@ impl<'a> Dom<'a> {
             _ => {
                 for w in 0..2 {
                     let pos = 2 * conflict + w;
-                    let e = cp.entries[inactive[w]];
+                    let e = entries[inactive[w]];
                     if cp.watched[pos].domchg != e {
                         Self::unlink_watched_literal(cp, pos);
                         cp.watched[pos].domchg = e;

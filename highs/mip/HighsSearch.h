@@ -9,6 +9,8 @@
 #define HIGHS_SEARCH_H_
 
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <queue>
 #include <vector>
 
@@ -29,6 +31,233 @@ class HighsMipWorker;
 class HighsImplications;
 class HighsCliqueTable;
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct Search;
+// Mirror of Stats (rust/src/mip/search.rs)
+struct SearchStats {
+  int64_t nnodes;
+  int64_t nleaves;
+  int64_t lpiterations;
+  int64_t heurlpiterations;
+  int64_t sblpiterations;
+  double upper_limit;
+  HighsCDouble treeweight;
+  HighsInt depthoffset;
+  bool inbranching;
+  bool inheuristic;
+  bool countTreeWeight;
+  int childselrule;
+};
+struct SearchAccess;
+}  // namespace highs_rs
+
+// The search state is Rust's (rust/src/mip/search.rs); this class keeps the
+// local domain and the links to the MIP solver, which Rust calls back
+class HighsSearch {
+  friend struct highs_rs::SearchAccess;
+  highs_rs::Search* rs_;
+  highs_rs::SearchStats* st_;
+
+ public:
+  HighsMipWorker& mipworker;
+
+  const HighsMipSolver& mipsolver;
+  HighsLpRelaxation* lp;
+  HighsDomain localdom;
+  HighsPseudocost& pseudocost;
+  int64_t& nnodes;
+  int64_t& nleaves;
+  int64_t& lpiterations;
+  int64_t& heurlpiterations;
+  int64_t& sblpiterations;
+  double& upper_limit;
+  HighsCDouble& treeweight;
+  std::vector<HighsInt> inds;
+  std::vector<double> vals;
+  HighsInt& depthoffset;
+  bool& inbranching;
+  bool& inheuristic;
+  bool& countTreeWeight;
+
+  enum class ChildSelectionRule {
+    kUp,
+    kDown,
+    kRootSol,
+    kObj,
+    kRandom,
+    kBestCost,
+    kWorstCost,
+    kDisjunction,
+    kHybridInferenceCost,
+  };
+
+  enum class NodeResult {
+    kBoundExceeding,
+    kDomainInfeasible,
+    kLpInfeasible,
+    kBranched,
+    kSubOptimal,
+    kOpen,
+  };
+
+ private:
+  // the fresh LP of branch's fallback, and the playground of strong
+  // branching
+  std::unique_ptr<HighsLpRelaxation> fallbackLp_;
+  HighsLpRelaxation* fallbackSwapped_ = nullptr;
+  StabilizerOrbitWorkspace stabilizerOrbitWorkspace;
+
+  void op(int which, HighsInt i = 0, double x = 0, double y = 0,
+          int64_t n = 0, HighsNodeQueue* q = nullptr);
+  int run(int which, HighsInt i = 0, int64_t n = 0,
+          HighsNodeQueue* q = nullptr);
+
+ public:
+  HighsSearch(HighsMipWorker& mipworker, HighsPseudocost& pseudocost);
+  ~HighsSearch();
+  HighsSearch(const HighsSearch&) = delete;
+  HighsSearch& operator=(const HighsSearch&) = delete;
+
+  void setRINSNeighbourhood(const std::vector<double>& basesol,
+                            const std::vector<double>& relaxsol);
+
+  void setRENSNeighbourhood(const std::vector<double>& lpsol);
+
+  double getCutoffBound() const;
+
+  void setLpRelaxation(HighsLpRelaxation* lp) { this->lp = lp; }
+
+  double checkSol(const std::vector<double>& sol, bool& integerfeasible) const;
+
+  void createNewNode() { op(0); }
+
+  void cutoffNode() { op(1); }
+
+  void branchDownwards(HighsInt col, double newub, double branchpoint) {
+    op(2, col, newub, branchpoint);
+  }
+
+  void branchUpwards(HighsInt col, double newlb, double branchpoint) {
+    op(3, col, newlb, branchpoint);
+  }
+
+  void setMinReliable(HighsInt minreliable) {
+    pseudocost.setMinReliable(minreliable);
+  }
+
+  void setHeuristic(bool inheuristic) { op(4, inheuristic); }
+
+  void addBoundExceedingConflict();
+
+  void resetLocalDomain();
+
+  int64_t getHeuristicLpIterations() const;
+
+  int64_t getTotalLpIterations() const;
+
+  int64_t getLocalLpIterations() const { return lpiterations; }
+
+  int64_t& getLocalNodes() { return nnodes; }
+
+  int64_t& getLocalLeaves() { return nleaves; }
+
+  int64_t getStrongBranchingLpIterations() const;
+
+  bool hasNode() const { return const_cast<HighsSearch*>(this)->run(6) != 0; }
+
+  bool currentNodePruned() const {
+    return const_cast<HighsSearch*>(this)->run(7) != 0;
+  }
+
+  double getCurrentEstimate() const;
+
+  double getCurrentLowerBound() const;
+
+  HighsInt getCurrentDepth() const {
+    return const_cast<HighsSearch*>(this)->run(8);
+  }
+
+  void openNodesToQueue(HighsNodeQueue& nodequeue) {
+    op(6, 0, 0, 0, 0, &nodequeue);
+  }
+
+  void currentNodeToQueue(HighsNodeQueue& nodequeue) {
+    op(5, 0, 0, 0, 0, &nodequeue);
+  }
+
+  void flushStatistics(HighsMipSolver& mipsolver);
+
+  void installNode(HighsNodeQueue::OpenNode&& node);
+
+  void addInfeasibleConflict();
+
+  HighsInt selectBranchingCandidate(int64_t maxSbIters, double& downNodeLb,
+                                    double& upNodeLb);
+
+  NodeResult evaluateNode() { return NodeResult(run(0)); }
+
+  NodeResult branch() { return NodeResult(run(1)); }
+
+  /// backtrack one level in DFS manner
+  bool backtrack(bool recoverBasis = true) {
+    return run(2, recoverBasis) != 0;
+  }
+
+  /// backtrack an unspecified amount of depth level until the next
+  /// node that seems worthwhile to continue the plunge. Put unpromising nodes
+  /// to the node queue
+  bool backtrackPlunge(HighsNodeQueue& nodequeue) {
+    return run(3, 0, 0, &nodequeue) != 0;
+  }
+
+  /// for heuristics. Will discard nodes above targetDepth regardless of their
+  /// status
+  bool backtrackUntilDepth(HighsInt targetDepth) {
+    return run(4, targetDepth) != 0;
+  }
+
+  NodeResult dive(int64_t nodeLim = std::numeric_limits<int64_t>::max()) {
+    return NodeResult(run(5, 0, nodeLim));
+  }
+
+  HighsDomain& getLocalDomain() { return localdom; }
+
+  const HighsDomain& getLocalDomain() const { return localdom; }
+
+  HighsPseudocost& getPseudoCost() { return pseudocost; }
+
+  const HighsPseudocost& getPseudoCost() const { return pseudocost; }
+
+  void solveDepthFirst(int64_t maxbacktracks = 1) {
+    op(7, 0, 0, 0, maxbacktracks);
+  }
+
+  double getFeasTol() const;
+  double getUpperLimit() const;
+  double getEpsilon() const;
+  double getOptimalityLimit() const;
+
+  const std::vector<double>& getRootLpSol() const;
+  const std::vector<HighsInt>& getIntegralCols() const;
+
+  HighsDomain& getDomain() const;
+  HighsConflictPool& getConflictPool() const;
+  HighsCutPool& getCutPool() const;
+
+  const HighsNodeQueue& getNodeQueue() const;
+
+  bool checkLimits(int64_t nodeOffset = 0) const;
+
+  bool checkLocalLimits() const;
+
+  HighsSymmetries& getSymmetries() const;
+
+  bool addIncumbent(const std::vector<double>& sol, double solobj,
+                    const int solution_source,
+                    const bool print_display_line = true);
+};
+#else
 class HighsSearch {
  public:
   HighsMipWorker& mipworker;
@@ -271,5 +500,7 @@ class HighsSearch {
                     const int solution_source,
                     const bool print_display_line = true);
 };
+
+#endif  // HIGHS_RUST
 
 #endif

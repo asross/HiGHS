@@ -190,8 +190,7 @@ void HighsDomain::ConflictPoolPropagation::conflictAdded(HighsInt conflict) {
 #endif
   HighsInt start = conflictpool_->getConflictRanges()[conflict].first;
   HighsInt end = conflictpool_->getConflictRanges()[conflict].second;
-  const std::vector<HighsDomainChange>& conflictEntries =
-      conflictpool_->getConflictEntryVector();
+  const auto& conflictEntries = conflictpool_->getConflictEntryVector();
 
   if (HighsInt(conflictFlag_.size()) <= conflict) {
     watchedLiterals_.resize(2 * conflict + 2);
@@ -322,8 +321,7 @@ void HighsDomain::ConflictPoolPropagation::propagateConflict(
 
   if (domain->infeasible_) return;
 
-  const std::vector<HighsDomainChange>& entries =
-      conflictpool_->getConflictEntryVector();
+  const auto& entries = conflictpool_->getConflictEntryVector();
   HighsInt start = conflictpool_->getConflictRanges()[conflict].first;
   if (start == -1) {
     unlinkWatchedLiteral(2 * conflict);

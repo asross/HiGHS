@@ -40,6 +40,12 @@
 
 namespace highs_rs {
 
+// a slice of a const array (which Rust only reads)
+template <typename T>
+DSlice<T> cslice(const T* p, HighsInt n) {
+  return {nonNull(const_cast<T*>(p)), (int)n};
+}
+
 // The layouts the Rust side assumes
 static_assert(sizeof(HighsInt) == 4, "HighsInt is i32 in Rust");
 // (hi and lo are private, declared in this order)
@@ -150,7 +156,6 @@ struct DomainAccess {
     v.capacity_threshold = dslice(cp.capacityThreshold_);
     v.propagatecutinds = &cp.propagatecutinds_;
     cp.cutpool->getMatrix().rustView(v);
-    v.rhs = dslice(cp.cutpool->getRhs());
   }
 
   static void fillConfProp(HighsDomain::ConflictPoolPropagation& cp,
@@ -161,8 +166,7 @@ struct DomainAccess {
                  (int)cp.watchedLiterals_.size()};
     v.conflict_flag = dslice(cp.conflictFlag_);
     v.propagate_conflict_inds = &cp.propagateConflictInds_;
-    v.entries = &cp.conflictpool_->getConflictEntryVector();
-    v.ranges = &cp.conflictpool_->getConflictRanges();
+    v.pool = cp.conflictpool_->rust();
   }
 
   // the arrays of a cut pool's propagation (or its matrix) may have moved:
@@ -353,7 +357,7 @@ struct DomainAccess {
                same(x.watched, y.watched) &&
                same(x.conflict_flag, y.conflict_flag) &&
                x.propagate_conflict_inds == y.propagate_conflict_inds &&
-               x.entries == y.entries && x.ranges == y.ranges);
+               x.pool == y.pool);
       }
     }
 #endif
@@ -366,31 +370,11 @@ struct Conflict {
   const Domain* local;
   const Domain* global;
   HighsConflictPool* pool;
-  HighsPseudocost* pseudocost;
-  const HighsNodeQueue* nodequeue;
+  highs_rs::Pseudocost* pseudocost;
+  const highs_rs::NodeQueue* nodequeue;
   HighsInt num_integral;
-  int64_t (*num_nodes)(const void*, int, bool);
-  void (*increase_conflict_weight)(void*);
-  void (*increase_conflict_score)(void*, int, bool);
   void (*add_cut)(const Conflict*, const HighsDomainChange*, int,
                   const HighsDomainChange*);
-
-  static int64_t numNodes(const void* q, int col, bool up) {
-    const HighsNodeQueue& nodequeue = *static_cast<const HighsNodeQueue*>(q);
-    return up ? nodequeue.numNodesUp(col) : nodequeue.numNodesDown(col);
-  }
-
-  static void increaseConflictWeight(void* p) {
-    static_cast<HighsPseudocost*>(p)->increaseConflictWeight();
-  }
-
-  static void increaseConflictScore(void* p, int col, bool up) {
-    HighsPseudocost& pseudocost = *static_cast<HighsPseudocost*>(p);
-    if (up)
-      pseudocost.increaseConflictScoreUp(col);
-    else
-      pseudocost.increaseConflictScoreDown(col);
-  }
 
   static void addCut(const Conflict* c, const HighsDomainChange* entries,
                      int len, const HighsDomainChange* domchg) {
@@ -411,12 +395,9 @@ struct Conflict {
       : local(DomainAccess::view(local)),
         global(DomainAccess::view(global)),
         pool(&pool),
-        pseudocost(&pseudocost),
-        nodequeue(&mipdata.nodequeue),
+        pseudocost(pseudocost.rust()),
+        nodequeue(mipdata.nodequeue.rust()),
         num_integral((HighsInt)mipdata.integral_cols.size()),
-        num_nodes(numNodes),
-        increase_conflict_weight(increaseConflictWeight),
-        increase_conflict_score(increaseConflictScore),
         add_cut(addCut) {}
 };
 
@@ -432,15 +413,16 @@ void highs_rs_conflict_reconvergence(const Conflict* c, HighsDomainChange domchg
 }  // namespace highs_rs
 
 inline void HighsDynamicRowMatrix::rustView(highs_rs::CutProp& c) const {
-  using highs_rs::dslice;
-  c.ar_range = dslice(ARrange_);
-  c.ar_index = dslice(ARindex_);
-  c.ar_value = dslice(ARvalue_);
-  c.ar_rowindex = dslice(ARrowindex_);
-  c.next_pos = dslice(AnextPos_);
-  c.next_neg = dslice(AnextNeg_);
-  c.head_pos = dslice(AheadPos_);
-  c.head_neg = dslice(AheadNeg_);
+  using highs_rs::cslice;
+  c.ar_range = cslice(v_.ar_range, v_.num_rows);
+  c.ar_index = cslice(v_.ar_index, v_.num_nz);
+  c.ar_value = cslice(v_.ar_value, v_.num_nz);
+  c.ar_rowindex = cslice(v_.ar_rowindex, v_.num_nz);
+  c.next_pos = cslice(v_.next_pos, v_.num_nz);
+  c.next_neg = cslice(v_.next_neg, v_.num_nz);
+  c.head_pos = cslice(v_.head_pos, v_.num_cols);
+  c.head_neg = cslice(v_.head_neg, v_.num_cols);
+  c.rhs = cslice(v_.rhs, v_.num_rhs);
 }
 
 #endif

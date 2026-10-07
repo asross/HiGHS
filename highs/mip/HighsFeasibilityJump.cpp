@@ -9,6 +9,35 @@
 #include "mip/feasibilityjump.hh"
 #include "util/HighsSparseMatrix.h"
 
+#ifdef HIGHS_RUST
+// rust/src/mip/feasjump.rs
+struct FjRsProblem {
+  int num_col;
+  int num_row;
+  const double* col_lower;
+  const double* col_upper;
+  const double* col_cost;
+  const uint8_t* col_integer;
+  const HighsInt* ar_start;
+  const HighsInt* ar_index;
+  const double* ar_value;
+  const double* row_lower;
+  const double* row_upper;
+  uint32_t seed;
+  double equality_tolerance;
+  double violation_tolerance;
+  uint64_t max_total_effort;
+  uint64_t max_effort_since_improvement;
+};
+extern "C" int highs_rs_feasibility_jump(const FjRsProblem* p, double* x,
+                                         int logging_on, void* log_ctx,
+                                         void (*log)(void*, int, const char*));
+static void fjRsLog(void* ctx, int type, const char* msg) {
+  highsLogDev(*static_cast<const HighsLogOptions*>(ctx), HighsLogType(type),
+              "%s", msg);
+}
+#endif
+
 HighsModelStatus HighsMipSolverData::feasibilityJump() {
   // This is the (presolved) model being solved
   const HighsLp* model = this->mipsolver.model_;
@@ -29,12 +58,18 @@ HighsModelStatus HighsMipSolverData::feasibilityJump() {
 
   const bool use_incumbent = !incumbent.empty();
 
+#ifdef HIGHS_RUST
+  std::vector<double> fj_lower(model->num_col_), fj_upper(model->num_col_),
+      fj_cost(model->num_col_);
+  std::vector<uint8_t> fj_integer(model->num_col_);
+#else
   // Configure Feasibility Jump and pass it the problem
   auto solver = external_feasibilityjump::FeasibilityJumpSolver(
       log_options,
       /* seed = */ mipsolver.options_mip_->random_seed,
       /* equalityTolerance = */ epsilon,
       /* violationTolerance = */ feastol);
+#endif
 
   for (HighsInt col = 0; col < model->num_col_; ++col) {
     double lower = model->col_lower_[col];
@@ -64,8 +99,15 @@ HighsModelStatus HighsMipSolverData::feasibilityJump() {
       assert(legal_bounds);
       return HighsModelStatus::kInfeasible;
     }
+#ifdef HIGHS_RUST
+    fj_lower[col] = lower;
+    fj_upper[col] = upper;
+    fj_cost[col] = sense_multiplier * model->col_cost_[col];
+    fj_integer[col] = fjVarType == external_feasibilityjump::VarType::Integer;
+#else
     solver.addVar(fjVarType, lower, upper,
                   sense_multiplier * model->col_cost_[col]);
+#endif
 
     double initial_assignment = 0.0;
     if (use_incumbent && std::isfinite(incumbent[col])) {
@@ -83,6 +125,32 @@ HighsModelStatus HighsMipSolverData::feasibilityJump() {
   HighsSparseMatrix a_matrix;
   a_matrix.createRowwise(model->a_matrix_);
 
+#ifdef HIGHS_RUST
+  const HighsInt nnz = a_matrix.numNz();
+  const FjRsProblem problem = {int(model->num_col_),
+                               int(model->num_row_),
+                               fj_lower.data(),
+                               fj_upper.data(),
+                               fj_cost.data(),
+                               fj_integer.data(),
+                               a_matrix.start_.data(),
+                               a_matrix.index_.data(),
+                               a_matrix.value_.data(),
+                               model->row_lower_.data(),
+                               model->row_upper_.data(),
+                               uint32_t(mipsolver.options_mip_->random_seed),
+                               epsilon,
+                               feastol,
+                               uint64_t(nnz) << 10,
+                               uint64_t(nnz) << 8};
+  const bool logging_on =
+      *log_options.output_flag && *log_options.log_dev_level;
+  found_integer_feasible_solution =
+      highs_rs_feasibility_jump(
+          &problem, col_value.data(), logging_on,
+          const_cast<HighsLogOptions*>(&log_options), fjRsLog) != 0;
+  (void)objective_function_value;
+#else
   for (HighsInt row = 0; row < model->num_row_; ++row) {
     bool hasFiniteLower = std::isfinite(model->row_lower_[row]);
     bool hasFiniteUpper = std::isfinite(model->row_upper_[row]);
@@ -127,6 +195,7 @@ HighsModelStatus HighsMipSolverData::feasibilityJump() {
   };
 
   solver.solve(col_value.data(), fjControlCallback);
+#endif
 
   if (found_integer_feasible_solution) {
     // Initial assignments that violate integrality or column bounds can lead to

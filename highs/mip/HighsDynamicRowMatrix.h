@@ -8,6 +8,7 @@
 #ifndef HIGHS_DYNAMIC_ROW_MATRIX_H_
 #define HIGHS_DYNAMIC_ROW_MATRIX_H_
 
+#include <cstdint>
 #include <set>
 #include <utility>
 #include <vector>
@@ -18,8 +19,77 @@
 #ifdef HIGHS_RUST
 namespace highs_rs {
 struct CutProp;
-}
-#endif
+// Mirror of CMatrixView (rust/src/mip/cutpool.rs): a Rust cut pool's
+// matrix and right-hand sides
+struct CutPoolView {
+  const std::pair<HighsInt, HighsInt>* ar_range;
+  HighsInt num_rows;
+  HighsInt num_del_rows;
+  const HighsInt* ar_index;
+  const double* ar_value;
+  HighsInt num_nz;
+  const HighsInt* ar_rowindex;
+  const HighsInt* next_pos;
+  const HighsInt* next_neg;
+  const HighsInt* head_pos;
+  const HighsInt* head_neg;
+  HighsInt num_cols;
+  const uint8_t* cols_linked;
+  const double* rhs;
+  HighsInt num_rhs;
+};
+}  // namespace highs_rs
+
+// The matrix of a Rust cut pool (rust/src/mip/cutpool.rs), read through a
+// view valid until the pool changes
+class HighsDynamicRowMatrix {
+  highs_rs::CutPoolView v_;
+
+ public:
+  explicit HighsDynamicRowMatrix(const highs_rs::CutPoolView& v) : v_(v) {}
+
+  const highs_rs::CutPoolView& view() const { return v_; }
+
+  bool columnsLinked(HighsInt rowindex) const {
+    return v_.cols_linked[rowindex] != 0;
+  }
+
+  std::size_t nonzeroCapacity() const { return v_.num_nz; }
+
+  template <typename Func>
+  void forEachPositiveColumnEntry(HighsInt col, Func&& f) const {
+    HighsInt iter = v_.head_pos[col];
+    while (iter != -1) {
+      if (!f(v_.ar_rowindex[iter], v_.ar_value[iter])) break;
+      iter = v_.next_pos[iter];
+    }
+  }
+
+  template <typename Func>
+  void forEachNegativeColumnEntry(HighsInt col, Func&& f) const {
+    HighsInt iter = v_.head_neg[col];
+    while (iter != -1) {
+      if (!f(v_.ar_rowindex[iter], v_.ar_value[iter])) break;
+      iter = v_.next_neg[iter];
+    }
+  }
+
+  HighsInt getNumRows() const { return v_.num_rows; }
+
+  HighsInt getNumDelRows() const { return v_.num_del_rows; }
+
+  HighsInt getRowStart(HighsInt row) const { return v_.ar_range[row].first; }
+
+  HighsInt getRowEnd(HighsInt row) const { return v_.ar_range[row].second; }
+
+  const HighsInt* getARindex() const { return v_.ar_index; }
+
+  const double* getARvalue() const { return v_.ar_value; }
+
+  // fills the matrix part of a highs_rs::CutProp (mip/HighsDomainRust.h)
+  void rustView(highs_rs::CutProp& v) const;
+};
+#else
 
 class HighsDynamicRowMatrix {
  private:
@@ -106,11 +176,7 @@ class HighsDynamicRowMatrix {
   const HighsInt* getARindex() const { return ARindex_.data(); }
 
   const double* getARvalue() const { return ARvalue_.data(); }
-
-#ifdef HIGHS_RUST
-  // fills the matrix part of a highs_rs::CutProp (mip/HighsDomainRust.h)
-  void rustView(highs_rs::CutProp& v) const;
-#endif
 };
+#endif  // HIGHS_RUST
 
 #endif

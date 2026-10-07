@@ -2292,38 +2292,9 @@ void clqCbPruneEdge(void* p, HighsCliqueTable::CliqueVar v1,
                     HighsCliqueTable::CliqueVar v2) {
   const HighsMipSolver& mipsolver = clqMipOf(p);
   if (mipsolver.mipdata_->nodequeue.empty()) return;
-  const auto& v1Nodes =
-      v1.val == 1 ? mipsolver.mipdata_->nodequeue.getUpNodes(v1.col)
-                  : mipsolver.mipdata_->nodequeue.getDownNodes(v1.col);
-  const auto& v2Nodes =
-      v2.val == 1 ? mipsolver.mipdata_->nodequeue.getUpNodes(v2.col)
-                  : mipsolver.mipdata_->nodequeue.getDownNodes(v2.col);
-  if (v1Nodes.empty() || v2Nodes.empty()) return;
-  auto itV1 = v1Nodes.lower_bound(
-      std::make_pair(static_cast<double>(v1.val), kHighsIInf));
-  auto endV1 = v1Nodes.upper_bound(
-      std::make_pair(static_cast<double>(v1.val), kHighsIInf));
-  auto itV2 = v2Nodes.lower_bound(
-      std::make_pair(static_cast<double>(v2.val), kHighsIInf));
-  auto endV2 = v2Nodes.upper_bound(
-      std::make_pair(static_cast<double>(v2.val), kHighsIInf));
-  if (itV1 != endV1 && itV2 != endV2 &&
-      (itV1->second <= std::prev(endV2)->second ||
-       itV2->second <= std::prev(endV1)->second)) {
-    while (itV1 != endV1 && itV2 != endV2) {
-      if (itV1->second < itV2->second) {
-        ++itV1;
-      } else if (itV2->second < itV1->second) {
-        ++itV2;
-      } else {
-        HighsInt prunedNode = itV2->second;
-        ++itV1;
-        ++itV2;
-        mipsolver.mipdata_->pruned_treeweight +=
-            mipsolver.mipdata_->nodequeue.pruneNode(prunedNode);
-      }
-    }
-  }
+  highs_rs::highs_rs_nodequeue_prune_edge(
+      mipsolver.mipdata_->nodequeue.rust(), v1.col, v1.val, v2.col, v2.val,
+      &mipsolver.mipdata_->pruned_treeweight);
 }
 
 bool clqCbTooManyVarBounds(void* p) {

@@ -18,6 +18,124 @@
 #include "util/HighsCDouble.h"
 #include "util/HighsHash.h"
 
+#ifdef HIGHS_RUST
+namespace {
+void cutAdded(void* d, HighsInt cut, bool propagate) {
+  static_cast<HighsDomain::CutpoolPropagation*>(d)->cutAdded(cut, propagate);
+}
+void cutDeleted(void* d, HighsInt cut, bool onlyForPropagation) {
+  static_cast<HighsDomain::CutpoolPropagation*>(d)->cutDeleted(
+      cut, onlyForPropagation);
+}
+}  // namespace
+
+HighsCutPool::HighsCutPool(HighsInt ncols, HighsInt agelim, HighsInt softlimit,
+                           HighsInt index)
+    : rs_(highs_rs::highs_rs_cutpool_new(ncols, agelim, softlimit, index, cutAdded,
+                               cutDeleted)),
+      index_(index) {}
+
+// appends the given cuts of this pool to the cut set
+static void appendCuts(const HighsCutPool& pool, HighsCutSet& cutset,
+                       const HighsInt* cuts, HighsInt num, size_t nnz) {
+  HighsInt orignumcuts = cutset.numCuts();
+  HighsInt offset = cutset.ARindex_.size();
+  for (HighsInt i = 0; i != num; ++i) {
+    cutset.cutindices.push_back(cuts[i]);
+    cutset.cutpools.push_back(pool.index_);
+  }
+  if (nnz == 0) {
+    nnz = offset;
+    for (HighsInt i = 0; i != num; ++i) nnz += pool.getRowLength(cuts[i]);
+  }
+  cutset.resize(nnz);
+  highs_rs::CutPoolView v = pool.getMatrix().view();
+  for (HighsInt i = orignumcuts; i != cutset.numCuts(); ++i) {
+    cutset.ARstart_[i] = offset;
+    HighsInt cut = cutset.cutindices[i];
+    HighsInt start = v.ar_range[cut].first;
+    HighsInt end = v.ar_range[cut].second;
+    cutset.upper_[i] = v.rhs[cut];
+    for (HighsInt j = start; j != end; ++j) {
+      cutset.ARvalue_[offset] = v.ar_value[j];
+      cutset.ARindex_[offset] = v.ar_index[j];
+      ++offset;
+    }
+  }
+  cutset.ARstart_[cutset.numCuts()] = offset;
+}
+
+void HighsCutPool::separate(const std::vector<double>& sol,
+                            const HighsDomain& domain, HighsCutSet& cutset,
+                            double feastol,
+                            const std::deque<HighsCutPool>& cutpools,
+                            bool thread_safe) {
+  std::vector<const highs_rs::CutPool*> pools;
+  pools.reserve(cutpools.size());
+  for (const HighsCutPool& pool : cutpools) pools.push_back(pool.rs_);
+  HighsInt num;
+  const HighsInt* cuts = highs_rs::highs_rs_cutpool_separate(
+      rs_, sol.data(), sol.size(), domain.col_lower_.data(),
+      domain.col_upper_.data(), cutset.cutindices.data(),
+      cutset.cutpools.data(), cutset.numCuts(), feastol, pools.data(),
+      pools.size(), thread_safe, &num);
+  if (num == -1) return;
+  appendCuts(*this, cutset, cuts, num, 0);
+  highs_rs::highs_rs_cutpool_free_buf(cuts, num);
+}
+
+void HighsCutPool::separateLpCutsAfterRestart(HighsCutSet& cutset) {
+  // should only be called after a restart with a fresh row matrix right now
+  highs_rs::CutPoolView v = view();
+  assert(v.num_del_rows == 0);
+  op(7);
+  std::vector<HighsInt> cuts(v.num_rows);
+  std::iota(cuts.begin(), cuts.end(), 0);
+  appendCuts(*this, cutset, cuts.data(), v.num_rows, v.num_nz);
+}
+
+HighsInt HighsCutPool::addCut(const HighsMipSolver& mipsolver, HighsInt* Rindex,
+                              double* Rvalue, HighsInt Rlen, double rhs,
+                              bool integral, bool propagate,
+                              bool extractCliques, bool isConflict) {
+  const HighsCutPool& global = mipsolver.mipdata_->getCutPool();
+  highs_rs::CutPoolModelSize model{mipsolver.numNonzero(), mipsolver.numRow()};
+  HighsInt rowindex = highs_rs::highs_rs_cutpool_add_cut(
+      rs_, this == &global ? nullptr : global.rs_, &model, Rindex, Rvalue, Rlen,
+      rhs, integral, propagate, isConflict);
+  if (rowindex == -1) return -1;
+
+  if (extractCliques && this == &global) {
+    // if this is the global cutpool extract cliques from the cut
+    if (Rlen <= 100)
+      mipsolver.mipdata_->cliquetable.extractCliquesFromCut(mipsolver, Rindex,
+                                                            Rvalue, Rlen, rhs);
+  }
+
+  return rowindex;
+}
+
+void HighsCutPool::syncCutPool(const HighsMipSolver& mipsolver,
+                               HighsCutPool& syncpool) {
+  HighsInt num;
+  HighsInt* cuts = highs_rs::highs_rs_cutpool_cuts_to_sync(rs_, &num);
+  std::vector<HighsInt> idxs;
+  std::vector<double> vals;
+  for (HighsInt k = 0; k != num; ++k) {
+    HighsInt i = cuts[k];
+    HighsInt Rlen;
+    const HighsInt* Rindex;
+    const double* Rvalue;
+    getCut(i, Rlen, Rindex, Rvalue);
+    // copy cut into something mutable (addCut reorders so can't take const)
+    idxs.assign(Rindex, Rindex + Rlen);
+    vals.assign(Rvalue, Rvalue + Rlen);
+    syncpool.addCut(mipsolver, idxs.data(), vals.data(), Rlen, getRhs()[i],
+                    cutIsIntegral(i));
+  }
+  highs_rs::highs_rs_cutpool_free_buf(cuts, num);
+}
+#else
 static uint64_t compute_cut_hash(const HighsInt* Rindex, const double* Rvalue,
                                  double maxabscoef, const HighsInt Rlen) {
   std::vector<uint32_t> valueHashCodes(Rlen);
@@ -663,3 +781,4 @@ void HighsCutPool::syncCutPool(const HighsMipSolver& mipsolver,
 
   assert((HighsInt)propRows.size() == numPropRows);
 }
+#endif  // HIGHS_RUST
