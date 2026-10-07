@@ -20,6 +20,15 @@ C#/Fortran/Julia shims (Crestline exposes a Rust API; Python bindings
 maybe later), and the fixed-format MPS reader (free MPS and LP only).
 Kept: everything else, including IIS and the QP solver.
 
+**Roadmap after the extraction:** (1) the leading performance
+opportunities (dense/supernodal switch in HFactor's triangular solves,
+concurrent FTRANs per dual iteration, x86-specific tuning), evaluated on
+the dispatch suite over 16 seeds; (2) primal feasibility: the MIPFEAS
+benchmark (gams.com/blog/2026/03/expanding-the-focus-introducing-the-mipfeas-benchmark),
+and whether the methods of arXiv:2609.05954 and Local-MIP
+(github.com/shaowei-cai-group/Local-MIP) add to feasibility jump and the
+graph LNS.
+
 Bottom-up, one subsystem at a time, always shippable. The C++ build with
 `-DHIGHS_RUST=ON` calls the Rust code for every ported piece; without it, the
 original C++ runs. The C++ of a ported piece is deleted only once the Rust is
