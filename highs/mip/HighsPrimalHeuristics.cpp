@@ -462,7 +462,9 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       d.getLp().getLpSolver().setOptionValue("parallel", kHighsOffString);
       return 0;
     case 124:
-      d.firstlpsol = d.getLp().getSolution().col_value;
+      highs_rs_mip_vecs_set(d.rsv_.p, 1,
+                            d.getLp().getSolution().col_value.data(),
+                            d.getLp().getSolution().col_value.size());
       d.firstlpsolobj = d.getLp().getObjective();
       d.rootlpsolobj = d.firstlpsolobj;
       return 0;
@@ -593,7 +595,9 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
     case 146:
       return d.getLp().getLpSolver().getBasis().valid;
     case 147:
-      d.rootlpsol = d.getLp().getLpSolver().getSolution().col_value;
+      highs_rs_mip_vecs_set(
+          d.rsv_.p, 2, d.getLp().getLpSolver().getSolution().col_value.data(),
+          d.getLp().getLpSolver().getSolution().col_value.size());
       return 0;
     case 148:
       return d.getDomain().getChangedCols().size();
@@ -731,50 +735,6 @@ static void scratchSolution(void* m, const double* sol, HighsInt n,
   v->row = solution.row_value.data();
   v->nrow = solution.row_value.size();
 }
-static std::vector<HighsInt>& intVecRef(HighsMipSolverData& d, int which) {
-  switch (which) {
-    case 3:
-      return d.integral_cols;
-    case 4:
-      return d.integer_cols;
-    case 5:
-      return d.implint_cols;
-    case 6:
-      return d.continuous_cols;
-    case 7:
-      return d.ARstart_;
-    case 8:
-      return d.ARindex_;
-    case 9:
-      return d.uplocks;
-    default:
-      return d.downlocks;
-  }
-}
-// mip_data.rs mod vec: doubles 0-2 and 20-21, integers 3-10, bytes 30
-static void setVec(void* m, int which, const void* data, HighsInt n) {
-  HighsMipSolverData& d = *mip(m).mipdata_;
-  if (which <= 2 || which == 20 || which == 21) {
-    const double* x = static_cast<const double*>(data);
-    std::vector<double>& v = which == 0    ? d.incumbent
-                             : which == 1  ? d.firstlpsol
-                             : which == 2  ? d.rootlpsol
-                             : which == 20 ? d.ARvalue_
-                                           : d.maxAbsRowCoef;
-    v.assign(x, x + n);
-  } else if (which == 30) {
-    const uint8_t* x = static_cast<const uint8_t*>(data);
-    d.rowintegral.assign(x, x + n);
-  } else {
-    const HighsInt* x = static_cast<const HighsInt*>(data);
-    intVecRef(d, which).assign(x, x + n);
-  }
-}
-static const HighsInt* intVec(void* m, int which, HighsInt* n) {
-  std::vector<HighsInt>& v = intVecRef(*mip(m).mipdata_, which);
-  *n = v.size();
-  return v.data();
-}
 static void refill(void* m, MipData* out) { *out = mipData(mip(m)); }
 
 // The concurrent LNS helper (rust/src/mip/concurrent.rs): its options,
@@ -877,8 +837,6 @@ static const MipFns fns = {
     subMip,
     op,
     scratchSolution,
-    setVec,
-    intVec,
     refill,
     mipMasterWorker,
     mipRunProcessNodes,
@@ -915,6 +873,7 @@ MipData mipData(const HighsMipSolver& mipsolver) {
   m.helper_pool = mipsolver.concurrent_lns_;
   m.lns_target = mipsolver.lns_target_reached_;
   m.heur = d.heuristics.rust();
+  m.vecs = d.rsv_.p;
   m.root_presolve_only = mipsolver.options_mip_->mip_root_presolve_only;
   m.a_start = &model.a_matrix_.start_;
   m.a_index = &model.a_matrix_.index_;

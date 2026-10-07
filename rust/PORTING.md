@@ -451,9 +451,14 @@ mutations).
 The scalars of HighsMipSolverData are one struct (HighsMipScalars, same
 layout as glue.rs `MipScalars`, size checked on both sides); the old
 fields are references into it, so the rest of the solver reads them
-unchanged. Rust gets them in place with pointers to the solver's vectors
-and model (`MipData`, filled per call by `mipData()`, refetched after a
-restart or presolve since the model changes).
+unchanged. Its vectors (incumbent, first and root LP solutions, analytic
+centre, the row-wise matrix, row maxima and integrality, locks, column
+classes) are Rust's: a `MipVecs` (mip_data.rs) that HighsMipSolverData
+owns (MipVecsOwner, declared first, freed last) and refers to in place
+(`HighsRsArray`), set by Rust (C++ through highs_rs_mip_vecs_set). Rust
+gets them, the scalars and the model in place (`MipData`, filled per
+call by `mipData()`, refetched after a restart or presolve since the
+model changes).
 
 In Rust (mip/mip_data.rs, root.rs, driver.rs): limitsToGap,
 computeNewUpperLimit, limitsToBounds, updateLowerBound, the primal-dual

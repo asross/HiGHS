@@ -188,10 +188,6 @@ pub struct CMipFns {
     /// col_value = sol (if not null), primal postsolve and row values; its
     /// vectors to the view
     pub scratch_solution: unsafe extern "C" fn(P, *const f64, i32, *mut ScratchView),
-    /// HighsMipSolverData vector `which` (mip_data::vec) = data
-    pub set_vec: unsafe extern "C" fn(P, i32, *const std::ffi::c_void, i32),
-    /// HighsMipSolverData's integer vector `which` (data, length)
-    pub int_vec: unsafe extern "C" fn(P, i32, *mut i32) -> *const i32,
     /// refills a MipData (after the model changed)
     pub refill: unsafe extern "C" fn(P, *mut MipData),
     /// the master worker (workers[0])
@@ -436,6 +432,8 @@ pub struct MipData {
     pub lns_target: *const super::concurrent::Pool,
     /// the solver's heuristics
     pub heur: *const super::primal::Heur,
+    /// HighsMipSolverData's vectors
+    pub vecs: *mut super::mip_data::MipVecs,
 }
 
 macro_rules! vecs {
@@ -956,27 +954,32 @@ pub fn fresh(m: &MipData) -> MipData {
     }
 }
 
-/// Sets HighsMipSolverData's double vector `which`
-pub fn set_vec(m: &MipData, which: i32, v: &[f64]) {
-    c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
+/// The solver's vectors
+#[allow(clippy::mut_from_ref)]
+fn vecs(m: &MipData) -> &mut super::mip_data::MipVecs {
+    // SAFETY: the solver's MipVecs; no reference to a vector is held
+    // across a set
+    unsafe { &mut *m.vecs }
 }
 
-/// Sets HighsMipSolverData's byte vector `which`
-pub fn set_bytes(m: &MipData, which: i32, v: &[u8]) {
-    c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
+/// Sets HighsMipSolverData's double vector `which`
+pub fn set_vec(m: &MipData, which: i32, v: &[f64]) {
+    vecs(m).set_f64(which, v)
+}
+
+/// Sets HighsMipSolverData's byte vector `which` (rowintegral)
+pub fn set_bytes(m: &MipData, _which: i32, v: &[u8]) {
+    vecs(m).set_u8(v)
 }
 
 /// Sets HighsMipSolverData's integer vector `which`
 pub fn set_int_vec(m: &MipData, which: i32, v: &[i32]) {
-    c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
+    vecs(m).set_i32(which, v)
 }
 
 /// HighsMipSolverData's integer vector `which`
 pub fn int_vec(m: &MipData, which: i32) -> &[i32] {
-    let mut n = 0;
-    let p = c!(int_vec, m.mipsolver, which, &mut n);
-    // SAFETY: the C++ vector, unchanged while the slice is used
-    unsafe { crate::ffi::sl(p, n) }
+    vecs(m).int(which).as_slice()
 }
 
 #[cfg(test)]

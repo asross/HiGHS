@@ -8,6 +8,7 @@
 //! reads; Rust works on it through [`MipData`] and calls C++ for the C++
 //! objects ([`CMipFns::op`] and the named functions of glue.rs).
 
+use super::domain::StdVec;
 use super::glue::{self, fns, lp_status, Dom, Lp, MipData, Worker};
 use crate::lp_data::LogType;
 use crate::util::cdouble::CDouble;
@@ -88,8 +89,8 @@ pub mod op {
     pub const SOLUTION_EMPTY: i32 = 25;
 }
 
-/// HighsMipSolverData's vectors that Rust sets (CMipFns::set_vec): doubles
-/// (0-2, 20-), integers (3-10), bytes (30)
+/// HighsMipSolverData's vectors ([`MipVecs`]): doubles (0-2, 20-22),
+/// integers (3-10), bytes (30)
 pub mod vec {
     pub const INCUMBENT: i32 = 0;
     pub const FIRSTLPSOL: i32 = 1;
@@ -105,8 +106,150 @@ pub mod vec {
     /// doubles
     pub const AR_VALUE: i32 = 20;
     pub const MAX_ABS_ROW_COEF: i32 = 21;
+    pub const ANALYTIC_CENTER: i32 = 22;
     /// bytes
     pub const ROW_INTEGRAL: i32 = 30;
+}
+
+/// HighsMipSolverData's vectors, owned by Rust; the C++ HighsMipSolverData
+/// owns the struct (highs_rs::MipVecsOwner) and its old members refer to
+/// the fields in place (HighsRsArray, the layout of StdVec). Set with
+/// [`MipVecs::set`] (C++: highs_rs_mip_vecs_set)
+#[repr(C)]
+pub struct MipVecs {
+    pub incumbent: StdVec<f64>,
+    pub firstlpsol: StdVec<f64>,
+    pub rootlpsol: StdVec<f64>,
+    pub analytic_center: StdVec<f64>,
+    pub ar_start: StdVec<i32>,
+    pub ar_index: StdVec<i32>,
+    pub ar_value: StdVec<f64>,
+    pub max_abs_row_coef: StdVec<f64>,
+    pub row_integral: StdVec<u8>,
+    pub uplocks: StdVec<i32>,
+    pub downlocks: StdVec<i32>,
+    pub integer_cols: StdVec<i32>,
+    pub implint_cols: StdVec<i32>,
+    pub integral_cols: StdVec<i32>,
+    pub continuous_cols: StdVec<i32>,
+}
+
+/// v = data (std::vector::assign)
+fn assign<T: Copy>(v: &mut StdVec<T>, data: &[T]) {
+    // SAFETY: a Rust-owned vector
+    let mut x = unsafe { v.take_vec() };
+    x.clear();
+    x.extend_from_slice(data);
+    *v = StdVec::from_vec(x);
+}
+
+impl MipVecs {
+    fn new() -> Self {
+        fn e<T: Copy>() -> StdVec<T> {
+            StdVec::from_vec(Vec::new())
+        }
+        MipVecs {
+            incumbent: e(),
+            firstlpsol: e(),
+            rootlpsol: e(),
+            analytic_center: e(),
+            ar_start: e(),
+            ar_index: e(),
+            ar_value: e(),
+            max_abs_row_coef: e(),
+            row_integral: e(),
+            uplocks: e(),
+            downlocks: e(),
+            integer_cols: e(),
+            implint_cols: e(),
+            integral_cols: e(),
+            continuous_cols: e(),
+        }
+    }
+    fn dbl(&mut self, which: i32) -> &mut StdVec<f64> {
+        match which {
+            vec::INCUMBENT => &mut self.incumbent,
+            vec::FIRSTLPSOL => &mut self.firstlpsol,
+            vec::ROOTLPSOL => &mut self.rootlpsol,
+            vec::AR_VALUE => &mut self.ar_value,
+            vec::MAX_ABS_ROW_COEF => &mut self.max_abs_row_coef,
+            _ => &mut self.analytic_center,
+        }
+    }
+    pub fn int(&mut self, which: i32) -> &mut StdVec<i32> {
+        match which {
+            vec::INTEGRAL_COLS => &mut self.integral_cols,
+            vec::INTEGER_COLS => &mut self.integer_cols,
+            vec::IMPLINT_COLS => &mut self.implint_cols,
+            vec::CONTINUOUS_COLS => &mut self.continuous_cols,
+            vec::AR_START => &mut self.ar_start,
+            vec::AR_INDEX => &mut self.ar_index,
+            vec::UPLOCKS => &mut self.uplocks,
+            _ => &mut self.downlocks,
+        }
+    }
+    pub fn set_f64(&mut self, which: i32, data: &[f64]) {
+        assign(self.dbl(which), data)
+    }
+    pub fn set_i32(&mut self, which: i32, data: &[i32]) {
+        assign(self.int(which), data)
+    }
+    pub fn set_u8(&mut self, data: &[u8]) {
+        assign(&mut self.row_integral, data)
+    }
+}
+
+impl Drop for MipVecs {
+    fn drop(&mut self) {
+        // SAFETY: every vector is Rust-owned
+        unsafe {
+            drop(self.incumbent.take_vec());
+            drop(self.firstlpsol.take_vec());
+            drop(self.rootlpsol.take_vec());
+            drop(self.analytic_center.take_vec());
+            drop(self.ar_start.take_vec());
+            drop(self.ar_index.take_vec());
+            drop(self.ar_value.take_vec());
+            drop(self.max_abs_row_coef.take_vec());
+            drop(self.row_integral.take_vec());
+            drop(self.uplocks.take_vec());
+            drop(self.downlocks.take_vec());
+            drop(self.integer_cols.take_vec());
+            drop(self.implint_cols.take_vec());
+            drop(self.integral_cols.take_vec());
+            drop(self.continuous_cols.take_vec());
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn highs_rs_mip_vecs_new() -> *mut MipVecs {
+    Box::into_raw(Box::new(MipVecs::new()))
+}
+
+/// # Safety
+/// `v` from highs_rs_mip_vecs_new, or null
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_mip_vecs_free(v: *mut MipVecs) {
+    if !v.is_null() {
+        drop(Box::from_raw(v));
+    }
+}
+
+/// Vector `which` (mod vec) = the `n` elements of `data`
+///
+/// # Safety
+/// `v` live; `data` valid for `n` elements of the vector's type
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_mip_vecs_set(v: *mut MipVecs, which: i32, data: *const std::ffi::c_void, n: i32) {
+    let v = &mut *v;
+    if which == vec::ROW_INTEGRAL {
+        v.set_u8(crate::ffi::sl(data as *const u8, n));
+    } else if which <= 2 || which >= 20 {
+        v.set_f64(which, crate::ffi::sl(data as *const f64, n));
+    } else {
+        v.set_i32(which, crate::ffi::sl(data as *const i32, n));
+    }
 }
 
 /// std::min / std::max

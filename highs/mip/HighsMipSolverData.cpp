@@ -41,10 +41,28 @@ HighsMipSolverData::HighsMipSolverData(HighsMipSolver& mipsolver)
       numCliqueEntriesAfterPresolve(sc_.numCliqueEntriesAfterPresolve),
       numCliqueEntriesAfterFirstPresolve(
           sc_.numCliqueEntriesAfterFirstPresolve),
+#ifdef HIGHS_RUST
+      ARstart_(rsv_.p->ar_start),
+      ARindex_(rsv_.p->ar_index),
+      ARvalue_(rsv_.p->ar_value),
+      maxAbsRowCoef(rsv_.p->max_abs_row_coef),
+      rowintegral(rsv_.p->row_integral),
+      uplocks(rsv_.p->uplocks),
+      downlocks(rsv_.p->downlocks),
+      integer_cols(rsv_.p->integer_cols),
+      implint_cols(rsv_.p->implint_cols),
+      integral_cols(rsv_.p->integral_cols),
+      continuous_cols(rsv_.p->continuous_cols),
+#endif
       feastol(sc_.feastol),
       epsilon(sc_.epsilon),
       heuristic_effort(sc_.heuristic_effort),
       dispfreq(sc_.dispfreq),
+#ifdef HIGHS_RUST
+      analyticCenter(rsv_.p->analytic_center),
+      firstlpsol(rsv_.p->firstlpsol),
+      rootlpsol(rsv_.p->rootlpsol),
+#endif
       firstlpsolobj(sc_.firstlpsolobj),
       rootlpsolobj(sc_.rootlpsolobj),
       numintegercols(sc_.numintegercols),
@@ -76,6 +94,9 @@ HighsMipSolverData::HighsMipSolverData(HighsMipSolver& mipsolver)
       upper_bound(sc_.upper_bound),
       upper_limit(sc_.upper_limit),
       optimality_limit(sc_.optimality_limit),
+#ifdef HIGHS_RUST
+      incumbent(rsv_.p->incumbent),
+#endif
       primal_dual_integral(sc_.primal_dual_integral),
       debugSolution(mipsolver),
       lns_tree_next(sc_.lns_tree_next),
@@ -144,7 +165,11 @@ double mipSetupOp(void* m, int which, void* w, int64_t i, double x) {
       d.getLp().setSolvedFirstLp(false);
       return 0;
     case 306:
-      d.incumbent = d.postSolveStack.getReducedPrimalSolution(ms.solution_);
+    {
+      const std::vector<double> x =
+          d.postSolveStack.getReducedPrimalSolution(ms.solution_);
+      highs_rs::highs_rs_mip_vecs_set(d.rsv_.p, 0, x.data(), x.size());
+    }
       return 0;
     case 307:
       d.redcostfixing = HighsRedcostFixing();
@@ -512,7 +537,7 @@ bool HighsMipSolverData::checkSolution(
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_solution(highs_rs::mipFns(), &rsm, 0, solution.data(), solution.size(), 0);
   }
-#endif
+#else
   for (HighsInt i = 0; i != mipsolver.numCol(); ++i) {
     if (solution[i] < mipsolver.model_->col_lower_[i] - feastol) return false;
     if (solution[i] > mipsolver.model_->col_upper_[i] + feastol) return false;
@@ -534,6 +559,7 @@ bool HighsMipSolverData::checkSolution(
   }
 
   return true;
+#endif  // HIGHS_RUST
 }
 
 std::vector<std::tuple<HighsInt, HighsInt, double>>
@@ -569,7 +595,7 @@ bool HighsMipSolverData::trySolution(const std::vector<double>& solution,
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_solution(highs_rs::mipFns(), &rsm, 2, solution.data(), solution.size(), solution_source);
   }
-#endif
+#else
   if (int(solution.size()) != mipsolver.numCol()) return false;
 
   HighsCDouble obj = 0;
@@ -597,6 +623,7 @@ bool HighsMipSolverData::trySolution(const std::vector<double>& solution,
   }
 
   return addIncumbent(solution, double(obj), solution_source);
+#endif  // HIGHS_RUST
 }
 
 bool HighsMipSolverData::solutionRowFeasible(
@@ -606,7 +633,7 @@ bool HighsMipSolverData::solutionRowFeasible(
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_solution(highs_rs::mipFns(), &rsm, 1, solution.data(), solution.size(), 0);
   }
-#endif
+#else
   for (HighsInt i = 0; i != mipsolver.numRow(); ++i) {
     HighsCDouble c_double_rowactivity = HighsCDouble(0.0);
 
@@ -622,6 +649,7 @@ bool HighsMipSolverData::solutionRowFeasible(
     if (rowactivity < mipsolver.rowLower(i) - feastol) return false;
   }
   return true;
+#endif  // HIGHS_RUST
 }
 
 HighsModelStatus HighsMipSolverData::trivialHeuristics() {
@@ -630,7 +658,7 @@ HighsModelStatus HighsMipSolverData::trivialHeuristics() {
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return HighsModelStatus(int(highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 2)));
   }
-#endif
+#else
   //  printf("\nHighsMipSolverData::trivialHeuristics() Number of continuous
   //  columns is %d\n",
   //	 int(continuous_cols.size()));
@@ -772,6 +800,7 @@ HighsModelStatus HighsMipSolverData::trivialHeuristics() {
     }
   }
   return HighsModelStatus::kNotset;
+#endif  // HIGHS_RUST
 }
 
 void HighsMipSolverData::startAnalyticCenterComputation(
@@ -855,7 +884,11 @@ void HighsMipSolverData::startAnalyticCenterComputation(
     }
     if (HighsInt(sol.size()) != mipsolver.numCol()) return;
     analyticCenterStatus = ipm.getModelStatus();
+#ifdef HIGHS_RUST
+    highs_rs::highs_rs_mip_vecs_set(rsv_.p, 22, sol.data(), sol.size());
+#else
     analyticCenter = sol;
+#endif
   });
 }
 
@@ -989,7 +1022,7 @@ double HighsMipSolverData::limitsToGap(const double use_lower_bound,
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_limits_to_gap(highs_rs::mipFns(), &rsm, use_lower_bound, use_upper_bound, &lb, &ub);
   }
-#endif
+#else
   double offset = mipsolver.model_->offset_;
   lb = use_lower_bound + offset;
   if (std::abs(lb) <= epsilon) lb = 0;
@@ -1005,6 +1038,7 @@ double HighsMipSolverData::limitsToGap(const double use_lower_bound,
       gap = (ub - lb) / fabs(ub);
   }
   return gap;
+#endif  // HIGHS_RUST
 }
 
 double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
@@ -1014,7 +1048,7 @@ double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_new_upper_limit(highs_rs::mipFns(), &rsm, ub, mip_abs_gap, mip_rel_gap);
   }
-#endif
+#else
   double new_upper_limit;
   if (objectiveFunction.isIntegral()) {
     new_upper_limit =
@@ -1052,6 +1086,7 @@ double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
   }
 
   return new_upper_limit;
+#endif  // HIGHS_RUST
 }
 
 bool HighsMipSolverData::moreHeuristicsAllowed() const {
@@ -1060,7 +1095,7 @@ bool HighsMipSolverData::moreHeuristicsAllowed() const {
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 0) != 0;
   }
-#endif
+#else
   // the quick graph-LNS search, early in the root node, has a budget of
   // its own
   const int64_t heur_lp_iterations =
@@ -1125,6 +1160,7 @@ bool HighsMipSolverData::moreHeuristicsAllowed() const {
   }
 
   return false;
+#endif  // HIGHS_RUST
 }
 
 void HighsMipSolverData::removeFixedIndices() {
@@ -1134,7 +1170,7 @@ void HighsMipSolverData::removeFixedIndices() {
     highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 3);
     return;
   }
-#endif
+#else
   integral_cols.erase(
       std::remove_if(integral_cols.begin(), integral_cols.end(),
                      [&](HighsInt col) { return getDomain().isFixed(col); }),
@@ -1151,6 +1187,7 @@ void HighsMipSolverData::removeFixedIndices() {
       std::remove_if(continuous_cols.begin(), continuous_cols.end(),
                      [&](HighsInt col) { return getDomain().isFixed(col); }),
       continuous_cols.end());
+#endif  // HIGHS_RUST
 }
 
 #ifndef HIGHS_RUST
@@ -1574,7 +1611,7 @@ double HighsMipSolverData::transformNewIntegerFeasibleSolution(
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_transform(highs_rs::mipFns(), &rsm, sol.data(), sol.size(), possibly_store_as_new_incumbent);
   }
-#endif
+#else
   HighsSolution solution;
   solution.col_value = sol;
   solution.value_valid = true;
@@ -1721,6 +1758,7 @@ try_again:
 
   // return the objective value in the transformed space
   return transformed_solobj;
+#endif  // HIGHS_RUST
 }
 
 double HighsMipSolverData::percentageInactiveIntegers() const {
@@ -1729,11 +1767,12 @@ double HighsMipSolverData::percentageInactiveIntegers() const {
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 1);
   }
-#endif
+#else
   return 100.0 *
          (1.0 - static_cast<double>(integer_cols.size() -
                                     cliquetable.getSubstitutions().size()) /
                     numintegercols);
+#endif  // HIGHS_RUST
 }
 
 #ifndef HIGHS_RUST
@@ -2163,7 +2202,7 @@ void HighsMipSolverData::printDisplayLine(const int solution_source) {
     highs_rs::highs_rs_mip_print_display_line(highs_rs::mipFns(), &rsm, solution_source);
     return;
   }
-#endif
+#else
   // MIP logging method
   //
   // Note that if the original problem is a maximization, the cost
@@ -2288,6 +2327,7 @@ void HighsMipSolverData::printDisplayLine(const int solution_source) {
   const bool interrupt = interruptFromCallbackWithData(
       kCallbackMipLogging, mipsolver.solution_objective_, "MIP logging");
   assert(!interrupt);
+#endif  // HIGHS_RUST
 }
 
 bool HighsMipSolverData::rootSeparationRound(
@@ -2325,7 +2365,7 @@ HighsLpRelaxation::Status HighsMipSolverData::evaluateRootLp(
     const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
     return HighsLpRelaxation::Status(highs_rs::highs_rs_mip_evaluate_root_lp(highs_rs::mipFns(), &rsm, &worker));
   }
-#endif
+#else
   do {
     getDomain().propagate();
 
@@ -2419,6 +2459,7 @@ HighsLpRelaxation::Status HighsMipSolverData::evaluateRootLp(
 
     if (getDomain().getChangedCols().empty()) return status;
   } while (true);
+#endif  // HIGHS_RUST
 }
 
 static void clockOff(HighsProfiling* profiling) {
@@ -3421,7 +3462,7 @@ void HighsMipSolverData::setupDomainPropagation() {
     highs_rs::highs_rs_mip_setup_domain_propagation(highs_rs::mipFns(), &rsm);
     return;
   }
-#endif
+#else
   const HighsLp& model = *mipsolver.model_;
   highsSparseTranspose(model.num_row_, model.num_col_, model.a_matrix_.start_,
                        model.a_matrix_.index_, model.a_matrix_.value_, ARstart_,
@@ -3444,6 +3485,7 @@ void HighsMipSolverData::setupDomainPropagation() {
 
   getDomain() = HighsDomain(mipsolver);
   getDomain().computeRowActivities();
+#endif  // HIGHS_RUST
 }
 
 #ifndef HIGHS_RUST
@@ -3490,7 +3532,7 @@ void HighsMipSolverData::limitsToBounds(double& dual_bound,
     highs_rs::highs_rs_mip_limits_to_bounds(highs_rs::mipFns(), &rsm, &dual_bound, &primal_bound, &mip_rel_gap);
     return;
   }
-#endif
+#else
   mip_rel_gap = limitsToGap(lower_bound, upper_bound, dual_bound, primal_bound);
   primal_bound =
       std::min(mipsolver.options_mip_->objective_bound, primal_bound);
@@ -3499,6 +3541,7 @@ void HighsMipSolverData::limitsToBounds(double& dual_bound,
     dual_bound = -dual_bound;
     primal_bound = -primal_bound;
   }
+#endif  // HIGHS_RUST
 }
 
 void HighsMipSolverData::updateLowerBound(double new_lower_bound,
@@ -3510,13 +3553,14 @@ void HighsMipSolverData::updateLowerBound(double new_lower_bound,
     highs_rs::highs_rs_mip_update_lower_bound(highs_rs::mipFns(), &rsm, new_lower_bound, check_bound_change, check_prev_data);
     return;
   }
-#endif
+#else
   // Update lower bound
   double prev_lower_bound = lower_bound;
   lower_bound = new_lower_bound;
   if (!mipsolver.submip && lower_bound != prev_lower_bound)
     updatePrimalDualIntegral(prev_lower_bound, lower_bound, upper_bound,
                              upper_bound, check_bound_change, check_prev_data);
+#endif  // HIGHS_RUST
 }
 
 // Interface to callbackAction, with mipsolver_objective_value since
@@ -3676,7 +3720,7 @@ void HighsMipSolverData::updatePrimalDualIntegral(const double from_lower_bound,
     highs_rs::highs_rs_mip_update_pdi(highs_rs::mipFns(), &rsm, from_lower_bound, to_lower_bound, from_upper_bound, to_upper_bound, check_bound_change, check_prev_data);
     return;
   }
-#endif
+#else
   // Parameters to updatePrimalDualIntegral are lower and upper bounds
   // before/after a change
   //
@@ -3784,6 +3828,7 @@ void HighsMipSolverData::updatePrimalDualIntegral(const double from_lower_bound,
   pdi.prev_lb = to_lb;
   pdi.prev_ub = to_ub;
   pdi.prev_gap = to_gap;
+#endif  // HIGHS_RUST
 }
 
 void HighsPrimaDualIntegral::initialise() { this->value = -kHighsInf; }

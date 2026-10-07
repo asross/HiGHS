@@ -24,6 +24,7 @@
 #include "mip/HighsDomainChange.h"
 #include "mip/HighsDomain.h"
 #include "mip/HighsLpRelaxation.h"
+#include "mip/HighsRsSpan.h"
 
 class HighsMipSolver;
 class HighsMipWorker;
@@ -35,6 +36,7 @@ struct Heuristics;
 struct CliqueTable;
 struct RedcostFixing;
 struct ConcurrentPool;
+struct MipVecs;
 
 // glue.rs SearchParts
 struct MipSearchParts {
@@ -213,18 +215,18 @@ struct MipData {
   const std::vector<double>* row_lower;
   const std::vector<double>* row_upper;
   const std::vector<HighsVarType>* integrality;
-  const std::vector<HighsInt>* ar_start;
-  const std::vector<HighsInt>* ar_index;
-  const std::vector<double>* ar_value;
-  const std::vector<HighsInt>* uplocks;
-  const std::vector<HighsInt>* downlocks;
-  const std::vector<HighsInt>* integer_cols;
-  const std::vector<HighsInt>* integral_cols;
-  const std::vector<HighsInt>* continuous_cols;
-  const std::vector<double>* rootlpsol;
-  const std::vector<double>* firstlpsol;
-  const std::vector<double>* analytic_center;
-  const std::vector<double>* incumbent;
+  const HighsRsArray<HighsInt>* ar_start;
+  const HighsRsArray<HighsInt>* ar_index;
+  const HighsRsArray<double>* ar_value;
+  const HighsRsArray<HighsInt>* uplocks;
+  const HighsRsArray<HighsInt>* downlocks;
+  const HighsRsArray<HighsInt>* integer_cols;
+  const HighsRsArray<HighsInt>* integral_cols;
+  const HighsRsArray<HighsInt>* continuous_cols;
+  const HighsRsArray<double>* rootlpsol;
+  const HighsRsArray<double>* firstlpsol;
+  const HighsRsArray<double>* analytic_center;
+  const HighsRsArray<double>* incumbent;
   void* scalars;  // HighsMipScalars
   const CliqueTable* clique;
   const RedcostFixing* redcost;
@@ -238,6 +240,7 @@ struct MipData {
   const ConcurrentPool* helper_pool;
   const ConcurrentPool* lns_target;
   const Heuristics* heur;
+  MipVecs* vecs;
 };
 
 // glue.rs CMipFns
@@ -287,8 +290,6 @@ struct MipFns {
                   double*);
   double (*op)(void*, int, void*, int64_t, double);
   void (*scratch_solution)(void*, const double*, HighsInt, MipScratchView*);
-  void (*set_vec)(void*, int, const void*, HighsInt);
-  const HighsInt* (*int_vec)(void*, int, HighsInt*);
   void (*refill)(void*, MipData*);
   void* (*master_worker)(void*);
   void (*run_process_nodes)(void*, const HighsInt*, HighsInt, const void*);

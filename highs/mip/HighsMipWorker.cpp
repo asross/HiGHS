@@ -159,7 +159,7 @@ bool HighsMipWorker::trySolution(const std::vector<double>& solution,
                                               solution.data(), solution.size(),
                                               0, solution_source, true);
   }
-#endif
+#else
   if (static_cast<int>(solution.size()) != mipsolver_.model_->num_col_)
     return false;
 
@@ -191,6 +191,7 @@ bool HighsMipWorker::trySolution(const std::vector<double>& solution,
   }
 
   return addIncumbent(solution, static_cast<double>(obj), solution_source);
+#endif  // HIGHS_RUST
 }
 
 void HighsMipWorker::resetSepaStats() {
