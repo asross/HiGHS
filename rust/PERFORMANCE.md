@@ -10,6 +10,27 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, MIP setup, workers' solutions and the task scheduler in Rust
+
+setup.rs (init, presolve call, runSetup, performRestart, callbacks),
+workers.rs and the Rust scheduler (rust/src/parallel). Setup runs once
+per (re)start and the single-thread scheduler only queues and pops, so no
+change is expected. `perf.py --reps 2`, M1 under heavy load (load average
+20-36, so ±5%): MIP geomean 0.878 (air05 0.951, neos17 0.887, nu25-pr12
+0.766, neos-911970 0.918), LP dual 0.801, primal 0.981, IPX 0.965, PDLP
+0.946, all 0.833, every case same path — in line with the previous
+measurement.
+
+Same path against pure C++ (log_dev_level 1, incumbent and dev lines and
+summary; periodic table lines and probing progress lines, which follow the
+clock, are left out; no time limit): clang, 30 nodes, 40 MIPLIB plain
+instances (less markshare_4_0, 50v-10), check/instances' 31 MIP cases;
+mip_rel_gap 0.01 (graph LNS), 30 nodes: the 3 dispatch and 2 oopt MILPs,
+6 MIPLIB, the check MIPs; gcc/libstdc++ (no_fma): 10 MIPLIB and the check
+MIPs. Parallel: threads=4 parallel=on MIPs and SIP/PAMI LPs repeated, and
+threads=2 (IPX race and concurrent LNS helper) on the dispatch MILPs, all
+with correct objectives and no hang.
+
 ## 2026-10-07, the heuristics glue, graph LNS's search and the MIP driver
 
 HighsPrimalHeuristics (primal.rs), graph LNS's dives, branch and bound
