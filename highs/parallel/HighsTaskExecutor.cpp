@@ -7,6 +7,8 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #include "parallel/HighsTaskExecutor.h"
 
+#ifndef HIGHS_RUST
+
 using namespace highs;
 
 #ifdef _WIN32
@@ -41,3 +43,4 @@ void HighsTaskExecutor::ExecutorHandle::dispose() {
 
   ptr = nullptr;
 }
+#endif  // HIGHS_RUST

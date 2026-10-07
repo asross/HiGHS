@@ -8,14 +8,19 @@
 #ifndef HIGHS_PARALLEL_H_
 #define HIGHS_PARALLEL_H_
 
+#include "HConfig.h"
+#ifndef HIGHS_RUST
 #include "parallel/HighsMutex.h"
+#endif
 #include "parallel/HighsTaskExecutor.h"
 
 namespace highs {
 
 namespace parallel {
 
+#ifndef HIGHS_RUST
 using mutex = HighsMutex;
+#endif
 
 inline void initialize_scheduler(int numThreads = 0) {
   if (numThreads == 0) {

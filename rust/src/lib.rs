@@ -13,6 +13,7 @@ pub mod io;
 pub mod lp_data;
 pub mod matrix;
 pub mod mip;
+pub mod parallel;
 pub mod simplex;
 pub mod util;
 

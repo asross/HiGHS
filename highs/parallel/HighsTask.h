@@ -107,6 +107,17 @@ class HighsTask {
     metadata.stealer.fetch_or(kCancelFlag, std::memory_order_release);
   }
 
+  // Runs the callable of a task stolen by the Rust scheduler: true if it was
+  // interrupted
+  static bool runStolen(HighsTask* task) noexcept {
+    try {
+      task->getCallable()();
+    } catch (const Interrupt&) {
+      return true;
+    }
+    return false;
+  }
+
   /// run task as owner, if not cancelled
   void run() {
     if (metadata.stealer.load(std::memory_order_relaxed) == 0) getCallable()();

@@ -348,7 +348,7 @@ HighsSymmetryDetection, HighsSymmetries, the orbitopes and the stabilizer
 orbits run in Rust (rust/src/presolve/symmetry.rs); under HIGHS_RUST the
 C++ classes hold a handle (HighsSymmetry.cpp, symmetry_ffi.rs) and
 StabilizerOrbits keeps its three vectors, copied from Rust, for HighsSearch.
-The detection task still runs on the C++ task scheduler: Rust polls
+The detection task runs on the task scheduler (a C++ lambda): Rust polls
 `checkInterrupt` through a callback at each leave and returns, and C++
 rethrows HighsTask::Interrupt; the result depends only on the model (no
 time or work limit, only the 64e6 / columns generator cap), so not on
@@ -465,14 +465,55 @@ bound), the row activities of checkSolution and trySolution, and the
 separation's `scale * cur - avg` and `(1 - a) * s + a * p`;
 `std::pow(1.5, n)` is libm's pow (not powi).
 
-Still C++ (behind `CMipFns::op`, codes in mip_data.rs, root.rs and
-driver.rs): init, runMipPresolve, runSetup, performRestart,
-basisTransfer, the analytic centre and symmetry detection tasks, the
-concurrent helper (start, sync, crossover, root cut exchange), the user
-callbacks and external solutions, saveReportMipSolution, the workers'
-construction and synchronization (pools, global domains, pseudocosts,
-solutions), the per-worker search steps (each a call into the Rust
-search), the profiling clocks and HighsDebugSol (not supported).
+The setup is Rust too (mip/setup.rs): init, runMipPresolve (HPresolve
+itself is one C++ step), runSetup (the row-wise matrix, the locks, the
+integral rows with their rounded sides, the column classes and the model
+log), basisTransfer, checkObjIntegrality, setupDomainPropagation (for
+presolve's probing), performRestart (its locals, the root basis in the
+original space and the pseudocost initialization, are a C++ struct for
+the solver's pointers to them), the end of the analytic centre and
+symmetry detection tasks (fixings at the analytic centre, the symmetry
+log), saveReportMipSolution, queryExternalSolution and the user
+callbacks: Rust decides when and fills data_out's values, one C++ shim
+(`CMipFns::callback`) clears or sets the HighsCallback fields and calls
+callbackAction, so highspy and the C API see the same callbacks
+(including the cut pool callback). The workers' solutions
+(HighsMipWorker::addIncumbent, trySolution and the transformation into
+the original space on a per-worker scratch solution) and the
+synchronization of the workers' solutions and global domains with the
+solver's are in mip/workers.rs; the heuristics' addIncumbent and
+trySolution go there directly under the parallel lock.
+
+Still C++ (behind `CMipFns::op`, codes in mip_data.rs, root.rs, driver.rs,
+setup.rs and workers.rs; each a step on a C++ object without decisions of
+its own): the construction of the C++ objects (workers, LP relaxations,
+domains, pools, the sub-MIP's HighsMipSolver with its options and model),
+the pools' and pseudocosts' sync calls, the per-worker search steps (each
+a call into the Rust search, with the profiling clocks around it), the
+start of the analytic centre task (a `Highs` IPM solve) and of the
+symmetry detection, the repair LP of transformNewIntegerFeasibleSolution,
+the concurrent LNS helper (HighsConcurrentLns: start, sync, crossover with
+the main solver, root cut exchange; its thread is a std::thread that runs
+a C++ HighsMipSolver), the profiling clocks (HighsProfiling, shared with
+Highs) and HighsDebugSol (not supported).
+
+## The task scheduler (highs/parallel)
+
+The executor, the split deques, the sleeping workers' stack, the binary
+semaphore and the spin waits are Rust (rust/src/parallel), with the C++'s
+memory orderings, spin and sleep thresholds and random victim choice.
+The header API stays (spawn, sync, TaskGroup, for_each are C++ templates):
+a task slot has HighsTask's layout (56 bytes of callable, the stealer
+word); push asks Rust for the slot, places the callable and publishes it;
+a stolen task is run by `HighsTask::runStolen`, which catches
+HighsTask::Interrupt and returns true; where the C++ scheduler throws
+Interrupt (checkInterrupt, a sync whose leapfrogging ran a cancelled
+task) the Rust function returns true and the inline C++ throws, so no
+exception crosses Rust frames. Thread-local state (the worker's deque,
+the executor handle) is Rust's; the executor is reference counted
+(`Arc`) by the main thread and its workers. HighsMutex, HighsCombinable
+and HighsRaceTimer are only used by C++-only code and are not compiled
+into a HIGHS_RUST build's paths.
 
 ## The top level (lp_data)
 

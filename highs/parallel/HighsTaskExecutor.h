@@ -8,6 +8,47 @@
 #ifndef HIGHS_TASKEXECUTOR_H_
 #define HIGHS_TASKEXECUTOR_H_
 
+#include "HConfig.h"
+
+#ifdef HIGHS_RUST
+// The executor is Rust's (rust/src/parallel)
+#include <thread>
+
+#include "parallel/HighsSplitDeque.h"
+
+extern "C" {
+void highs_rs_sched_initialize(int numThreads, bool (*run)(HighsTask*));
+void highs_rs_sched_shutdown(bool blocking);
+HighsSplitDeque* highs_rs_sched_this_deque();
+}
+
+class HighsTaskExecutor {
+ public:
+  static HighsSplitDeque* getThisWorkerDeque() {
+    return highs_rs_sched_this_deque();
+  }
+
+  static int getNumWorkerThreads() {
+    return getThisWorkerDeque()->getNumWorkers();
+  }
+
+  static void initialize(int numThreads) {
+    highs_rs_sched_initialize(numThreads, &HighsTask::runStolen);
+  }
+
+  static void shutdown(bool blocking = false) {
+    highs_rs_sched_shutdown(blocking);
+  }
+
+  static void sync_stolen_task(HighsSplitDeque* localDeque,
+                               HighsTask* stolenTask) {
+    if (highs_rs_deque_sync_stolen(localDeque, stolenTask))
+      throw HighsTask::Interrupt();
+  }
+};
+
+#else
+
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -213,5 +254,7 @@ class HighsTaskExecutor {
     localDeque->popStolen();
   }
 };
+
+#endif  // HIGHS_RUST
 
 #endif
