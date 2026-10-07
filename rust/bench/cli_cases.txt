@@ -28,7 +28,7 @@ $I/afiro.mps a b c
 --threads " 5" $I/afiro.mps
 --threads "5 " $I/afiro.mps
 --threads 1_000 $I/afiro.mps
---threads 1'0 $I/afiro.mps
+--threads "1'0" $I/afiro.mps
 --threads true $I/afiro.mps
 --threads "" $I/afiro.mps
 --threads 99999999999 $I/afiro.mps
@@ -96,3 +96,19 @@ $I/qptestnw.lp
 --model_file $I/afiro.mps --model_file $I/adlittle.mps
 --write_presolved_model_file
 --options_file presolved.set $I/afiro.mps
+--threads={} $I/afiro.mps
+--threads {} --threads %% $I/afiro.mps
+--solution_file {} --solution_file %% $I/afiro.mps
+--model_file=[[aabb]]
+--presolve [[oofff]] $I/afiro.mps
+--=x $I/afiro.mps
+---x
+--version=0x0 $I/afiro.mps
+--notice=99999999999999999999 $I/afiro.mps
+--notice=-99999999999999999999 $I/afiro.mps
+-v -v
+--version=yes
+--version=N $I/afiro.mps
+-hx
+--help -- -x
+--threads=7 --random_seed=" 3" --time_limit=" 2.5" --run_crossover=off $I/afiro.mps

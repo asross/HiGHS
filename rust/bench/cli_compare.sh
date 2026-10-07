@@ -9,7 +9,7 @@ ROOT=$PWD
 CPP=${1:-build-cpp}; RS=${2:-build-rs}
 I=$ROOT/check/instances; C=$ROOT/check
 OUT=$(mktemp -d)
-mask() { sed -E 's/[0-9]+(\.[0-9]+)?(e[-+][0-9]+)?s( |$)/Ts\3/g; s/(run time *: *).*/\1T/; /[Tt]ime|integral|\(Solve\)|%\)|Sub-MIP|simplex \(|IPX \(|Total|TOTAL|^MIP  /s/[0-9][0-9.e+-]*/N/g'; }
+mask() { sed -E '/^Strange: /d; s/[0-9]+(\.[0-9]+)?(e[-+][0-9]+)?s( |$)/Ts\3/g; s/(run time *: *).*/\1T/; s/(git hash: |Githash )[0-9a-f]+/\1H/; /[Tt]ime|Timing|^Thread |sub-solver|integral|^ +[0-9.]+ \(|%\)|Sub-MIP|simplex \(|IPX \(|Total|TOTAL|^MIP  /{ s/[0-9][0-9.e+-]*/N/g; s/ +/ /g; }'; }
 n=0; fail=0
 while IFS= read -r line || [ -n "$line" ]; do
   n=$((n+1))
