@@ -27,7 +27,10 @@ the dispatch suite over 16 seeds; (2) primal feasibility: the MIPFEAS
 benchmark (gams.com/blog/2026/03/expanding-the-focus-introducing-the-mipfeas-benchmark),
 and whether the methods of arXiv:2609.05954 and Local-MIP
 (github.com/shaowei-cai-group/Local-MIP) add to feasibility jump and the
-graph LNS.
+graph LNS. Note: Local-MIP fails badly on the dispatch MILPs, presumably
+because their equality chains of continuous state-of-charge / ramp
+variables defeat single-variable moves (as for feasibility jump); look
+for methods that handle equality-coupled continuous structure.
 
 Bottom-up, one subsystem at a time, always shippable. The C++ build with
 `-DHIGHS_RUST=ON` calls the Rust code for every ported piece; without it, the
