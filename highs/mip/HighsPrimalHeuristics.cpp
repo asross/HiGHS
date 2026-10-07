@@ -216,6 +216,7 @@ static void workerView(void* w, MipWorkerData* d) {
   d->lp = &worker.getLpRelaxation();
   d->upper_bound = &worker.upper_bound;
   d->optimality_limit = &worker.optimality_limit;
+  d->state = worker.rustState();
 }
 
 // HighsPrimalHeuristics::solveSubMip's run of the sub-MIP: the shell of
@@ -891,8 +892,6 @@ static const MipFns fns = {
     mipSetBasis,
     mipCallback,
     mipWorker,
-    mipWorkerSolution,
-    mipWorkerPushSolution,
     mipWorkerScratch,
 };
 }  // namespace mipglue

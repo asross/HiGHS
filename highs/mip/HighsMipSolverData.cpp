@@ -305,9 +305,6 @@ double mipSetupOp(void* m, int which, void* w, int64_t i, double x) {
       return 0;
     }
     // workers.rs
-    case 400:
-      d.workers[i].solutions_.clear();
-      return 0;
     case 401:
       d.cliquetable.cleanupFixed(d.getDomain());
       return 0;
@@ -332,23 +329,6 @@ double mipSetupOp(void* m, int which, void* w, int64_t i, double x) {
 
 void* mipWorker(void* m, HighsInt k) {
   return &static_cast<HighsMipSolver*>(m)->mipdata_->workers[k];
-}
-
-bool mipWorkerSolution(void* w, HighsInt j, MipWorkerSol* s) {
-  HighsMipWorker& worker = *static_cast<HighsMipWorker*>(w);
-  if (size_t(j) >= worker.solutions_.size()) return false;
-  const auto& sol = worker.solutions_[j];
-  s->x = std::get<0>(sol).data();
-  s->n = std::get<0>(sol).size();
-  s->obj = std::get<1>(sol);
-  s->source = std::get<2>(sol);
-  return true;
-}
-
-void mipWorkerPushSolution(void* w, const double* x, HighsInt n, double obj,
-                           int source) {
-  static_cast<HighsMipWorker*>(w)->solutions_.emplace_back(
-      std::vector<double>(x, x + n), obj, source);
 }
 
 void mipWorkerScratch(void* m, void* w, const double* x, HighsInt n,

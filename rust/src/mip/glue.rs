@@ -224,10 +224,6 @@ pub struct CMipFns {
     pub callback: unsafe extern "C" fn(P, i32, *const super::setup::CallbackOut, *const u8, i32) -> bool,
     /// the solver's worker k
     pub worker: unsafe extern "C" fn(P, i32) -> P,
-    /// the worker's buffered solution j (false if none)
-    pub worker_solution: unsafe extern "C" fn(P, i32, *mut super::workers::WorkerSol) -> bool,
-    /// a solution buffered by the worker
-    pub worker_push_solution: unsafe extern "C" fn(P, *const f64, i32, f64, i32),
     /// the worker's scratch solution: col_value = sol, primal postsolve
     /// (thread safe) and row values; its vectors to the view
     pub worker_scratch: unsafe extern "C" fn(P, P, *const f64, i32, *mut ScratchView),
@@ -502,6 +498,7 @@ impl MipData {
 
 /// HighsMipWorker::HeurStatistics (same layout)
 #[repr(C)]
+#[derive(Default)]
 pub struct HeurStats {
     pub total_repair_lp: i64,
     pub total_repair_lp_feasible: i64,
@@ -525,6 +522,7 @@ pub struct WorkerData {
     pub lp: P,
     pub upper_bound: *mut f64,
     pub optimality_limit: *mut f64,
+    pub state: *mut super::workers::WorkerState,
 }
 
 /// A HighsMipWorker
@@ -543,6 +541,7 @@ impl Worker {
             lp: std::ptr::null_mut(),
             upper_bound: std::ptr::null_mut(),
             optimality_limit: std::ptr::null_mut(),
+            state: std::ptr::null_mut(),
         };
         c!(worker_view, p, &mut d);
         Worker { p, d }
@@ -550,6 +549,13 @@ impl Worker {
     pub fn upper_limit(&self) -> f64 {
         // SAFETY: the worker's field
         unsafe { *self.d.upper_limit }
+    }
+    /// The worker's state
+    #[allow(clippy::mut_from_ref)]
+    pub fn state(&self) -> &mut super::workers::WorkerState {
+        // SAFETY: the worker's Rust-owned state, used by its own thread;
+        // no other reference is live across a use
+        unsafe { &mut *self.d.state }
     }
     #[allow(clippy::mut_from_ref)]
     pub fn heur(&self) -> &mut HeurStats {
@@ -983,6 +989,11 @@ mod tests {
         assert_eq!(std::mem::size_of::<MipScalars>(), 376);
         assert_eq!(std::mem::offset_of!(MipScalars, pdi), 320);
         assert_eq!(std::mem::size_of::<HeurStats>(), 72);
+        // HighsMipWorker::RsState (static_assert in HighsMipWorker.cpp)
+        use super::super::workers::WorkerState;
+        assert_eq!(std::mem::offset_of!(WorkerState, heur), 24);
+        assert_eq!(std::mem::offset_of!(WorkerState, randgen), 112);
+        assert_eq!(std::mem::offset_of!(WorkerState, heuristics_allowed), 120);
     }
 }
 

@@ -19,6 +19,17 @@
 #include "mip/HighsSeparation.h"
 
 class HighsSearch;
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct WorkerState;
+extern "C" {
+WorkerState* highs_rs_worker_state_new(HighsInt seed, double upper_bound,
+                                       double upper_limit,
+                                       double optimality_limit);
+void highs_rs_worker_state_free(WorkerState* s);
+}
+}  // namespace highs_rs
+#endif
 
 class HighsMipWorker {
  private:
@@ -63,26 +74,53 @@ class HighsMipWorker {
   HighsConflictPool* conflictpool_;
   HighsPseudocost* pseudocost_;
 
+#ifdef HIGHS_RUST
+  // The worker's state is Rust's (rust/src/mip/workers.rs WorkerState,
+  // whose first fields have this layout), owned by the worker
+  struct RsState {
+    double upper_bound;
+    double upper_limit;
+    double optimality_limit;
+    HeurStatistics heur_stats;
+    SepaStatistics sepa_stats;
+    HighsRandom randgen;
+    bool heuristics_allowed;
+  };
+  highs_rs::WorkerState* rs_;
+  RsState& st_;
+  bool& heuristics_allowed;
+  HeurStatistics& heur_stats;
+  SepaStatistics& sepa_stats;
+#else
   bool heuristics_allowed;
   HeurStatistics heur_stats;
   SepaStatistics sepa_stats;
+#endif
 
  public:
   std::unique_ptr<HighsSearch> search_ptr_;
   std::unique_ptr<HighsSeparation> sepa_ptr_;
   HighsNodeQueue nodequeue;
 
+#ifdef HIGHS_RUST
+  double& upper_bound;
+  double& upper_limit;
+  double& optimality_limit;
+  // transformNewIntegerFeasibleSolution's solution in the original space
+  HighsSolution rsScratch_;
+  HighsRandom& randgen;
+  highs_rs::WorkerState* rustState() const { return rs_; }
+  HighsMipWorker(const HighsMipWorker&) = delete;
+  HighsMipWorker& operator=(const HighsMipWorker&) = delete;
+#else
   double upper_bound;
   double upper_limit;
   double optimality_limit;
 
   std::vector<std::tuple<std::vector<double>, double, int>> solutions_;
-#ifdef HIGHS_RUST
-  // transformNewIntegerFeasibleSolution's solution in the original space
-  HighsSolution rsScratch_;
-#endif
 
   HighsRandom randgen;
+#endif
 
   const HighsMipSolver& getMipSolver() const;
 
@@ -93,6 +131,9 @@ class HighsMipWorker {
   ~HighsMipWorker() {
     search_ptr_.reset();
     sepa_ptr_.reset();
+#ifdef HIGHS_RUST
+    highs_rs::highs_rs_worker_state_free(rs_);
+#endif
   }
 
   void resetSearch();

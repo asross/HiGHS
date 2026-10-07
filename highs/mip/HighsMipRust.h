@@ -105,14 +105,7 @@ struct MipWorkerData {
   void* lp;
   double* upper_bound;
   double* optimality_limit;
-};
-
-// workers.rs WorkerSol
-struct MipWorkerSol {
-  const double* x;
-  HighsInt n;
-  double obj;
-  int source;
+  void* state;
 };
 
 // glue.rs MipOptions
@@ -311,8 +304,6 @@ struct MipFns {
                     HighsInt, bool, bool, bool);
   bool (*callback)(void*, int, const MipCallbackOut*, const char*, HighsInt);
   void* (*worker)(void*, HighsInt);
-  bool (*worker_solution)(void*, HighsInt, MipWorkerSol*);
-  void (*worker_push_solution)(void*, const double*, HighsInt, double, int);
   void (*worker_scratch)(void*, void*, const double*, HighsInt,
                          MipScratchView*);
 };
@@ -337,9 +328,6 @@ void mipSetBasis(void* m, int which, const uint8_t* col, HighsInt ncol,
 bool mipCallback(void* m, int type, const MipCallbackOut* out,
                  const char* message, HighsInt len);
 void* mipWorker(void* m, HighsInt k);
-bool mipWorkerSolution(void* w, HighsInt j, MipWorkerSol* s);
-void mipWorkerPushSolution(void* w, const double* x, HighsInt n, double obj,
-                           int source);
 void mipWorkerScratch(void* m, void* w, const double* x, HighsInt n,
                       MipScratchView* v);
 
