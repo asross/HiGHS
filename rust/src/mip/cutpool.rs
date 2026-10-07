@@ -319,6 +319,16 @@ impl CutPool {
         (&self.matrix.ar_index[s..e], &self.matrix.ar_value[s..e])
     }
 
+    /// getMaxAbsCutCoef
+    pub fn max_abs_coef(&self, cut: i32) -> f64 {
+        self.maxabscoef[cut as usize]
+    }
+
+    /// cutIsIntegral
+    pub fn is_integral(&self, cut: i32) -> bool {
+        self.rowintegral[cut as usize] != 0
+    }
+
     pub fn set_age_limit(&mut self, agelim: i32) {
         self.agelim = agelim;
         self.age_distribution.resize(agelim as usize + 1, 0);

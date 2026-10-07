@@ -854,7 +854,7 @@ retry:
     if (fixingrate >= maxfixingrate) break;
     if (nbacktracks >= 10) break;
 
-    std::vector<std::pair<HighsInt, double>>::iterator fixcandend;
+    decltype(heurlp.getFractionalIntegers().begin()) fixcandend;
 
     // partition the fractional variables to consider which ones should we fix
     // in this dive first if there is an incumbent, we dive towards the RINS
@@ -1371,8 +1371,9 @@ void HighsPrimalHeuristics::shifting(HighsMipWorker& worker,
   lprelax.setProfiling(mipsolver.profiling_);
   HighsRandom& randgen =
       mipsolver.mipdata_->parallelLockActive() ? worker.randgen : this->randgen;
-  std::vector<std::pair<HighsInt, double>> current_fractional_integers =
-      lprelax.getFractionalIntegers();
+  std::vector<std::pair<HighsInt, double>> current_fractional_integers(
+      lprelax.getFractionalIntegers().begin(),
+      lprelax.getFractionalIntegers().end());
   std::vector<std::tuple<HighsInt, HighsInt, double>> current_infeasible_rows =
       mipsolver.mipdata_->getInfeasibleRows(current_relax_solution);
   size_t previous_infeasible_rows_size = current_infeasible_rows.size();

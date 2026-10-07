@@ -17,6 +17,7 @@
 
 use super::domain::{DomChg, LOWER, UPPER};
 use super::nodequeue::{ldexp1, NodeQueue};
+use super::lp_relaxation::{self, LpRelax};
 use super::pseudocost::Pseudocost;
 use crate::util::cdouble::CDouble;
 use crate::util::fma::ClangFma;
@@ -144,17 +145,13 @@ pub struct CSearchFns {
     pub lp_flush_domain: unsafe extern "C" fn(*mut c_void),
     pub lp_set_objective_limit: unsafe extern "C" fn(*mut c_void, f64),
     pub lp_resolve: unsafe extern "C" fn(*mut c_void) -> i32,
-    pub lp_num_iterations: unsafe extern "C" fn(*mut c_void) -> i64,
-    pub lp_status: unsafe extern "C" fn(*mut c_void) -> i32,
-    /// 0 scaledOptimal(status), 1 unscaledPrimalFeasible, 2
-    /// unscaledDualFeasible, 3 status == kInfeasible, 4 status == kOptimal,
-    /// 5 the LP solver's model status is kObjectiveBound
+    /// the current LP relaxation (Rust; the fallback LP while one is swapped in)
+    pub lp_rust: unsafe extern "C" fn(*mut c_void) -> *mut LpRelax,
+    /// whether the LP solver's model status is kObjectiveBound
     pub lp_query: unsafe extern "C" fn(*mut c_void, i32, i32) -> bool,
-    pub lp_objective: unsafe extern "C" fn(*mut c_void) -> f64,
     /// 0 getSolution().col_value, 1 getSolution().col_dual, 2 the LP
     /// solver's solution's col_value (data, length)
     pub lp_solution: unsafe extern "C" fn(*mut c_void, i32, *mut i32) -> *const f64,
-    pub lp_frac_ints: unsafe extern "C" fn(*mut c_void, *mut i32) -> *const FracInt,
     /// storeBasis (get false, returns null) / getStoredBasis (get true)
     pub lp_store_basis: unsafe extern "C" fn(*mut c_void, bool) -> *mut c_void,
     /// setStoredBasis (taking the box)
@@ -165,7 +162,6 @@ pub struct CSearchFns {
     pub basis_rows: unsafe extern "C" fn(*mut c_void) -> i32,
     pub lp_rows: unsafe extern "C" fn(*mut c_void, i32) -> i32,
     pub lp_perform_aging: unsafe extern "C" fn(*mut c_void),
-    pub lp_best_estimate: unsafe extern "C" fn(*mut c_void) -> f64,
     pub lp_degenerate_duals: unsafe extern "C" fn(*mut c_void, f64),
     pub lp_degeneracy: unsafe extern "C" fn(*mut c_void) -> f64,
     pub playground_new: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
@@ -450,11 +446,27 @@ impl Search {
     fn lp_flush(&self) {
         cb!(self, lp_flush_domain)
     }
+    fn lp(&self) -> &LpRelax {
+        // SAFETY: the C++ search's current LP relaxation, live during the
+        // call; only read here between callbacks that may change it
+        let p = cb!(self, lp_rust);
+        unsafe { &*p }
+    }
+    /// 0 scaledOptimal(status), 1 unscaledPrimalFeasible, 2
+    /// unscaledDualFeasible, 3 status == kInfeasible, 4 status == kOptimal,
+    /// 5 the LP solver's model status is kObjectiveBound
     fn lp_query(&self, which: i32, status: i32) -> bool {
-        cb!(self, lp_query, which, status)
+        match which {
+            0 => lp_relaxation::scaled_optimal(status),
+            1 => lp_relaxation::unscaled_primal_feasible(status),
+            2 => lp_relaxation::unscaled_dual_feasible(status),
+            3 => status == lp_relaxation::INFEASIBLE,
+            4 => status == lp_relaxation::OPTIMAL,
+            _ => cb!(self, lp_query, which, status),
+        }
     }
     fn lp_objective(&self) -> f64 {
-        cb!(self, lp_objective)
+        self.lp().sh.objective
     }
     fn lp_solution(&self, which: i32) -> &[f64] {
         let mut n = 0;
@@ -463,15 +475,10 @@ impl Search {
         unsafe { crate::ffi::sl(p, n) }
     }
     fn frac_ints(&self) -> Vec<FracInt> {
-        let mut n = 0;
-        let p = cb!(self, lp_frac_ints, &mut n);
-        // SAFETY: the LP's fractional integers
-        unsafe { crate::ffi::sl(p, n) }.to_vec()
+        self.lp().frac.clone()
     }
     fn num_frac_ints(&self) -> i32 {
-        let mut n = 0;
-        cb!(self, lp_frac_ints, &mut n);
-        n
+        self.lp().frac.len() as i32
     }
     fn col_cost(&self, col: i32) -> f64 {
         // SAFETY: the model's costs
@@ -774,9 +781,9 @@ impl Search {
         } else {
             self.lp_flush();
             cb!(self, lp_set_objective_limit, self.upper_limit());
-            let oldnumiters = cb!(self, lp_num_iterations);
+            let oldnumiters = self.lp().sh.numlpiters;
             let status = cb!(self, lp_resolve);
-            self.stats.lpiterations += cb!(self, lp_num_iterations) - oldnumiters;
+            self.stats.lpiterations += self.lp().sh.numlpiters - oldnumiters;
 
             let olb = cb!(self, objective_lower_bound);
             let curr = &mut self.nodestack[n - 1];
@@ -791,7 +798,7 @@ impl Search {
                 cb!(self, lp_store_basis, false);
                 cb!(self, lp_perform_aging);
                 let basis = self.shared(cb!(self, lp_store_basis, true));
-                let estimate = cb!(self, lp_best_estimate);
+                let estimate = self.lp().compute_best_estimate(self.ps());
                 let lpobj = self.lp_objective();
                 {
                     let curr = &mut self.nodestack[n - 1];
@@ -1149,9 +1156,9 @@ impl Search {
         }
         self.ps().add_inference_observation(col, inferences as i32, upbranch);
 
-        let numiters = cb!(self, lp_num_iterations);
+        let numiters = self.lp().sh.numlpiters;
         let status = cb!(self, playground_solve, playground);
-        let numiters = cb!(self, lp_num_iterations) - numiters;
+        let numiters = self.lp().sh.numlpiters - numiters;
         self.stats.lpiterations += numiters;
         self.stats.sblpiterations += numiters;
 
@@ -1341,7 +1348,7 @@ impl Search {
         let mut child_lb = self.current_lower_bound();
         let mut result = OPEN;
         while self.nodestack.last().unwrap().opensubtrees == 2
-            && self.lp_query(0, cb!(self, lp_status))
+            && self.lp_query(0, self.lp().sh.status)
             && self.num_frac_ints() != 0
         {
             let mut sbmaxiters: i64 = 0;
@@ -1436,7 +1443,7 @@ impl Search {
             let score = self.ps().get_score(i, fracval);
             if score > bestscore {
                 bestscore = score;
-                let cost = if self.lp_query(2, cb!(self, lp_status)) { self.lp_solution(1)[i as usize] } else { self.col_cost(i) };
+                let cost = if self.lp_query(2, self.lp().sh.status) { self.lp_solution(1)[i as usize] } else { self.col_cost(i) };
                 let ps = self.ps();
                 let (iu, id) = (ps.inferencesup[i as usize], ps.inferencesdown[i as usize]);
                 let up = if cost.abs() > feastol && self.cutoff_bound() < INF {
@@ -1460,7 +1467,7 @@ impl Search {
     /// All integer columns fixed: prune, or evaluate the node with a fresh
     /// LP of the model rows (presolve, then primal simplex, then IPM)
     fn fallback_lp(&mut self) -> i32 {
-        if self.lp_query(4, cb!(self, lp_status)) {
+        if self.lp_query(4, self.lp().sh.status) {
             self.nodestack.last_mut().unwrap().opensubtrees = 0;
             return LP_INFEASIBLE;
         }

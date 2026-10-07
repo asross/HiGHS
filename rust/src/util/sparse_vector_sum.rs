@@ -37,6 +37,20 @@ impl HighsSparseVectorSum {
         }
     }
 
+    /// add(HighsInt, double): the double overload (a CDouble += double)
+    pub fn add_f64(&mut self, index: i32, value: f64) {
+        let v = &mut self.values[index as usize];
+        if *v != 0.0 {
+            *v += value;
+        } else {
+            *v = CDouble::from(value);
+            self.nonzeroinds.push(index);
+        }
+        if *v == 0.0 {
+            *v = CDouble::from(f64::MIN_POSITIVE);
+        }
+    }
+
     pub fn get_nonzeros(&self) -> &[i32] {
         &self.nonzeroinds
     }

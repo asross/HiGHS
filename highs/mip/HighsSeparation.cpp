@@ -40,6 +40,157 @@ HighsSeparation::HighsSeparation(HighsMipWorker& mipworker)
   separators.emplace_back(new HighsModkSeparator(mipsolver));
 }
 
+#ifdef HIGHS_RUST
+// The loop runs in Rust (rust/src/mip/separation.rs); these are its steps
+namespace highs_rs {
+struct SepaFns {
+  int64_t (*op)(void*, int, int64_t);
+  void* propdomain;
+  double rootlpsolobj;
+  const double* optimality_limit;
+  double feastol;
+};
+extern "C" {
+HighsInt highs_rs_separation_round(const SepaFns* fns, void* ctx, LpRelax* lp,
+                                   int* status);
+void highs_rs_separation_separate(const SepaFns* fns, void* ctx, LpRelax* lp);
+}
+}  // namespace highs_rs
+
+struct HighsSeparationAccess {
+  HighsSeparation& sepa;
+  HighsDomain& propdomain;
+
+  static int64_t op(void* p, int which, int64_t arg) {
+    HighsSeparationAccess& a = *static_cast<HighsSeparationAccess*>(p);
+    HighsSeparation& s = a.sepa;
+    HighsDomain& propdomain = a.propdomain;
+    HighsLpRelaxation* lp = s.lp;
+    HighsMipWorker& w = s.mipworker_;
+    HighsMipSolverData& mipdata = *lp->getMipSolver().mipdata_;
+    const bool master = &propdomain == &mipdata.getDomain();
+    switch (which) {
+      case 0:
+        return propdomain.infeasible() || w.getGlobalDomain().infeasible();
+      case 1:
+        propdomain.propagate();
+        return propdomain.infeasible();
+      case 2:
+        // only modify cliquetable for master worker.
+        if (master) mipdata.cliquetable.cleanupFixed(mipdata.getDomain());
+        return w.getGlobalDomain().infeasible();
+      case 3:
+        propdomain.clearChangedCols();
+        return 0;
+      case 4:
+        return propdomain.getChangedCols().size();
+      case 5:
+        lp->setObjectiveLimit(w.upper_limit);
+        return 0;
+      case 6:
+      case 7:
+        if (master) {
+          mipdata.redcostfixing.addRootRedcost(mipdata.mipsolver,
+                                               lp->getSolution().col_dual,
+                                               lp->getObjective());
+          if ((which == 6 ? w.upper_limit : mipdata.upper_limit) != kHighsInf)
+            mipdata.redcostfixing.propagateRootRedcost(mipdata.mipsolver);
+        }
+        return 0;
+      case 8:
+        if (!mipdata.parallelLockActive())
+          lp->getMipSolver().profiling_->start(s.implBoundClock);
+        mipdata.implications.separateImpliedBounds(
+            *lp, lp->getSolution().col_value, w.getCutPool(), mipdata.feastol,
+            w.getGlobalDomain(), mipdata.parallelLockActive());
+        if (!mipdata.parallelLockActive())
+          lp->getMipSolver().profiling_->stop(s.implBoundClock);
+        return 0;
+      case 9:
+        if (!mipdata.parallelLockActive())
+          lp->getMipSolver().profiling_->start(s.cliqueClock);
+        mipdata.cliquetable.separateCliques(
+            lp->getMipSolver(), lp->getLpSolver().getSolution().col_value,
+            w.getCutPool(), mipdata.feastol,
+            mipdata.parallelLockActive() ? w.randgen
+                                         : mipdata.cliquetable.getRandgen(),
+            mipdata.parallelLockActive()
+                ? w.getNumNeighbourhoodQueries()
+                : mipdata.cliquetable.getNumNeighbourhoodQueries());
+        if (!mipdata.parallelLockActive())
+          lp->getMipSolver().profiling_->stop(s.cliqueClock);
+        return 0;
+      case 10:
+        if (&propdomain != &w.getGlobalDomain())
+          lp->computeBasicDegenerateDuals(mipdata.feastol, propdomain,
+                                          w.getGlobalDomain(),
+                                          w.getConflictPool(),
+                                          w.getPseudocost(), true);
+        return 0;
+      case 11: {
+        HighsTransformedLp transLp(*lp, mipdata.implications,
+                                   w.getGlobalDomain());
+        if (w.getGlobalDomain().infeasible()) return 1;
+        HighsLpAggregator lpAggregator(*lp);
+        for (const std::unique_ptr<HighsSeparator>& separator : s.separators) {
+          separator->run(*lp, lpAggregator, transLp, w.getCutPool());
+          if (w.getGlobalDomain().infeasible()) return 1;
+        }
+        return 0;
+      }
+      case 12: {
+        const std::vector<double>& sol = lp->getLpSolver().getSolution().col_value;
+        w.getCutPool().separate(sol, propdomain, s.cutset, mipdata.feastol,
+                                mipdata.cutpools);
+        // Also separate the global cut pool
+        if (&w.getCutPool() != &mipdata.getCutPool())
+          mipdata.getCutPool().separate(sol, propdomain, s.cutset,
+                                        mipdata.feastol, mipdata.cutpools,
+                                        true);
+        return s.cutset.numCuts();
+      }
+      case 13:
+        lp->addCuts(s.cutset);
+        return 0;
+      case 14:
+        if (mipdata.parallelLockActive()) {
+          w.getSepaLpIterations() += arg;
+        } else {
+          mipdata.sepa_lp_iterations += arg;
+          mipdata.total_lp_iterations += arg;
+        }
+        return 0;
+      default:
+        w.getCutPool().performAging();
+        return 0;
+    }
+  }
+
+  highs_rs::SepaFns fns() {
+    const HighsMipSolverData& mipdata = *sepa.lp->getMipSolver().mipdata_;
+    return highs_rs::SepaFns{op, &propdomain, mipdata.rootlpsolobj,
+                             &sepa.mipworker_.optimality_limit,
+                             mipdata.feastol};
+  }
+};
+
+HighsInt HighsSeparation::separationRound(HighsDomain& propdomain,
+                                          HighsLpRelaxation::Status& status) {
+  HighsSeparationAccess a{*this, propdomain};
+  highs_rs::SepaFns f = a.fns();
+  int st = int(status);
+  HighsInt ncuts =
+      highs_rs::highs_rs_separation_round(&f, &a, lp->rust(), &st);
+  status = HighsLpRelaxation::Status(st);
+  return ncuts;
+}
+
+void HighsSeparation::separate(HighsDomain& propdomain) {
+  HighsSeparationAccess a{*this, propdomain};
+  highs_rs::SepaFns f = a.fns();
+  highs_rs::highs_rs_separation_separate(&f, &a, lp->rust());
+}
+#else
 HighsInt HighsSeparation::separationRound(HighsDomain& propdomain,
                                           HighsLpRelaxation::Status& status) {
   const HighsSolution& sol = lp->getLpSolver().getSolution();
@@ -226,3 +377,4 @@ void HighsSeparation::separate(HighsDomain& propdomain) {
     mipworker_.getCutPool().performAging();
   }
 }
+#endif  // HIGHS_RUST
