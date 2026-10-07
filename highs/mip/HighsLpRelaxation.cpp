@@ -1982,7 +1982,7 @@ struct HighsLpRelaxationAccess {
     m->age_limit = ms.options_mip_->mip_lp_age_limit;
     m->parallel_lock = d.parallelLockActive();
     m->submip = ms.submip;
-    m->has_orbitopes = d.symmetries.columnToOrbitope.size() != 0;
+    m->has_orbitopes = d.symmetries.numOrbitopeColumns() != 0;
     x.cutpoolPtrs_.clear();
     for (const HighsCutPool& c : d.cutpools)
       x.cutpoolPtrs_.push_back(c.rust());
