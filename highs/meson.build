@@ -249,6 +249,7 @@ _srcs = [
     'lp_data/HighsInterface.cpp',
     'lp_data/HighsLp.cpp',
     'lp_data/HighsLpUtils.cpp',
+    'lp_data/HighsLpUtilsRust.cpp',
     'lp_data/HighsModelUtils.cpp',
     'lp_data/HighsOptions.cpp',
     'lp_data/HighsRanging.cpp',

@@ -30,6 +30,7 @@ using std::min;
 
 const HighsInt kMaxLineLength = 80;
 
+#ifndef HIGHS_RUST
 HighsStatus assessLp(HighsLp& lp, const HighsOptions& options) {
   HighsStatus return_status = HighsStatus::kOk;
   HighsStatus call_status = lpDimensionsOk("assessLp", lp, options.log_options)
@@ -103,7 +104,9 @@ HighsStatus assessLp(HighsLp& lp, const HighsOptions& options) {
                 highsStatusToString(return_status).c_str());
   return return_status;
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool lpDimensionsOk(const std::string& message, const HighsLp& lp,
                     const HighsLogOptions& log_options) {
   bool ok = true;
@@ -266,7 +269,9 @@ bool lpDimensionsOk(const std::string& message, const HighsLp& lp,
 
   return ok;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus assessCosts(const HighsOptions& options, const HighsInt ml_col_os,
                         const HighsIndexCollection& index_collection,
                         vector<double>& cost, bool& has_infinite_cost,
@@ -334,7 +339,9 @@ HighsStatus assessCosts(const HighsOptions& options, const HighsInt ml_col_os,
   }
   return return_status;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus assessBounds(const HighsOptions& options, const char* type,
                          const HighsInt ml_ix_os,
                          const HighsIndexCollection& index_collection,
@@ -468,6 +475,7 @@ HighsStatus assessBounds(const HighsOptions& options, const char* type,
 
   return return_status;
 }
+#endif
 
 HighsStatus assessSemiVariables(HighsLp& lp, const HighsOptions& options,
                                 bool& made_semi_variable_mods) {
@@ -721,6 +729,7 @@ bool activeModifiedUpperBounds(const HighsOptions& options, const HighsLp& lp,
   return (num_active_modified_upper != 0);
 }
 
+#ifndef HIGHS_RUST
 HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
   double max_residual = 0;
   HighsInt num_change = 0;
@@ -768,6 +777,7 @@ HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
   }
   return HighsStatus::kOk;
 }
+#endif
 
 HighsStatus userScaleLp(HighsLp& lp, HighsUserScaleData& data,
                         const HighsLogOptions& log_options) {
@@ -963,6 +973,7 @@ bool considerScaling(const HighsOptions& options, HighsLp& lp) {
   return new_scaling;
 }
 
+#ifndef HIGHS_RUST
 void scaleLp(const HighsOptions& options, HighsLp& lp,
              const bool force_scaling) {
   lp.clearScaling();
@@ -1060,7 +1071,9 @@ void scaleLp(const HighsOptions& options, HighsLp& lp,
   // factor
   //  if (!scaled_matrix) lp.is_scaled_ = scale.cost != 1;
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool equilibrationScaleMatrix(const HighsOptions& options, HighsLp& lp,
                               const HighsInt use_scale_strategy) {
   HighsInt numCol = lp.num_col_;
@@ -1383,7 +1396,9 @@ bool equilibrationScaleMatrix(const HighsOptions& options, HighsLp& lp,
   }
   return true;
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool maxValueScaleMatrix(const HighsOptions& options, HighsLp& lp,
                          const HighsInt use_scale_strategy) {
   HighsInt numCol = lp.num_col_;
@@ -1530,6 +1545,7 @@ bool maxValueScaleMatrix(const HighsOptions& options, HighsLp& lp,
     return true;
   }
 }
+#endif
 
 HighsStatus applyScalingToLpCol(HighsLp& lp, const HighsInt col,
                                 const double colScale) {

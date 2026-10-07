@@ -244,6 +244,7 @@ void HighsLp::clearScaling() {
   this->clearScale();
 }
 
+#ifndef HIGHS_RUST
 void HighsLp::applyScale() {
   // Ensure that any scaling is applied
   const HighsScale& scale = this->scale_;
@@ -270,7 +271,9 @@ void HighsLp::applyScale() {
     this->is_scaled_ = true;
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsLp::unapplyScale() {
   // Ensure that any scaling is not applied
   const HighsScale& scale = this->scale_;
@@ -294,6 +297,7 @@ void HighsLp::unapplyScale() {
   this->a_matrix_.unapplyScale(scale);
   this->is_scaled_ = false;
 }
+#endif
 
 void HighsLp::moveBackLpAndUnapplyScaling(HighsLp& lp) {
   assert(this->is_moved_ == true);

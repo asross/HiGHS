@@ -47,6 +47,7 @@ HighsStatus assessMatrix(const HighsLogOptions& log_options,
                       small_matrix_value, large_matrix_value, sum_duplicates);
 }
 
+#ifndef HIGHS_RUST
 HighsStatus assessMatrix(
     const HighsLogOptions& log_options, const std::string& matrix_name,
     const HighsInt vec_dim, const HighsInt num_vec, const bool partitioned,
@@ -309,7 +310,9 @@ HighsStatus assessMatrix(
     return_status = HighsStatus::kWarning;
   return return_status;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus assessMatrixDimensions(const HighsLogOptions& log_options,
                                    const HighsInt num_vec,
                                    const bool partitioned,
@@ -378,3 +381,4 @@ HighsStatus assessMatrixDimensions(const HighsLogOptions& log_options,
   if (ok) return HighsStatus::kOk;
   return HighsStatus::kError;
 }
+#endif

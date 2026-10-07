@@ -363,6 +363,7 @@ set(highs_sources
     lp_data/HighsInterface.cpp
     lp_data/HighsLp.cpp
     lp_data/HighsLpUtils.cpp
+    lp_data/HighsLpUtilsRust.cpp
     lp_data/HighsModelUtils.cpp
     lp_data/HighsOptions.cpp
     lp_data/HighsRanging.cpp
@@ -501,6 +502,7 @@ set(highs_headers
     lp_data/HighsLp.h
     lp_data/HighsLpSolverObject.h
     lp_data/HighsLpUtils.h
+    lp_data/HighsRust.h
     lp_data/HighsModelUtils.h
     lp_data/HighsOptions.h
     lp_data/HighsRanging.h
