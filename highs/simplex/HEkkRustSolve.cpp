@@ -301,18 +301,10 @@ struct HEkk::RustHost {
   }
 };
 
+// Every strategy (SIP and PAMI run as the serial dual simplex), and no
+// simplex analysis or debugging, which Crestline leaves out
 bool HEkk::rustSolveEligible() const {
-  const HighsSimplexAnalysis& a = analysis_;
-  const HighsInt strategy = options_->simplex_strategy;
-  return (strategy == kSimplexStrategyChoose ||
-          strategy == kSimplexStrategyDualPlain ||
-          strategy == kSimplexStrategyPrimal) &&
-         !a.analyse_lp_data && !a.analyse_simplex_summary_data &&
-         !a.analyse_simplex_runtime_data && !a.analyse_simplex_time &&
-         !a.analyse_factor_data && !a.analyse_factor_time &&
-         !a.analyse_simplex_data &&
-         options_->highs_debug_level < kHighsDebugLevelCheap &&
-         !debug_solve_report_ && !time_report_ && !simplex_nla_.update_.valid_;
+  return !simplex_nla_.update_.valid_;
 }
 
 highs_rs::Hekk HEkk::rustHekk(void* host_ctx, const bool draw_random_vectors) {

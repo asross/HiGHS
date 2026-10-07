@@ -14,8 +14,11 @@
 #include <algorithm>
 #include <cassert>
 
+#include "HConfig.h"
 #include "ipm/IpxSolution.h"
+#ifndef HIGHS_RUST
 #include "ipm/hipo/ipm/Solver.h"
+#endif
 #include "ipm/ipx/ipx_status.h"
 #include "ipm/ipx/lp_solver.h"
 #include "lp_data/HighsSolution.h"
@@ -28,6 +31,7 @@ HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
                        HighsModelStatus& model_status, HighsInfo& highs_info,
                        HighsCallback& callback);
 
+#ifndef HIGHS_RUST  // HiPO is not in Crestline
 HighsStatus solveLpHipo(HighsLpSolverObject& solver_object);
 
 HighsStatus solveHipo(const HighsOptions& options, HighsTimer& timer,
@@ -52,6 +56,7 @@ void getHipoNonVertexSolution(const HighsOptions& options, const HighsLp& lp,
                               const hipo::Solver& hipo,
                               const HighsModelStatus model_status,
                               HighsSolution& highs_solution);
+#endif
 
 void fillInIpxData(const HighsLp& lp, ipx::Int& num_col, ipx::Int& num_row,
                    double& offset, std::vector<double>& obj,

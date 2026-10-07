@@ -147,6 +147,7 @@ TEST_CASE("filereader-edge-cases", "[highs_filereader]") {
   highs.resetGlobalScheduler(true);
 }
 
+#ifndef HIGHS_RUST  // the fixed format MPS reader is not in Crestline: skipped
 void freeFixedModelTest(const std::string model_name) {
   std::string filename;
   filename = std::string(HIGHS_DIR) + "/check/instances/" + model_name + ".mps";
@@ -200,6 +201,7 @@ TEST_CASE("filereader-free-format-parser-lp", "[highs_filereader]") {
   bool are_the_same = lp_free == lp_fixed;
   REQUIRE(are_the_same);
 }
+#endif
 
 // No commas in test case name.
 TEST_CASE("filereader-read-mps-lp", "[highs_filereader]") {
@@ -246,6 +248,7 @@ TEST_CASE("filereader-read-mps-lp", "[highs_filereader]") {
   highs.resetGlobalScheduler(true);
 }
 
+#ifndef HIGHS_RUST  // the fixed format MPS reader is not in Crestline: skipped
 TEST_CASE("filereader-integrality-constraints", "[highs_filereader]") {
   std::string filename;
   filename = std::string(HIGHS_DIR) + "/check/instances/small_mip.mps";
@@ -284,6 +287,7 @@ TEST_CASE("filereader-integrality-constraints", "[highs_filereader]") {
   bool are_the_same = lp_free == lp_fixed;
   REQUIRE(are_the_same);
 }
+#endif
 
 /*
 TEST_CASE("filereader-nan", "[highs_filereader]") {

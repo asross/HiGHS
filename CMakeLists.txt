@@ -497,6 +497,12 @@ endif()
 
 option(HIGHSINT64 "Use 64 bit integers indexing" OFF)
 option(HIGHS_RUST "Use the kernels ported to Rust (needs cargo)" OFF)
+# What Crestline leaves out (rust/PORTING.md) is not built with HIGHS_RUST:
+# HiPO, the C API (and so the Fortran and C# interfaces) and the MIP debug
+# solution
+if(HIGHS_RUST AND (HIPO OR FORTRAN OR CSHARP OR DEBUGSOL))
+  message(FATAL_ERROR "HIGHS_RUST builds have no HiPO, C API, Fortran or C# interface, or debug solution: turn off HIPO, FORTRAN, CSHARP and DEBUGSOL")
+endif()
 
 if(NOT(${HIGHSINT64} STREQUAL "OFF"))
   message(STATUS "HIGHSINT64: " ${HIGHSINT64})

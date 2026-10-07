@@ -22,6 +22,7 @@ using std::fabs;
 using std::max;
 using std::min;
 
+#ifndef HIGHS_RUST
 void debugReportRankDeficiency(
     const HighsInt call_id, const HighsInt highs_debug_level,
     const HighsLogOptions& log_options, const HighsInt num_row,
@@ -229,3 +230,39 @@ void debugPivotValueAnalysis(const HighsInt highs_debug_level,
                 "%g; Max %g\n",
                 num_row, min_pivot, mean_pivot, max_pivot);
 }
+#else
+// Debugging is not in Crestline: the checks are no-ops
+void debugReportRankDeficiency(
+    const HighsInt call_id, const HighsInt highs_debug_level,
+    const HighsLogOptions& log_options, const HighsInt num_row,
+    const vector<HighsInt>& permute, const vector<HighsInt>& iwork,
+    const HighsInt* basic_index, const HighsInt rank_deficiency,
+    const vector<HighsInt>& row_with_no_pivot,
+    const vector<HighsInt>& col_with_no_pivot) {
+}
+void debugReportRankDeficientASM(
+    const HighsInt highs_debug_level, const HighsLogOptions& log_options,
+    const HighsInt num_row, const vector<HighsInt>& mc_start,
+    const vector<HighsInt>& mc_count_a, const vector<HighsInt>& mc_index,
+    const vector<double>& mc_value, const vector<HighsInt>& iwork,
+    const HighsInt rank_deficiency, const vector<HighsInt>& col_with_no_pivot,
+    const vector<HighsInt>& row_with_no_pivot) {
+}
+void debugReportMarkSingC(const HighsInt call_id,
+                          const HighsInt highs_debug_level,
+                          const HighsLogOptions& log_options,
+                          const HighsInt num_row, const vector<HighsInt>& iwork,
+                          const HighsInt* basic_index) {
+}
+void debugLogRankDeficiency(
+    const HighsInt highs_debug_level, const HighsLogOptions& log_options,
+    const HighsInt rank_deficiency, const HighsInt basis_matrix_num_el,
+    const HighsInt invert_num_el, const HighsInt& kernel_dim,
+    const HighsInt kernel_num_el, const HighsInt nwork) {
+}
+void debugPivotValueAnalysis(const HighsInt highs_debug_level,
+                             const HighsLogOptions& log_options,
+                             const HighsInt num_row,
+                             const vector<double>& u_pivot_value) {
+}
+#endif

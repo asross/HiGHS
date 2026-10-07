@@ -20,6 +20,7 @@
 #include "util/HighsUtils.h"
 #include "util/stringutil.h"
 
+#ifndef HIGHS_RUST  // the fixed format MPS reader is not in Crestline
 #ifdef ZLIB_FOUND
 #include "../extern/zstr/zstr.hpp"
 #endif
@@ -547,6 +548,7 @@ bool load_mpsLine(std::istream& file, HighsVarType& integerVar, HighsInt lmax,
 
   return true;
 }
+#endif
 
 HighsStatus writeModelAsMps(const HighsOptions& options,
                             const std::string& filename,

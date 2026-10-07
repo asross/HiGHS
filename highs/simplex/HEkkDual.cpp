@@ -454,6 +454,7 @@ void HEkkDual::initialiseInstance() {
   dualRHS.setup();
 }
 
+#ifndef HIGHS_RUST  // SIP and PAMI are not in Crestline
 void HEkkDual::initialiseInstanceParallel(HEkk& simplex) {
   // No need to call this with kSimplexStrategyDualPlain
   if (ekk_instance_.info_.simplex_strategy == kSimplexStrategyDualPlain) return;
@@ -561,6 +562,7 @@ void HEkkDual::initSlice(const HighsInt initial_num_slice) {
     slice_dualRow[i].setupSlice(slice_num_col);
   }
 }
+#endif
 
 void HEkkDual::initialiseSolve() {
   // Copy values of simplex solver options to dual simplex options
@@ -666,12 +668,14 @@ void HEkkDual::solvePhase1() {
         case kSimplexStrategyDualPlain:
           iterate();
           break;
+#ifndef HIGHS_RUST
         case kSimplexStrategyDualTasks:
           iterateTasks();
           break;
         case kSimplexStrategyDualMulti:
           iterateMulti();
           break;
+#endif
       }
       if (ekk_instance_.bailout()) break;
       assert(solve_phase != kSolvePhaseTabooBasis);
@@ -931,12 +935,14 @@ void HEkkDual::solvePhase2() {
         case kSimplexStrategyDualPlain:
           iterate();
           break;
+#ifndef HIGHS_RUST
         case kSimplexStrategyDualTasks:
           iterateTasks();
           break;
         case kSimplexStrategyDualMulti:
           iterateMulti();
           break;
+#endif
       }
       if (ekk_instance_.bailout()) break;
       if (bailoutOnDualObjective()) break;
@@ -1299,6 +1305,7 @@ void HEkkDual::iterate() {
   iterationAnalysis();
 }
 
+#ifndef HIGHS_RUST
 void HEkkDual::iterateTasks() {
   slice_PRICE = 1;
 
@@ -1340,6 +1347,7 @@ void HEkkDual::iterateTasks() {
   updatePrimal(&col_DSE);
   updatePivots();
 }
+#endif
 
 void HEkkDual::iterationAnalysisData() {
   double cost_scale_factor =
@@ -1816,6 +1824,7 @@ void HEkkDual::improveChooseColumnRow(HVector* row_ep) {
   analysis->simplexTimerStop(Chuzc1Clock);
 }
 
+#ifndef HIGHS_RUST
 void HEkkDual::chooseColumnSlice(HVector* row_ep) {
   // Choose the index of a column to enter the basis (CHUZC) by
   // exploiting slices of the pivotal row - for SIP and PAMI
@@ -1972,6 +1981,7 @@ void HEkkDual::chooseColumnSlice(HVector* row_ep) {
     analysis->simplexTimerStop(DevexWtClock);
   }
 }
+#endif
 
 void HEkkDual::updateFtran() {
   // Compute the pivotal column (FTRAN)

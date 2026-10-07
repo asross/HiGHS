@@ -24,7 +24,6 @@
 #include "lp_data/HighsSolutionDebug.h"
 #include "mip/HighsMipSolver.h"
 #include "model/HighsHessianUtils.h"
-#include "presolve/ICrashX.h"
 #include "simplex/HSimplex.h"
 
 static_assert(sizeof(HighsRunDataStruct) == 48, "HighsRunDataStruct layout");
@@ -51,6 +50,7 @@ struct RsRunOptions {
   bool* lp_presolve_requires_basis_postsolve;
   const bool* output_flag;
   const HighsInt* log_dev_level;
+  HighsInt simplex_strategy;
 };
 
 // run.rs: CHighs
@@ -93,7 +93,6 @@ enum class RunOp {
   kOkHessianDiagonal,
   kCallSolveQp,
   kCallSolveMip,
-  kICrash,
   kBasisForSolution,
   kBasisClear,
   kRefineBasis,
@@ -227,6 +226,7 @@ struct HighsRunRust {
         &o.lp_presolve_requires_basis_postsolve;
     v.o.output_flag = o.log_options.output_flag;
     v.o.log_dev_level = o.log_options.log_dev_level;
+    v.o.simplex_strategy = o.simplex_strategy;
     return v;
   }
 
@@ -310,8 +310,6 @@ struct HighsRunRust {
         return st(h.callSolveQp());
       case RunOp::kCallSolveMip:
         return st(h.callSolveMip());
-      case RunOp::kICrash:
-        return iCrash();
       case RunOp::kBasisForSolution:
         return st(h.basisForSolution());
       case RunOp::kBasisClear:
@@ -479,40 +477,6 @@ struct HighsRunRust {
         return 0;
     }
     assert(false);
-    return 0;
-  }
-
-  // The iCrash block of calledOptimizeModel: -2 for an error return
-  // without returnFromOptimizeModel, otherwise a status to return with
-  // it, or 0 (kOk) to carry on
-  int64_t iCrash() {
-    HighsOptions& options_ = h.options_;
-    ICrashStrategy strategy = ICrashStrategy::kICA;
-    bool strategy_ok = parseICrashStrategy(options_.icrash_strategy, strategy);
-    if (!strategy_ok) {
-      highsLogUser(options_.log_options, HighsLogType::kError,
-                   "ICrash error: unknown strategy.\n");
-      return -2;
-    }
-    ICrashOptions icrash_options{
-        options_.icrash_dualize,         strategy,
-        options_.icrash_starting_weight, options_.icrash_iterations,
-        options_.icrash_approx_iter,     options_.icrash_exact,
-        options_.icrash_breakpoints,     options_.log_options};
-    HighsStatus icrash_status =
-        callICrash(h.model_.lp_, icrash_options, h.icrash_info_);
-    if (icrash_status != HighsStatus::kOk) return st(icrash_status);
-    h.solution_.col_value = h.icrash_info_.x_values;
-    HighsStatus crossover_status =
-        callCrossover(options_, h.model_.lp_, h.basis_, h.solution_,
-                      h.model_status_, h.info_, h.callback_);
-    highsLogUser(options_.log_options, HighsLogType::kInfo,
-                 "Crossover following iCrash has return status of %s, and "
-                 "problem status is %s\n",
-                 highsStatusToString(crossover_status).c_str(),
-                 h.modelStatusToString(h.model_status_).c_str());
-    if (crossover_status == HighsStatus::kError) return st(crossover_status);
-    assert(options_.simplex_strategy == kSimplexStrategyPrimal);
     return 0;
   }
 

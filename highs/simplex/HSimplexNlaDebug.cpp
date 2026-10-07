@@ -14,6 +14,7 @@
 
 // #include <stdio.h>
 
+#ifndef HIGHS_RUST
 const double kResidualLargeError = 1e-8;
 const double kResidualExcessiveError = sqrt(kResidualLargeError);
 
@@ -371,3 +372,26 @@ HighsDebugStatus HSimplexNla::debugReportInvertSolutionError(
   }
   return return_status;
 }
+#else
+// Debugging is not in Crestline: the checks are no-ops
+HighsDebugStatus HSimplexNla::debugCheckInvert(
+    const std::string message, const HighsInt alt_debug_level) const {
+  return HighsDebugStatus::kNotChecked;
+}
+double HSimplexNla::debugInvertResidualError(const bool transposed,
+                                             const HVector& solution,
+                                             HVector& residual) const {
+  return 0;
+}
+HighsDebugStatus HSimplexNla::debugReportInvertSolutionError(
+    const bool transposed, const HVector& true_solution,
+    const HVector& solution, HVector& residual, const bool force) const {
+  return HighsDebugStatus::kNotChecked;
+}
+HighsDebugStatus HSimplexNla::debugReportInvertSolutionError(
+    const std::string source, const bool transposed,
+    const double solve_error_norm, const double residual_error_norm,
+    const bool force) const {
+  return HighsDebugStatus::kNotChecked;
+}
+#endif

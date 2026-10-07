@@ -24,20 +24,16 @@ srcs = sorted(os.path.relpath(s, root) for s in srcs) + ['app/RunHighs.cpp']
 # What the C++ left in a file does under HIGHS_RUST (by file or directory
 # prefix; the first match wins)
 NOTES = [
-    ('highs/interfaces/', 'C API: stays a C++ wrapper of Highs'),
-    ('highs/HighsExternal', 'loader of the optional extras library (HiPO, BLAS)'),
+    ('highs/HighsExternal', 'live: third-party notice, extras library loader'),
     ('highs/io/HMpsFF.cpp', 'empty: the free MPS parser is Rust (only the class is used)'),
-    ('highs/io/HMPSIO.cpp', 'live: fixed-format MPS reader (readMps)'),
-    ('highs/io/FilereaderMps.cpp', 'glue: calls the Rust MPS parser, fixed-format fallback'),
+    ('highs/io/HMPSIO.cpp', 'live: writeModelAsMps (the fixed-format reader is left out)'),
+    ('highs/io/FilereaderMps.cpp', 'glue: calls the Rust MPS parser (free format only)'),
     ('highs/io/FilereaderLp.cpp', 'glue: calls the Rust LP reader'),
     ('highs/io/Filereader.cpp', 'live: file type dispatch'),
     ('highs/io/HighsIO.cpp', 'live: highsLogUser/highsLogDev, log callbacks'),
-    ('highs/ipm/IpxWrapper.cpp', 'live: IPX/HiPO glue (options, status, crossover, solution)'),
-    ('highs/ipm/hipo/', 'live: HiPO interior point (not ported)'),
+    ('highs/ipm/IpxWrapper.cpp', 'live: IPX glue (options, status, crossover, solution)'),
     ('highs/ipm/ipx/', 'glue: ipx::LpSolver over the Rust IPX'),
-    ('highs/pdlp/hipdlp/', 'live: HiPDLP (not ported)'),
-    ('highs/pdlp/HiPdlpWrapper.cpp', 'live: HiPDLP glue'),
-    ('highs/lp_data/Highs.cpp', 'live: the Highs API (model passing, getters, IIS/rays/multi-objective drivers)'),
+    ('highs/lp_data/Highs.cpp', 'live: the Highs API (model passing, getters, IIS/rays drivers)'),
     ('highs/lp_data/HighsInterface.cpp', 'live: Highs internals (model edits, basis, rays, IIS, ill-conditioning)'),
     ('highs/lp_data/HighsIis.cpp', 'live: IIS (not ported)'),
     ('highs/lp_data/HighsCallback.cpp', 'live: user callback data'),
@@ -47,27 +43,25 @@ NOTES = [
     ('highs/lp_data/HighsSolution.cpp', 'live: IPX solution handling, unscaling'),
     ('highs/lp_data/HighsRunData.cpp', 'live: run data (record of a run)'),
     ('highs/lp_data/HighsLp.cpp', 'live: HighsLp methods (equality, names, dimensions)'),
-    ('highs/lp_data/HighsSolutionDebug.cpp', 'debug only (highs_debug_level)'),
-    ('highs/lp_data/HighsInfoDebug.cpp', 'debug only'),
-    ('highs/lp_data/HighsDebug.cpp', 'debug only'),
+    ('highs/lp_data/HighsSolutionDebug.cpp', 'no-op stubs (debugging is left out)'),
+    ('highs/lp_data/HighsInfoDebug.cpp', 'no-op stubs (debugging is left out)'),
+    ('highs/lp_data/HighsDebug.cpp', 'live: debug status helpers'),
     ('highs/lp_data/', 'part ported (see "The top level")'),
-    ('highs/presolve/ICrash', 'live: iCrash (not ported)'),
+    ('highs/presolve/ICrashX.cpp', 'live: callCrossover (Highs::crossover)'),
     ('highs/presolve/HPresolveAnalysis.cpp', 'live: presolve rule analysis (log)'),
     ('highs/presolve/', 'presolve glue / C++ owner of the postsolve stack'),
     ('highs/mip/', 'MIP (concurrent port): C++ class handles, callbacks, init/restart/workers'),
     ('highs/parallel/', 'task scheduler (concurrent port)'),
     ('highs/model/', 'live: HighsHessian, HighsModel'),
     ('highs/qpsolver/', 'QP glue: phase 1 and instance building'),
-    ('highs/simplex/HEkkPrimal.cpp', 'fallback: C++ primal simplex (analysis, timing, debug)'),
-    ('highs/simplex/HEkkDualMulti.cpp', 'fallback: SIP/PAMI'),
-    ('highs/simplex/HEkkDual.cpp', 'fallback: SIP/PAMI and analysis; callbacks of the Rust dual'),
-    ('highs/simplex/HighsSimplexAnalysis.cpp', 'analysis/timing only'),
-    ('highs/simplex/HEkkDebug.cpp', 'debug only'),
-    ('highs/simplex/HSimplexNlaDebug.cpp', 'debug only'),
-    ('highs/simplex/HSimplexDebug.cpp', 'debug only'),
+    ('highs/simplex/HEkkPrimal.cpp', 'fallback: C++ primal simplex (product form update)'),
+    ('highs/simplex/HEkkDual.cpp', 'fallback: C++ dual simplex (product form update); callbacks of the Rust dual'),
+    ('highs/simplex/HighsSimplexAnalysis.cpp', 'live: iteration/INVERT logs, timers (analysis stubbed)'),
+    ('highs/simplex/HEkkDebug.cpp', 'no-op stubs (debugging is left out)'),
+    ('highs/simplex/HSimplexNlaDebug.cpp', 'no-op stubs (debugging is left out)'),
+    ('highs/simplex/HSimplexDebug.cpp', 'live: CHUZC failure reports (dev log)'),
     ('highs/simplex/', 'live: HEkk data owner, NLA wrapper, setup, reports'),
-    ('highs/test_kkt/', 'dev KKT checker (debug only)'),
-    ('highs/util/HFactorDebug.cpp', 'debug only'),
+    ('highs/util/HFactorDebug.cpp', 'no-op stubs (debugging is left out)'),
     ('highs/util/HighsMatrixPic.cpp', 'debug only (matrix pictures)'),
     ('highs/util/', 'live: utilities (sparse matrix, sort, HSet, vectors)'),
     ('app/', 'main: calls the Rust app (rust/src/lp_data/app.rs)'),
@@ -99,6 +93,8 @@ for s in srcs:
         kind = 'glue'
     elif rs == 0:
         kind = 'empty'
+    elif 'stubs' in note(s):
+        kind = 'stubs'
     elif rs < cpp:
         kind = 'part ported'
     else:
