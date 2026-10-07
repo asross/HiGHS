@@ -55,7 +55,7 @@ $I/afiro.mps a b c
 --presolve "" $I/afiro.mps
 --solver ipm $I/afiro.mps
 --solver ipx $I/afiro.mps
---solver hipo $I/afiro.mps
+--solver hipo $I/afiro.mps # dropped: HiPO
 --solver pdlp $I/afiro.mps
 --solver bad $I/afiro.mps
 --parallel on $I/afiro.mps
@@ -65,11 +65,11 @@ $I/afiro.mps a b c
 --ranging maybe $I/afiro.mps
 --options_file $C/sample_options_file $I/afiro.mps
 --options_file $I/WithInf.set $I/afiro.mps
---options_file $C/hipo_test_option_files/hipo_options_0 $I/afiro.mps
+--options_file $C/hipo_test_option_files/hipo_options_0 $I/afiro.mps # dropped: HiPO
 --options_file nonexist.set $I/afiro.mps
 --options_file $I $I/afiro.mps
 --options_file bad.set $I/afiro.mps
---options_file dev.set $I/afiro.mps
+--options_file dev.set $I/afiro.mps # dropped: debugging
 --options_file quiet.set $I/afiro.mps
 --options_file logfile.set $I/afiro.mps
 --unknown $I/afiro.mps
@@ -91,7 +91,7 @@ $I/egout.mps
 --presolve off $I/flugpl.mps
 --time_limit 0.0001 $I/egout.mps
 $I/qptestnw.lp
---options_file dev.set $I/egout.mps
+--options_file dev.set $I/egout.mps # dropped: debugging
 --model_file $I/afiro.mps $I/adlittle.mps
 --model_file $I/afiro.mps --model_file $I/adlittle.mps
 --write_presolved_model_file
@@ -113,7 +113,7 @@ $I/qptestnw.lp
 --help -- -x
 --threads=7 --random_seed=" 3" --time_limit=" 2.5" --run_crossover=off $I/afiro.mps
 --options_file ranging.set --solution_file s.sol $I/adlittle.mps
---options_file dev.set --ranging on $I/afiro.mps
+--options_file dev.set --ranging on $I/afiro.mps # dropped: debugging
 --options_file ranging.set --solution_file s.sol --presolve off $I/egout.mps
 --read_basis_file $F/adl.bas $I/adlittle.mps
 --read_basis_file $F/adl.bas $I/afiro.mps

@@ -3,7 +3,9 @@
 # third build with bin/crest, the Rust crest binary) on the command lines
 # of cli_cases.txt ($I: check/instances, $C: check), each in a fresh
 # directory, and diffs stdout, stderr, exit code and written files against
-# the C++ app, with times and the program path masked.
+# the C++ app, with times and the program path masked. A case marked
+# `# dropped: ...` uses a feature Crestline leaves out (HiPO, debugging):
+# it is expected to differ, and is counted apart.
 #   rust/bench/cli_compare.sh [CPP_BUILD] [RUST_BUILD] [CREST_BUILD]
 cd "$(dirname "$0")/../.."
 ROOT=$PWD
@@ -26,7 +28,7 @@ F=$OUT/files; mkdir -p "$F"
  sed 's/^v2$/v1/' adl.bas | awk '!/^# /{print $NF; next} {print}' | sed 's/^v1$/HiGHS v1/' > adl_v1.bas
  sed '3,$s/^C/X/' adl.bas > adl_badname.bas
  sed '1s/v2/v7/' adl.bas > adl_v7.bas)
-n=0; fail=0
+n=0; fail=0; dropped=0
 while IFS= read -r line || [ -n "$line" ]; do
   n=$((n+1))
   for k in "${!BINS[@]}"; do
@@ -41,9 +43,13 @@ while IFS= read -r line || [ -n "$line" ]; do
     (cd "$d" && eval "set -- $line" && "$ROOT/$b" "$@" > stdout 2> stderr; echo $? > exit)
     for f in "$d"/*; do mask < "$f" | sed "s|$ROOT/$b|HIGHS|g" > "$f.m"; mv "$f.m" "$f"; done
     if [ "$k" -gt 0 ] && ! diff -r "$OUT/$n/0" "$d" > "$OUT/$n.$k.diff"; then
-      fail=$((fail+1)); echo "DIFF [$n] $b: $line"; head -20 "$OUT/$n.$k.diff"
+      if [[ $line == *"# dropped"* ]]; then
+        dropped=$((dropped+1)); echo "EXPECTED [$n] $b: $line"
+      else
+        fail=$((fail+1)); echo "DIFF [$n] $b: $line"; head -20 "$OUT/$n.$k.diff"
+      fi
     fi
   done
 done < rust/bench/cli_cases.txt
-echo "cli: $n command lines x $((${#BINS[@]} - 1)), $fail differ"
+echo "cli: $n command lines x $((${#BINS[@]} - 1)), $fail differ, $dropped dropped-feature cases differ as expected"
 if [ -n "$KEEP" ]; then echo "$OUT"; else rm -rf "$OUT"; fi
