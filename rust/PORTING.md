@@ -294,3 +294,50 @@ stack, so thread_safe undoPrimal needs no copy. C++ resizes the solution
 and basis vectors to the original space; Rust does the rest. The fused
 products in plain double are `x - a*d` of ForcingRow, `x + s*y` and
 `v - s*y` of DuplicateColumn, and `x + s*y` of transformToPresolvedSpace.
+
+## Primal heuristics (MIP)
+
+Feasibility jump runs in Rust (mip/feasjump.rs): HighsMipSolverData::
+feasibilityJump (HighsFeasibilityJump.cpp) still builds the bounds,
+initial point and row-wise matrix, then calls `highs_rs_feasibility_jump`
+instead of extern feasibilityjump.hh, which only the C++ build compiles.
+std::mt19937 and libc++'s uniform_real_distribution are ported; the effort
+limits are the wrapper's (nnz << 10 in all, nnz << 8 since the last
+improvement), and the dev log lines go back through a C++ callback. The
+arithmetic is the C++'s (clang fuses the LHS updates, the residual
+`lhs - c*x`, the score accumulations and the jump scan's `score +=
+(v - cur) * slope`; `move.score += diff` in the weight update is a separate
+statement and stays unfused); the layout is CSR both ways, per-constraint
+fields in one struct, no allocation per jump value, and the scores of a
+constraint's old and new LHS once per constraint. Jump candidates with
+equal keys can only differ in the sign of a zero, so their sort order does
+not matter. Nothing here depends on the standard library's order:
+libstdc++'s generate_canonical takes the same two draws to the same sum
+(it only clamps a result of 1, which the `< 0.001` and `< 0.01` tests
+cannot tell apart), and its mt19937 result_type is wider but holds the
+same values.
+
+ziRound and shifting run in Rust (mip/heuristics.rs) when the model is
+column-wise: they return the rounded point, and the C++ tries it
+(trySolution, tryRoundedPoint, ziRound after shifting). Row activities
+(double-double, as calculateRowValuesQuad and getInfeasibleRows) are
+recomputed only for rows whose columns moved; shifting reads the LP
+relaxation's fractional integers instead of copying the whole relaxation,
+and draws from the C++ HighsRandom in place. Its std::unordered_map of
+shifts is only looked up, never iterated, so it needs no libstdc++
+variant.
+
+Graph LNS (HighsGraphLns.cpp): the decision columns, the neighbourhoods
+(seed choice from the flip promise, disagreement with the LP, or random,
+and the breadth-first search, with the short-row variant), the promise
+update from the reduced costs, the move type bandit (UCB, `base + 0.5 *
+sqrt(...)` fused) and the flip candidates and partners (byGain is a total
+order on distinct columns, so any sort reproduces pdqsort's) are in Rust
+(mip/lns.rs, an `Lns` handle per graphLNS call). Still C++: the dives, the
+neighbourhood branch and bound, the flip search's moves and propagation
+screen, the LP re-solves and the sub-MIPs, and all of RENS, RINS,
+rootReducedCost, randomizedRounding, centralRounding / linesearchRounding,
+tryRoundedPoint, the feasibility pump, crossover and solveSubMip: these are
+sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls (the
+first is being ported separately), with no arithmetic of their own worth
+moving across the FFI.
