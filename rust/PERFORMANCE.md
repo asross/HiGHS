@@ -10,6 +10,34 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, the heuristics glue, graph LNS's search and the MIP driver
+
+HighsPrimalHeuristics (primal.rs), graph LNS's dives, branch and bound
+and flip search (graph_lns.rs), HighsMipSolverData's bookkeeping,
+solutions, root LP and root node (mip_data.rs, root.rs) and
+HighsMipSolver::run with cleanupSolve (driver.rs); see PORTING.md.
+Control flow moved, the work stays in the LP solves and propagation, so
+no gain is expected. Against the rust-port HIGHS_RUST build (`cyc.py 2`,
+mip_rel_gap 0.01, 500 nodes, M1 loaded): neos17 1.001, nu25-pr12 1.020,
+neos-911970 0.996, gen-ip002 1.005, air05 1.013, dispatch 080458 0.984
+(geomean 1.003, instructions equal to 0.1%), all same path.
+
+Same path against pure C++ (incumbent lines, restart and LNS dev lines,
+final summary; 100 nodes, no time limit): clang, 55 instances (the MIPLIB
+plain set less markshare_4_0 and 50v-10, nondeterministic, and co-100 and
+germanrr, whose C++ runs took over 30 minutes here, plus 15 small check
+MIPs); graph LNS (log_dev_level 1, 200
+nodes) on hard_10-03_1340, diverse_10-01_0052, 3c1b60d6, 080458;
+gcc/libstdc++ pair, 14 MIPLIB + 080458 at 100 nodes and LNS on
+hard_10-03_1340 and 3c1b60d6; x86_64 under Rosetta, 6 MIPLIB + 080458
+and LNS on hard_10-03_1340. The pure C++ build of this branch matches
+the reference too. threads=2 is not deterministic in pure C++ (the
+concurrent LNS helper), so it was only run (helper and parallel = on with
+two workers: same quality, no hang). ctest 168/168.
+
+`perf.py --reps 1`: clang all 0.838 (MIP 0.874), gcc/libstdc++ all
+0.834 (MIP 0.851), 26/26 same path on both.
+
 ## 2026-10-07, the LP relaxation and the separation loop in Rust
 
 HighsLpRelaxation (mip/lp_relaxation.rs) and HighsSeparation's loop
