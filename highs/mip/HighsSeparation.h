@@ -32,6 +32,7 @@ class HighsSeparation {
   HighsSeparation(HighsMipWorker& mipworker);
 
  private:
+  friend struct HighsSeparationAccess;
   HighsMipWorker& mipworker_;
   HighsInt implBoundClock;
   HighsInt cliqueClock;

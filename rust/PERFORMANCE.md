@@ -10,6 +10,31 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, the LP relaxation and the separation loop in Rust
+
+HighsLpRelaxation (mip/lp_relaxation.rs) and HighsSeparation's loop
+(separation.rs); see PORTING.md. Nothing hot moved: the LP solves stay
+behind the C++ `Highs` object, so the expected effect is none. Against the
+rust-port HIGHS_RUST build (`cyc.py 2`, mip_rel_gap 0.01, 2000 nodes, M1
+heavily loaded): neos17 0.996, nu25-pr12 1.033, neos-911970 0.994,
+gen-ip002 1.092, air05 1.007, dispatch 080458 0.966 (geomean 1.014, within
+the load noise); instructions +0.0-0.7% (the LP view refetched per call),
+all same path.
+
+Same path against pure C++ (comparing incumbent lines and the final
+summary; no time limit, since on this machine air05's root alone hit
+1000 s, and the intermediate B&B lines are printed by time): clang, 100
+nodes, 33 MIPLIB instances (the plain set less markshare_4_0, 50v-10,
+which is nondeterministic in pure C++ too, and five with very slow roots);
+gcc/libstdc++ pair, 14 MIPLIB + dispatch 080458; x86_64 under Rosetta,
+neos17, nu25-pr12, neos-911970, gen-ip002, pk1, air05, dispatch 080458;
+graph LNS at mip_rel_gap 0.01, 200 nodes, log_dev_level 1 (LNS lines and
+incumbents): hard_10-03_1340, 3c1b60d6, 3c1b60d6_wind185, 080458 (clang),
+hard_10-03_1340, 3c1b60d6 (gcc). After merging the symmetry and probing
+ports: same path again on 12 MIPLIB (incl. the symmetric qap10, cod105,
+enlight_hard) + hard_10-03_1340 and 080458 with LNS (clang), 7 MIPLIB +
+080458 + hard_10-03_1340 with LNS (gcc), 5 MIPLIB + 080458 (x86_64);
+ctest 168/168.
 ## 2026-10-07, presolve probing and enumeration loops in Rust
 
 runProbing's loop and enumerateSolutions in Rust (probing.rs,

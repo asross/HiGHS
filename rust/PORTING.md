@@ -123,8 +123,38 @@ algorithm are kept with ports of pdqsort and libc++'s heap, partial_sort
 and partition (sort.rs, checked against golden_cuts.cpp). clang fuses
 `100 + 0.15 * n` and `1000 + 0.1 * n`; the path mixing violation loop is
 split by 8 in the LTO build.
-HighsSeparation's orchestration (propagation, LP resolves, clique and
-implied bound separation, cut pool separation) stays C++.
+HighsSeparation's loop (separationRound and separate: the order of
+propagation, LP resolves, clique and implied bound separation, the
+separators, the cut pools, adding cuts, aging and the termination tests)
+runs in Rust (mip/separation.rs); each step on a C++ object is one
+callback (`CSepaFns::op`), the LP relaxation is called directly.
+
+## The LP relaxation (MIP)
+
+HighsLpRelaxation's state and logic are Rust (mip/lp_relaxation.rs): the
+LP rows (model rows and cuts, ages, aging and deletion, the cut pools'
+LP counts), run()'s status handling (error retries, the IPM basis after
+an iteration limit, unbounded points), resolveLp (fractional integers by
+the clique substitutions and symmetric branching columns, in a
+HighsHashTable as the C++, the rounding along the locks, the age reset of
+tight cuts, the repaired point), the dual proofs (Farkas ray and
+objective bound), computeBasicDegenerateDuals, computeBestEstimate and
+computeLPDegneracy. The C++ class keeps the `Highs` LP solver (the solve
+itself with the solver choice and the IPX race, flushDomain, the stored
+basis, the playground's putIterate/getIterate, the row deletions) and
+reads the Rust status, objective, rows, fractional integers and proof in
+place (`LpShared`); getFractionalIntegers returns a mutable span
+(`HighsFracInts`), which the heuristics sort in place. Rust sees the LP
+solver through a view refetched after each call that may change it
+(`CLpView`), and the MIP data through `CLpMip`; the cut pools, the clique
+table and the pseudocosts are used directly. Still C++ callbacks: the
+domains (fixCol, bounds, tightenCoefficients, conflict reconvergence),
+clique extraction from a proof, the symmetries' branching column,
+incumbents and checkSolution, and logging. No product here is
+contracted: each feeds a HighsCDouble call or a comparison (the
+sparse vector sum keeps the double overload of add). The search reads
+the LP relaxation directly (status, objective, iterations, fractional
+integers, best estimate).
 
 HEkk::solve runs in Rust from initialiseForSolve down (simplex/hekk.rs,
 dual.rs, primal.rs) when no simplex analysis, timing or debugging is
@@ -407,3 +437,9 @@ HighsRanging.cpp, HighsIis.cpp, the remaining HighsLpUtils.cpp (semi
 variables, user scaling, solution/basis file reading and writing, LP
 reporting, vector edits), the IPX solution conversions and basis
 handling of HighsSolution.cpp, and app/.
+
+sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls, with no
+arithmetic of their own worth moving across the FFI; they now call the
+Rust LP relaxation through its C++ handle. Porting them means a callback
+per HighsSearch / HighsDomain step (the local domains are C++), which is
+left for when the domain's C++ class goes.

@@ -2108,19 +2108,15 @@ struct SearchFns {
   void (*lp_flush_domain)(void*);
   void (*lp_set_objective_limit)(void*, double);
   int (*lp_resolve)(void*);
-  int64_t (*lp_num_iterations)(void*);
-  int (*lp_status)(void*);
+  highs_rs::LpRelax* (*lp_rust)(void*);
   bool (*lp_query)(void*, int, int);
-  double (*lp_objective)(void*);
   const double* (*lp_solution)(void*, int, HighsInt*);
-  const std::pair<HighsInt, double>* (*lp_frac_ints)(void*, HighsInt*);
   void* (*lp_store_basis)(void*, bool);
   void (*lp_set_stored_basis)(void*, void*);
   void (*lp_recover_basis)(void*);
   HighsInt (*basis_rows)(void*);
   HighsInt (*lp_rows)(void*, int);
   void (*lp_perform_aging)(void*);
-  double (*lp_best_estimate)(void*);
   void (*lp_degenerate_duals)(void*, double);
   double (*lp_degeneracy)(void*);
   void* (*playground_new)(void*);
@@ -2251,30 +2247,11 @@ struct SearchAccess {
   static int lpResolve(void* p) {
     return int(s(p).lp->resolveLp(&s(p).localdom));
   }
-  static int64_t lpNumIterations(void* p) {
-    return s(p).lp->getNumLpIterations();
+  static highs_rs::LpRelax* lpRust(void* p) { return s(p).lp->rust(); }
+  static bool lpQuery(void* p, int, int) {
+    return s(p).lp->getLpSolver().getModelStatus() ==
+           HighsModelStatus::kObjectiveBound;
   }
-  static int lpStatus(void* p) { return int(s(p).lp->getStatus()); }
-  static bool lpQuery(void* p, int which, int status) {
-    HighsLpRelaxation& lp = *s(p).lp;
-    auto st = HighsLpRelaxation::Status(status);
-    switch (which) {
-      case 0:
-        return lp.scaledOptimal(st);
-      case 1:
-        return lp.unscaledPrimalFeasible(st);
-      case 2:
-        return lp.unscaledDualFeasible(st);
-      case 3:
-        return st == HighsLpRelaxation::Status::kInfeasible;
-      case 4:
-        return st == HighsLpRelaxation::Status::kOptimal;
-      default:
-        return lp.getLpSolver().getModelStatus() ==
-               HighsModelStatus::kObjectiveBound;
-    }
-  }
-  static double lpObjective(void* p) { return s(p).lp->getObjective(); }
   static const double* lpSolution(void* p, int which, HighsInt* n) {
     const std::vector<double>& v =
         which == 0   ? s(p).lp->getSolution().col_value
@@ -2282,11 +2259,6 @@ struct SearchAccess {
                      : s(p).lp->getLpSolver().getSolution().col_value;
     *n = v.size();
     return v.data();
-  }
-  static const std::pair<HighsInt, double>* lpFracInts(void* p, HighsInt* n) {
-    const auto& f = s(p).lp->getFractionalIntegers();
-    *n = f.size();
-    return f.data();
   }
   static void* lpStoreBasis(void* p, bool get) {
     if (!get) {
@@ -2306,9 +2278,6 @@ struct SearchAccess {
     return which == 0 ? s(p).lp->numRows() : s(p).lp->getLp().num_row_;
   }
   static void lpPerformAging(void* p) { s(p).lp->performAging(); }
-  static double lpBestEstimate(void* p) {
-    return s(p).lp->computeBestEstimate(s(p).pseudocost);
-  }
   static void lpDegenerateDuals(void* p, double threshold) {
     HighsSearch& x = s(p);
     x.lp->computeBasicDegenerateDuals(threshold, x.localdom, x.getDomain(),
@@ -2505,19 +2474,15 @@ const SearchFns SearchAccess::fns = {
     lpFlushDomain,
     lpSetObjectiveLimit,
     lpResolve,
-    lpNumIterations,
-    lpStatus,
+    lpRust,
     lpQuery,
-    lpObjective,
     lpSolution,
-    lpFracInts,
     lpStoreBasis,
     lpSetStoredBasis,
     lpRecoverBasis,
     basisRows,
     lpRows,
     lpPerformAging,
-    lpBestEstimate,
     lpDegenerateDuals,
     lpDegeneracy,
     playgroundNew,
