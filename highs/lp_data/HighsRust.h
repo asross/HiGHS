@@ -42,6 +42,9 @@ inline RsMut<uint8_t> rsMut(const std::vector<HighsVarType>& v) {
   return {reinterpret_cast<uint8_t*>(const_cast<HighsVarType*>(v.data())),
           v.size()};
 }
+inline RsMut<uint8_t> rsMut(std::vector<HighsVarType>& v) {
+  return rsMut(static_cast<const std::vector<HighsVarType>&>(v));
+}
 
 // HighsLogOptions and the function through which Rust logs
 struct RsLog {
@@ -87,6 +90,11 @@ struct RsIndexCollection {
   RsMut<HighsInt> mask;
 };
 RsIndexCollection rsIndexCollection(const HighsIndexCollection& ic);
+
+// calculateRowValuesQuad without its debugging report
+void highsRsCalculateRowValuesQuad(const HighsLp& lp,
+                                   const std::vector<double>& col_value,
+                                   std::vector<double>& row_value);
 
 // The options of LP validation and scaling
 struct RsLpOptions {

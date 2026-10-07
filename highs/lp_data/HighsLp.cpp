@@ -10,6 +10,8 @@
  */
 #include "lp_data/HighsLp.h"
 
+#include "lp_data/HighsRust.h"
+
 #include <cassert>
 
 #include "lp_data/HighsLpUtils.h"
@@ -331,6 +333,59 @@ void HighsLp::addRowNames(const std::string name, const HighsInt num_new_row) {
   // Blank names for the new rows were added in appendRowsToLpVectors
 }
 
+#ifdef HIGHS_RUST
+extern "C" size_t highs_rs_delete_from_vectors(const RsIndexCollection* ic,
+                                               RsMut<double> cost,
+                                               RsMut<double> lower,
+                                               RsMut<double> upper,
+                                               RsMut<uint8_t> integrality,
+                                               RsMut<HighsInt> kept);
+
+// The names of the kept entries moved to the front
+static void deleteNames(std::vector<std::string>& names,
+                        const std::vector<HighsInt>& kept,
+                        const HighsInt new_num) {
+  for (HighsInt i = 0; i < new_num; i++)
+    if (kept[i] != i) names[i] = names[kept[i]];
+  names.resize(new_num);
+}
+
+void HighsLp::deleteColsFromVectors(
+    HighsInt& new_num_col, const HighsIndexCollection& index_collection) {
+  assert(ok(index_collection));
+  std::vector<HighsInt> kept(this->num_col_);
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  new_num_col = highs_rs_delete_from_vectors(
+      &ic, rsMut(this->col_cost_), rsMut(this->col_lower_),
+      rsMut(this->col_upper_), rsMut(this->integrality_), rsMut(kept));
+  HighsInt from_k;
+  HighsInt to_k;
+  limits(index_collection, from_k, to_k);
+  if (from_k > to_k) return;
+  this->col_cost_.resize(new_num_col);
+  this->col_lower_.resize(new_num_col);
+  this->col_upper_.resize(new_num_col);
+  if (this->integrality_.size()) this->integrality_.resize(new_num_col);
+  if (this->col_names_.size()) deleteNames(this->col_names_, kept, new_num_col);
+}
+
+void HighsLp::deleteRowsFromVectors(
+    HighsInt& new_num_row, const HighsIndexCollection& index_collection) {
+  assert(ok(index_collection));
+  std::vector<HighsInt> kept(this->num_row_);
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  new_num_row = highs_rs_delete_from_vectors(
+      &ic, {nullptr, 0}, rsMut(this->row_lower_), rsMut(this->row_upper_),
+      {nullptr, 0}, rsMut(kept));
+  HighsInt from_k;
+  HighsInt to_k;
+  limits(index_collection, from_k, to_k);
+  if (from_k > to_k) return;
+  this->row_lower_.resize(new_num_row);
+  this->row_upper_.resize(new_num_row);
+  if (this->row_names_.size()) deleteNames(this->row_names_, kept, new_num_row);
+}
+#else
 void HighsLp::deleteColsFromVectors(
     HighsInt& new_num_col, const HighsIndexCollection& index_collection) {
   assert(ok(index_collection));
@@ -416,6 +471,8 @@ void HighsLp::deleteRowsFromVectors(
   this->row_upper_.resize(new_num_row);
   if (have_names) this->row_names_.resize(new_num_row);
 }
+
+#endif
 
 void HighsLp::deleteCols(const HighsIndexCollection& index_collection) {
   HighsInt new_num_col;

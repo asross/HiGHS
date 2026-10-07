@@ -16,6 +16,8 @@
 #include "pdlp/HiPdlpWrapper.h"
 #include "simplex/HApp.h"
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsSolveRust.cpp, rust/src/lp_data/solve.rs)
 // The method below runs the simplex, IPX, HiPO or PDLP solver on the LP
 HighsStatus solveLp(HighsLpSolverObject& solver_object, const string message) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -175,6 +177,8 @@ HighsStatus solveLp(HighsLpSolverObject& solver_object, const string message) {
   return return_status;
 }
 
+#endif
+
 // Solves an unconstrained LP without scaling, setting HighsBasis, HighsSolution
 // and HighsInfo
 HighsStatus solveUnconstrainedLp(HighsLpSolverObject& solver_object) {
@@ -184,6 +188,8 @@ HighsStatus solveUnconstrainedLp(HighsLpSolverObject& solver_object) {
                                solver_object.solution_, solver_object.basis_));
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsSolveRust.cpp, rust/src/lp_data/solve.rs)
 // Solves an unconstrained LP without scaling, setting HighsBasis, HighsSolution
 // and HighsInfo
 HighsStatus solveUnconstrainedLp(const HighsOptions& options, const HighsLp& lp,
@@ -678,6 +684,8 @@ void assessExcessiveObjectiveBoundScaling(const HighsLogOptions log_options,
     highsLogUser(log_options, HighsLogType::kWarning, "%s\n",
                  message.str().c_str());
 }
+
+#endif
 
 bool useIpm(const std::string& solver) {
   return solver == kIpmString || solver == kHipoString || solver == kIpxString;

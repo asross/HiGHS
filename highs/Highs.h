@@ -41,6 +41,9 @@ const char* highsGithash();
  * @brief Class to set parameters and run HiGHS
  */
 class Highs {
+  // Highs::run's control flow in Rust (lp_data/HighsRunRust.cpp)
+  friend struct HighsRunRust;
+
  public:
   Highs();
   virtual ~Highs() { this->closeLogFile(); }

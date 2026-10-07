@@ -462,14 +462,58 @@ which stay identical. Limits: strtold is strtod (x86_64's 80-bit strtold
 could round a halfway --time_limit twice), and glibc 2.38's C23 strtoll
 (which g++ may bind) also reads a leading "-0b".
 
-Still C++ in lp_data: Highs.cpp and HighsInterface.cpp (run /
-optimizeModel orchestration, presolve/postsolve calls, the cleanup solve,
-basis handling, model modification), HighsSolve.cpp (solveLp dispatch),
-HighsModelUtils.cpp (solution file writers), HMPSIO/FilereaderLp writers,
-HighsRanging.cpp, HighsIis.cpp, the remaining HighsLpUtils.cpp (semi
-variables, user scaling, solution/basis file reading and writing, LP
-reporting, vector edits), the IPX solution conversions and basis
-handling of HighsSolution.cpp, and app/.
+Highs::run's control flow (run.rs, glue in HighsRunRust.cpp): Highs
+calledOptimizeModel (the QP / MIP / LP choice, infinite costs, the
+inconsistent bounds of infeasibleBoundsOk, semi-variables, and for an LP
+the presolve decision, the solve of the reduced LP, postsolve, the
+clean-up solve and the timing report), runPresolve, runPostsolve,
+returnFromOptimizeModel, returnFromHighs and reportSolvedLpQpStats; and
+HighsSolve.cpp (solve.rs: solveLp's choice of simplex, IPX, HiPO or PDLP
+and the simplex clean-up of an unwelcome IPM status, solveUnconstrainedLp,
+assessExcessiveObjectiveBoundScaling). The Highs object stays C++: Rust
+reads and writes its scalars in place (model status, HighsInfo,
+HighsRunData, the solution's and basis' validity flags) and calls back
+for each step on a C++ object (`Op`: the solvers, presolve, postsolve,
+the timer, copies of solutions, bases and options, the debug checks). The
+options are read once per call, before any step changes them. A MIP calls
+calledOptimizeModel for every LP of its relaxation, so the run allocates
+nothing unless it logs, and formats a message only when highsLogUser /
+highsLogDev would print it. A step that throws (HighsTask::Interrupt of a
+cancelled task, e.g. the IPX of the root LP race) is caught by its C++
+callback, Rust returns at once without further steps, and C++ rethrows
+(a C++ exception must not unwind through Rust). The MIP solve itself
+(callSolveMip) and iCrash stay one C++ step each.
+
+The model modification and query internals (edit.rs, query.rs,
+basis.rs, ranging.rs): changing costs, bounds and integrality over an
+index collection, changeLpMatrixCoefficient (C++ makes room for one more
+entry), deleting the LP's vectors (names moved by C++ from Rust's map),
+scale factors and basis statuses, the statuses of nonbasic variables whose
+bounds change or that are appended, getCoefficient, feasibleWrtBounds,
+calculateRowValuesQuad / calculateColDualsQuad (CDouble), refineBasis,
+isBasisConsistent, the IPX solution conversions
+(ipxSolutionToHighsSolution, ipxBasicSolutionToHighsBasicSolution), the
+checks and messages of getBasisInverseRow/Col, getBasisSolve,
+getBasisTransposeSolve, getReducedRow/Column, the reduced row and the
+extraction of basisSolveInterface's solution, setSolution, and
+getRangingData (HighsRanging.cpp; the FTRAN of each nonbasic column is a
+callback). clang fuses `objective + sense * x` in the ranging (x a
+product, or a product times a dual), `xi - delta * a_in`, the reduced row's
+dot products, the unconstrained LP's objective and the row activities of
+free rows in the IPX conversions. `rust/bench/api_compare.sh` builds
+api_driver.cpp against both libraries and diffs runs with option
+variations, rays, basis inverse and tableau rows, ranging (also of
+maximizations), model edits, setSolution / setBasis and presolve /
+postsolve through the API.
+
+Still C++ in lp_data: Highs.cpp and HighsInterface.cpp outside the above
+(run()'s file handling and user scaling, the model passing, the API
+wrappers that only call other Highs methods, getDualRay / getPrimalRay's
+re-solves, setBasis, the IIS, ill-conditioning and multiobjective
+solves), HighsModelUtils.cpp (solution file writers), HMPSIO/FilereaderLp
+writers, writeRangingFile, HighsIis.cpp, the remaining HighsLpUtils.cpp
+(semi variables, user scaling, solution/basis file reading and writing, LP
+reporting, getSubVectors), and the rest of app/.
 
 sequences of HighsSearch, HighsDomain and HighsLpRelaxation calls, with no
 arithmetic of their own worth moving across the FFI; they now call the

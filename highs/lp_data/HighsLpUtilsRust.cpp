@@ -213,4 +213,159 @@ HighsStatus assessMatrixDimensions(const HighsLogOptions& log_options,
       &log, num_vec, partitioned, rsMut(matrix_start), rsMut(matrix_p_end),
       matrix_index.size(), matrix_value.size()));
 }
+
+extern "C" void highs_rs_report_presolve_reductions(const RsLog* log, bool on,
+                                                    int presolve_status,
+                                                    const HighsInt* from,
+                                                    const HighsInt* presolved);
+
+void reportPresolveReductions(const HighsLogOptions& log_options,
+                              HighsPresolveStatus presolve_status,
+                              const HighsLp& lp, const HighsLp& presolved_lp) {
+  const RsLog log = rsLog(log_options);
+  const HighsInt from[3] = {lp.num_col_, lp.num_row_, lp.a_matrix_.numNz()};
+  HighsInt to[3] = {0, 0, 0};
+  if (presolve_status == HighsPresolveStatus::kReduced ||
+      presolve_status == HighsPresolveStatus::kTimeout) {
+    to[0] = presolved_lp.num_col_;
+    to[1] = presolved_lp.num_row_;
+    to[2] = presolved_lp.a_matrix_.numNz();
+  }
+  highs_rs_report_presolve_reductions(&log, *log_options.output_flag,
+                                      int(presolve_status), from, to);
+}
+
+// Model modification internals (rust/src/lp_data/edit.rs)
+extern "C" {
+void highs_rs_change_values(int which, const RsIndexCollection* ic,
+                            RsMut<double> a, RsMut<double> b,
+                            RsMut<double> new_a, RsMut<double> new_b);
+void highs_rs_change_integrality(const RsIndexCollection* ic,
+                                 RsMut<uint8_t> integrality,
+                                 RsMut<uint8_t> new_integrality);
+void highs_rs_delete_scale(const RsIndexCollection* ic, RsMut<double> scale);
+int64_t highs_rs_change_matrix_coefficient(RsMut<HighsInt> start,
+                                           RsMut<HighsInt> index,
+                                           RsMut<double> value,
+                                           HighsInt num_col, HighsInt row,
+                                           HighsInt col, double new_value,
+                                           bool zero_new_value);
+double highs_rs_get_coefficient(RsMut<HighsInt> start, RsMut<HighsInt> index,
+                                RsMut<double> value, HighsInt major,
+                                HighsInt minor);
+void highs_rs_calculate_row_values_quad(RsMut<HighsInt> start,
+                                        RsMut<HighsInt> index,
+                                        RsMut<double> value,
+                                        RsMut<double> col_value,
+                                        RsMut<double> row_value);
+void highs_rs_calculate_col_duals_quad(RsMut<HighsInt> start,
+                                       RsMut<HighsInt> index,
+                                       RsMut<double> value, RsMut<double> cost,
+                                       RsMut<double> row_dual,
+                                       RsMut<double> col_dual);
+}
+
+static const RsMut<double> kRsNone = {nullptr, 0};
+
+void deleteScale(vector<double>& scale,
+                 const HighsIndexCollection& index_collection) {
+  assert(ok(index_collection));
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  highs_rs_delete_scale(&ic, rsMut(scale));
+}
+
+void changeLpMatrixCoefficient(HighsLp& lp, const HighsInt row,
+                               const HighsInt col, const double new_value,
+                               const bool zero_new_value) {
+  assert(0 <= row && row < lp.num_row_);
+  assert(0 <= col && col < lp.num_col_);
+  HighsSparseMatrix& a = lp.a_matrix_;
+  // Room for an inserted entry; the C++ only resizes when inserting
+  const size_t old_size = a.index_.size();
+  const size_t num_nz = a.start_[lp.num_col_];
+  a.index_.resize(std::max(old_size, num_nz + 1));
+  a.value_.resize(std::max(old_size, num_nz + 1));
+  const int64_t new_num_nz = highs_rs_change_matrix_coefficient(
+      rsMut(a.start_), rsMut(a.index_), rsMut(a.value_), lp.num_col_, row, col,
+      new_value, zero_new_value);
+  const size_t size = new_num_nz < 0 ? old_size : size_t(new_num_nz);
+  a.index_.resize(size);
+  a.value_.resize(size);
+}
+
+HighsStatus changeLpIntegrality(HighsLp& lp,
+                                const HighsIndexCollection& index_collection,
+                                const vector<HighsVarType>& new_integrality,
+                                const HighsOptions options) {
+  assert(ok(index_collection));
+  HighsInt from_k;
+  HighsInt to_k;
+  limits(index_collection, from_k, to_k);
+  if (from_k > to_k) return HighsStatus::kOk;
+  if (lp.integrality_.size() == 0)
+    lp.integrality_.assign(lp.num_col_, HighsVarType::kContinuous);
+  assert(HighsInt(lp.integrality_.size()) == lp.num_col_);
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  highs_rs_change_integrality(&ic, rsMut(lp.integrality_),
+                              rsMut(new_integrality));
+  if (!lp.isMip()) lp.integrality_.clear();
+  return HighsStatus::kOk;
+}
+
+void changeLpCosts(HighsLp& lp, const HighsIndexCollection& index_collection,
+                   const vector<double>& new_col_cost,
+                   const double infinite_cost) {
+  assert(ok(index_collection));
+  HighsInt from_k;
+  HighsInt to_k;
+  limits(index_collection, from_k, to_k);
+  if (from_k > to_k) return;
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  highs_rs_change_values(0, &ic, rsMut(lp.col_cost_), kRsNone,
+                         rsMut(new_col_cost), kRsNone);
+  if (lp.has_infinite_cost_)
+    lp.has_infinite_cost_ = lp.hasInfiniteCost(infinite_cost);
+}
+
+void changeBounds(vector<double>& lower, vector<double>& upper,
+                  const HighsIndexCollection& index_collection,
+                  const vector<double>& new_lower,
+                  const vector<double>& new_upper) {
+  assert(ok(index_collection));
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  highs_rs_change_values(1, &ic, rsMut(lower), rsMut(upper), rsMut(new_lower),
+                         rsMut(new_upper));
+}
+
+void getLpMatrixCoefficient(const HighsLp& lp, const HighsInt Xrow,
+                            const HighsInt Xcol, double* val) {
+  assert(0 <= Xrow && Xrow < lp.num_row_);
+  assert(0 <= Xcol && Xcol < lp.num_col_);
+  const HighsSparseMatrix& a = lp.a_matrix_;
+  *val = highs_rs_get_coefficient(rsMut(a.start_), rsMut(a.index_),
+                                  rsMut(a.value_), Xcol, Xrow);
+}
+
+HighsStatus calculateColDualsQuad(const HighsLp& lp, HighsSolution& solution) {
+  const bool correct_size = int(solution.row_dual.size()) == lp.num_row_;
+  const bool is_colwise = lp.a_matrix_.isColwise();
+  const bool data_error = !correct_size || !is_colwise;
+  assert(!data_error);
+  if (data_error) return HighsStatus::kError;
+  solution.col_dual.resize(lp.num_col_);
+  const HighsSparseMatrix& a = lp.a_matrix_;
+  highs_rs_calculate_col_duals_quad(
+      rsMut(a.start_), rsMut(a.index_), rsMut(a.value_), rsMut(lp.col_cost_),
+      rsMut(solution.row_dual), rsMut(solution.col_dual));
+  return HighsStatus::kOk;
+}
+
+void highsRsCalculateRowValuesQuad(const HighsLp& lp,
+                                   const std::vector<double>& col_value,
+                                   std::vector<double>& row_value) {
+  const HighsSparseMatrix& a = lp.a_matrix_;
+  highs_rs_calculate_row_values_quad(rsMut(a.start_), rsMut(a.index_),
+                                     rsMut(a.value_), rsMut(col_value),
+                                     rsMut(row_value));
+}
 #endif

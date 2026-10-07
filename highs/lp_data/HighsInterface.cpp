@@ -22,6 +22,32 @@
 #include "util/HighsMatrixUtils.h"
 #include "util/HighsSort.h"
 
+#ifdef HIGHS_RUST
+#include "lp_data/HighsRust.h"
+
+// rust/src/lp_data/edit.rs
+extern "C" {
+size_t highs_rs_delete_basis_entries(const RsIndexCollection* ic,
+                                     RsMut<uint8_t> status,
+                                     bool* deleted_basic,
+                                     bool* deleted_nonbasic);
+double highs_rs_get_coefficient(RsMut<HighsInt> start, RsMut<HighsInt> index,
+                                RsMut<double> value, HighsInt major,
+                                HighsInt minor);
+bool highs_rs_feasible_wrt_bounds(RsMut<double> value, RsMut<double> lower,
+                                  RsMut<double> upper, double tolerance);
+void highs_rs_set_nonbasic_status(const RsIndexCollection* ic, bool columns,
+                                  RsMut<uint8_t> status, RsMut<double> lower,
+                                  RsMut<double> upper, RsMut<int8_t> flag,
+                                  RsMut<int8_t> mv, HighsInt offset);
+void highs_rs_append_nonbasic_cols(HighsInt num_col, HighsInt num_row,
+                                   HighsInt num_new, RsMut<uint8_t> col_status,
+                                   RsMut<double> lower, RsMut<double> upper,
+                                   RsMut<int8_t> flag, RsMut<int8_t> mv,
+                                   RsMut<HighsInt> basic_index);
+}
+#endif
+
 void Highs::reportModelStats() const {
   const HighsLp& lp = this->model_.lp_;
   const HighsHessian& hessian = this->model_.hessian_;
@@ -645,6 +671,8 @@ HighsStatus Highs::addRowsInterface(HighsInt ext_num_new_row,
   return return_status;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (rust/src/lp_data/edit.rs; the glue follows)
 static void deleteBasisEntries(std::vector<HighsBasisStatus>& status,
                                bool& deleted_basic, bool& deleted_nonbasic,
                                const HighsIndexCollection& index_collection,
@@ -687,6 +715,27 @@ static void deleteBasisEntries(std::vector<HighsBasisStatus>& status,
   }
   status.resize(new_num_entry);
 }
+
+#else
+static RsMut<uint8_t> rsBasisStatus(std::vector<HighsBasisStatus>& s) {
+  return {reinterpret_cast<uint8_t*>(s.data()), s.size()};
+}
+
+static void deleteBasisEntries(std::vector<HighsBasisStatus>& status,
+                               bool& deleted_basic, bool& deleted_nonbasic,
+                               const HighsIndexCollection& index_collection,
+                               const HighsInt entry_dim) {
+  assert(ok(index_collection));
+  assert(static_cast<size_t>(entry_dim) == status.size());
+  HighsInt from_k;
+  HighsInt to_k;
+  limits(index_collection, from_k, to_k);
+  if (from_k > to_k) return;
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  status.resize(highs_rs_delete_basis_entries(
+      &ic, rsBasisStatus(status), &deleted_basic, &deleted_nonbasic));
+}
+#endif
 
 static void deleteBasisCols(HighsBasis& basis,
                             const HighsIndexCollection& index_collection,
@@ -853,6 +902,8 @@ void Highs::getRowsInterface(const HighsIndexCollection& index_collection,
   }
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (rust/src/lp_data/edit.rs; the glue follows)
 void Highs::getCoefficientInterface(const HighsInt ext_row,
                                     const HighsInt ext_col,
                                     double& value) const {
@@ -879,6 +930,21 @@ void Highs::getCoefficientInterface(const HighsInt ext_row,
     }
   }
 }
+
+#else
+void Highs::getCoefficientInterface(const HighsInt ext_row,
+                                    const HighsInt ext_col,
+                                    double& value) const {
+  const HighsLp& lp = model_.lp_;
+  assert(0 <= ext_row && ext_row < lp.num_row_);
+  assert(0 <= ext_col && ext_col < lp.num_col_);
+  const HighsSparseMatrix& a = lp.a_matrix_;
+  const bool colwise = a.isColwise();
+  value = highs_rs_get_coefficient(rsMut(a.start_), rsMut(a.index_),
+                                   rsMut(a.value_), colwise ? ext_col : ext_row,
+                                   colwise ? ext_row : ext_col);
+}
+#endif
 
 HighsStatus Highs::changeIntegralityInterface(
     HighsIndexCollection& index_collection, const HighsVarType* integrality) {
@@ -937,6 +1003,8 @@ HighsStatus Highs::changeCostsInterface(HighsIndexCollection& index_collection,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (rust/src/lp_data/edit.rs; the glue follows)
 bool Highs::feasibleWrtBounds(const bool columns) const {
   if (this->info_.primal_solution_status != kSolutionStatusFeasible)
     return false;
@@ -954,6 +1022,19 @@ bool Highs::feasibleWrtBounds(const bool columns) const {
   }
   return true;
 }
+
+#else
+bool Highs::feasibleWrtBounds(const bool columns) const {
+  if (this->info_.primal_solution_status != kSolutionStatusFeasible)
+    return false;
+  const HighsLp& lp = model_.lp_;
+  return highs_rs_feasible_wrt_bounds(
+      rsMut(columns ? this->solution_.col_value : this->solution_.row_value),
+      rsMut(columns ? lp.col_lower_ : lp.row_lower_),
+      rsMut(columns ? lp.col_upper_ : lp.row_upper_),
+      this->options_.primal_feasibility_tolerance);
+}
+#endif
 
 HighsStatus Highs::changeColBoundsInterface(
     HighsIndexCollection& index_collection, const double* col_lower,
@@ -1184,6 +1265,8 @@ HighsStatus Highs::scaleRowInterface(const HighsInt row,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (rust/src/lp_data/edit.rs; the glue follows)
 void Highs::setNonbasicStatusInterface(
     const HighsIndexCollection& index_collection, const bool columns) {
   HighsBasis& highs_basis = basis_;
@@ -1403,6 +1486,58 @@ void Highs::appendNonbasicColsToBasisInterface(const HighsInt ext_num_new_col) {
   }
 }
 
+#else
+static RsMut<int8_t> rsMutIf(std::vector<int8_t>& v, const bool use) {
+  return use ? rsMut(v) : RsMut<int8_t>{nullptr, 0};
+}
+
+void Highs::setNonbasicStatusInterface(
+    const HighsIndexCollection& index_collection, const bool columns) {
+  HighsBasis& highs_basis = basis_;
+  if (!highs_basis.valid) return;
+  const bool has_simplex_basis = ekk_instance_.status_.has_basis;
+  SimplexBasis& simplex_basis = ekk_instance_.basis_;
+  HighsLp& lp = model_.lp_;
+  assert(ok(index_collection));
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  std::vector<HighsBasisStatus>& status =
+      columns ? highs_basis.col_status : highs_basis.row_status;
+  highs_rs_set_nonbasic_status(
+      &ic, columns, rsBasisStatus(status),
+      rsMut(columns ? lp.col_lower_ : lp.row_lower_),
+      rsMut(columns ? lp.col_upper_ : lp.row_upper_),
+      rsMutIf(simplex_basis.nonbasicFlag_, has_simplex_basis),
+      rsMutIf(simplex_basis.nonbasicMove_, has_simplex_basis),
+      columns ? 0 : lp.num_col_);
+}
+
+void Highs::appendNonbasicColsToBasisInterface(const HighsInt ext_num_new_col) {
+  if (ext_num_new_col == 0) return;
+  HighsBasis& highs_basis = basis_;
+  if (!highs_basis.useful) return;
+  const bool has_simplex_basis = ekk_instance_.status_.has_basis;
+  SimplexBasis& simplex_basis = ekk_instance_.basis_;
+  HighsLp& lp = model_.lp_;
+  assert(highs_basis.col_status.size() == static_cast<size_t>(lp.num_col_));
+  assert(highs_basis.row_status.size() == static_cast<size_t>(lp.num_row_));
+  const HighsInt newNumCol = lp.num_col_ + ext_num_new_col;
+  const HighsInt newNumTot = newNumCol + lp.num_row_;
+  highs_basis.col_status.resize(newNumCol);
+  if (has_simplex_basis) {
+    simplex_basis.nonbasicFlag_.resize(newNumTot);
+    simplex_basis.nonbasicMove_.resize(newNumTot);
+  }
+  highs_rs_append_nonbasic_cols(
+      lp.num_col_, lp.num_row_, ext_num_new_col,
+      rsBasisStatus(highs_basis.col_status), rsMut(lp.col_lower_),
+      rsMut(lp.col_upper_),
+      rsMutIf(simplex_basis.nonbasicFlag_, has_simplex_basis),
+      rsMutIf(simplex_basis.nonbasicMove_, has_simplex_basis),
+      has_simplex_basis ? rsMut(simplex_basis.basicIndex_)
+                        : RsMut<HighsInt>{nullptr, 0});
+}
+#endif
+
 void Highs::appendBasicRowsToBasisInterface(const HighsInt ext_num_new_row) {
   if (ext_num_new_row == 0) return;
   HighsBasis& highs_basis = basis_;
@@ -1475,6 +1610,8 @@ HighsStatus Highs::getBasicVariablesInterface(HighsInt* basic_variables) {
   return return_status;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/query.rs)
 // Solve (transposed) system involving the basis matrix
 
 HighsStatus Highs::basisSolveInterface(const vector<double>& rhs,
@@ -1559,6 +1696,8 @@ HighsStatus Highs::basisSolveInterface(const vector<double>& rhs,
   }
   return HighsStatus::kOk;
 }
+
+#endif
 
 void Highs::zeroIterationCounts() {
   info_.simplex_iteration_count = 0;
@@ -3744,6 +3883,8 @@ void Highs::formIllConditioningLp1(HighsLp& ill_conditioning_lp,
   ill_conditioning_matrix.num_row_ = ill_conditioning_lp.num_row_;
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)
 bool Highs::infeasibleBoundsOk() {
   const HighsLogOptions& log_options = this->options_.log_options;
   HighsLp& lp = this->model_.lp_;
@@ -3863,6 +4004,8 @@ bool Highs::infeasibleBoundsOk() {
                  int(num_true_infeasible_bound));
   return num_true_infeasible_bound == 0;
 }
+
+#endif
 
 bool Highs::validLinearObjective(const HighsLinearObjective& linear_objective,
                                  const HighsInt iObj) const {

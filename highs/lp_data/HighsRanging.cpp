@@ -16,6 +16,7 @@
 #include <sstream>
 
 #include "lp_data/HighsModelUtils.h"
+#include "lp_data/HighsRust.h"
 
 using std::min;
 
@@ -49,6 +50,8 @@ void HighsRanging::clear() {
   this->row_bound_dn.ou_var_.clear();
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (rust/src/lp_data/ranging.rs; the glue follows)
 static double infProduct(double value) {
   // Multiplying value and kHighsInf
   if (value == 0) {
@@ -599,6 +602,117 @@ HighsStatus getRangingData(HighsRanging& ranging,
                      kSolutionStylePretty);
   return HighsStatus::kOk;
 }
+
+#endif
+
+#ifdef HIGHS_RUST
+// rust/src/lp_data/ranging.rs: CColumn, CRecord, CRanging
+struct RsRangingColumn {
+  HighsInt count;
+  const HighsInt* index;
+  const double* array;
+};
+struct RsRangingRecord {
+  RsMut<double> value, objective;
+  RsMut<HighsInt> in_var, ou_var;
+};
+struct RsRanging {
+  RsLog log;
+  bool optimal, initialised_for_solve;
+  HighsInt num_col, num_row, sense;
+  double objective;
+  RsMut<double> work_value, work_dual, work_cost, work_lower, work_upper,
+      base_value, base_lower, base_upper;
+  RsMut<int8_t> nonbasic_flag, nonbasic_move;
+  RsMut<HighsInt> basic_index;
+  void (*ftran)(void*, HighsInt, RsRangingColumn*);
+  void* ctx;
+  RsRangingRecord out[6];
+};
+
+extern "C" int highs_rs_get_ranging_data(const RsRanging* c);
+
+namespace {
+struct RangingFtran {
+  HEkk& ekk;
+  const HighsSparseMatrix& matrix;
+  HVector column;
+};
+
+void rangingFtran(void* ctx, HighsInt j, RsRangingColumn* out) {
+  RangingFtran& f = *static_cast<RangingFtran*>(ctx);
+  f.column.clear();
+  f.matrix.collectAj(f.column, j, 1);
+  const double expected_density = f.ekk.info_.col_aq_density;
+  f.ekk.ftran(f.column, expected_density);
+  *out = {f.column.count, f.column.index.data(), f.column.array.data()};
+}
+
+RsRangingRecord rsRangingRecord(HighsRangingRecord& r, const HighsInt n) {
+  r.value_.assign(n, 0);
+  r.objective_.assign(n, 0);
+  r.in_var_.assign(n, 0);
+  r.ou_var_.assign(n, 0);
+  return {rsMut(r.value_), rsMut(r.objective_), rsMut(r.in_var_),
+          rsMut(r.ou_var_)};
+}
+}  // namespace
+
+HighsStatus getRangingData(HighsRanging& ranging,
+                           HighsLpSolverObject& solver_object) {
+  ranging.clear();
+  HEkk& ekk_instance = solver_object.ekk_instance_;
+  RsRanging c{};
+  c.log = rsLog(solver_object.options_.log_options);
+  c.optimal = solver_object.model_status_ == HighsModelStatus::kOptimal;
+  c.initialised_for_solve = ekk_instance.status_.initialised_for_solve;
+  const HighsLp& use_lp = solver_object.lp_;
+  if (c.optimal && c.initialised_for_solve) {
+    // Unscale the simplex data if the LP has been solved in the scaled space
+    ekk_instance.unscaleSimplex(use_lp);
+  }
+  const HighsSimplexInfo& info = ekk_instance.info_;
+  const SimplexBasis& basis = ekk_instance.basis_;
+  const HighsInt num_col = use_lp.num_col_;
+  const HighsInt num_row = use_lp.num_row_;
+  c.num_col = num_col;
+  c.num_row = num_row;
+  c.sense = use_lp.sense_ == ObjSense::kMaximize ? -1 : 1;
+  c.objective = solver_object.highs_info_.objective_function_value;
+  c.work_value = rsMut(info.workValue_);
+  c.work_dual = rsMut(info.workDual_);
+  c.work_cost = rsMut(info.workCost_);
+  c.work_lower = rsMut(info.workLower_);
+  c.work_upper = rsMut(info.workUpper_);
+  c.base_value = rsMut(info.baseValue_);
+  c.base_lower = rsMut(info.baseLower_);
+  c.base_upper = rsMut(info.baseUpper_);
+  c.nonbasic_flag = rsMut(basis.nonbasicFlag_);
+  c.nonbasic_move = rsMut(basis.nonbasicMove_);
+  c.basic_index = rsMut(basis.basicIndex_);
+  RangingFtran f{ekk_instance, use_lp.a_matrix_, HVector()};
+  f.column.setup(num_row);
+  c.ftran = rangingFtran;
+  c.ctx = &f;
+  if (c.optimal && c.initialised_for_solve) {
+    c.out[0] = rsRangingRecord(ranging.col_cost_up, num_col + num_row);
+    c.out[1] = rsRangingRecord(ranging.col_cost_dn, num_col + num_row);
+    c.out[2] = rsRangingRecord(ranging.col_bound_up, num_col);
+    c.out[3] = rsRangingRecord(ranging.col_bound_dn, num_col);
+    c.out[4] = rsRangingRecord(ranging.row_bound_up, num_row);
+    c.out[5] = rsRangingRecord(ranging.row_bound_dn, num_row);
+  }
+  const HighsStatus status = HighsStatus(highs_rs_get_ranging_data(&c));
+  if (status != HighsStatus::kOk) return status;
+  ranging.valid = true;
+  if (solver_object.options_.log_dev_level)
+    writeRangingFile(stdout, use_lp,
+                     solver_object.highs_info_.objective_function_value,
+                     solver_object.basis_, solver_object.solution_, ranging,
+                     kSolutionStylePretty);
+  return HighsStatus::kOk;
+}
+#endif
 
 void writeRangingFile(FILE* file, const HighsLp& lp,
                       const double objective_function_value,
