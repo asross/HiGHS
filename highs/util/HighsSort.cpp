@@ -10,9 +10,119 @@
  */
 #include "util/HighsSort.h"
 
+#include <algorithm>
 #include <cstddef>
 
 using std::vector;
+
+#ifdef HIGHS_RUST
+// The sorts are Rust (rust/src/util/sort.rs); heap arrays are 1-based
+extern "C" {
+void highs_rs_add_to_decreasing_heap(HighsInt* n, HighsInt mx_n, double* heap_v,
+                                     HighsInt* heap_ix, HighsInt len, double v,
+                                     HighsInt ix);
+void highs_rs_sort_decreasing_heap(HighsInt n, double* heap_v,
+                                   HighsInt* heap_ix, HighsInt len);
+void highs_rs_heap_int(HighsInt* heap_v, HighsInt* heap_i, HighsInt i,
+                       HighsInt n, int what);
+void highs_rs_heap_double(double* heap_v, HighsInt* heap_i, HighsInt i,
+                          HighsInt n, int what);
+bool highs_rs_increasing_set_ok_int(const HighsInt* set, HighsInt n,
+                                    HighsInt lower, HighsInt upper,
+                                    bool strict);
+bool highs_rs_increasing_set_ok_double(const double* set, HighsInt n,
+                                       double lower, double upper, bool strict);
+void highs_rs_sort_set_data(HighsInt n, HighsInt* set, const void* const* data,
+                            void* const* sorted, int num_data, int width);
+}
+static_assert(sizeof(HighsVarType) == 1, "HighsVarType is a byte");
+
+void addToDecreasingHeap(HighsInt& n, HighsInt mx_n, vector<double>& heap_v,
+                         vector<HighsInt>& heap_ix, const double v,
+                         const HighsInt ix) {
+  highs_rs_add_to_decreasing_heap(
+      &n, mx_n, heap_v.data(), heap_ix.data(),
+      HighsInt(std::min(heap_v.size(), heap_ix.size())), v, ix);
+}
+
+void sortDecreasingHeap(const HighsInt n, vector<double>& heap_v,
+                        vector<HighsInt>& heap_ix) {
+  highs_rs_sort_decreasing_heap(
+      n, heap_v.data(), heap_ix.data(),
+      HighsInt(std::min(heap_v.size(), heap_ix.size())));
+}
+
+// what: 0 maxheapsort, 1 buildMaxheap, 2 maxHeapsort, 3 maxHeapify
+void maxheapsort(HighsInt* heap_v, HighsInt n) {
+  highs_rs_heap_int(heap_v, nullptr, 0, n, 0);
+}
+void maxheapsort(HighsInt* heap_v, HighsInt* heap_i, HighsInt n) {
+  highs_rs_heap_int(heap_v, heap_i, 0, n, 0);
+}
+void maxheapsort(double* heap_v, HighsInt* heap_i, HighsInt n) {
+  highs_rs_heap_double(heap_v, heap_i, 0, n, 0);
+}
+void buildMaxheap(HighsInt* heap_v, HighsInt n) {
+  highs_rs_heap_int(heap_v, nullptr, 0, n, 1);
+}
+void buildMaxheap(HighsInt* heap_v, HighsInt* heap_i, HighsInt n) {
+  highs_rs_heap_int(heap_v, heap_i, 0, n, 1);
+}
+void buildMaxheap(double* heap_v, HighsInt* heap_i, HighsInt n) {
+  highs_rs_heap_double(heap_v, heap_i, 0, n, 1);
+}
+void maxHeapsort(HighsInt* heap_v, HighsInt n) {
+  highs_rs_heap_int(heap_v, nullptr, 0, n, 2);
+}
+void maxHeapsort(HighsInt* heap_v, HighsInt* heap_i, HighsInt n) {
+  highs_rs_heap_int(heap_v, heap_i, 0, n, 2);
+}
+void maxHeapsort(double* heap_v, HighsInt* heap_i, HighsInt n) {
+  highs_rs_heap_double(heap_v, heap_i, 0, n, 2);
+}
+void maxHeapify(HighsInt* heap_v, HighsInt i, HighsInt n) {
+  highs_rs_heap_int(heap_v, nullptr, i, n, 3);
+}
+void maxHeapify(HighsInt* heap_v, HighsInt* heap_i, HighsInt i, HighsInt n) {
+  highs_rs_heap_int(heap_v, heap_i, i, n, 3);
+}
+void maxHeapify(double* heap_v, HighsInt* heap_i, HighsInt i, HighsInt n) {
+  highs_rs_heap_double(heap_v, heap_i, i, n, 3);
+}
+
+bool increasingSetOk(const vector<HighsInt>& set,
+                     const HighsInt set_entry_lower,
+                     const HighsInt set_entry_upper, bool strict) {
+  return highs_rs_increasing_set_ok_int(set.data(), HighsInt(set.size()),
+                                        set_entry_lower, set_entry_upper,
+                                        strict);
+}
+
+bool increasingSetOk(const vector<double>& set, const double set_entry_lower,
+                     const double set_entry_upper, bool strict) {
+  return highs_rs_increasing_set_ok_double(set.data(), HighsInt(set.size()),
+                                           set_entry_lower, set_entry_upper,
+                                           strict);
+}
+
+void sortSetData(const HighsInt num_entries, vector<HighsInt>& set,
+                 const double* data0, const double* data1, const double* data2,
+                 double* sorted_data0, double* sorted_data1,
+                 double* sorted_data2) {
+  const void* data[3] = {data0, data1, data2};
+  void* sorted[3] = {sorted_data0, sorted_data1, sorted_data2};
+  highs_rs_sort_set_data(num_entries, set.data(), data, sorted, 3,
+                         sizeof(double));
+}
+
+void sortSetData(const HighsInt num_entries, vector<HighsInt>& set,
+                 const HighsVarType* data0, HighsVarType* sorted_data0) {
+  const void* data[1] = {data0};
+  void* sorted[1] = {sorted_data0};
+  highs_rs_sort_set_data(num_entries, set.data(), data, sorted, 1,
+                         sizeof(HighsVarType));
+}
+#else
 
 void addToDecreasingHeap(HighsInt& n, HighsInt mx_n, vector<double>& heap_v,
                          vector<HighsInt>& heap_ix, const double v,
@@ -362,3 +472,4 @@ void sortSetData(const HighsInt num_entries, vector<HighsInt>& set,
     if (data0 != NULL) sorted_data0[ix] = data0[perm[1 + ix]];
   }
 }
+#endif

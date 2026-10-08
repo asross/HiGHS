@@ -5,3 +5,4 @@ pub mod dual_row;
 pub mod ekk;
 pub mod hekk;
 pub mod primal;
+pub mod report;

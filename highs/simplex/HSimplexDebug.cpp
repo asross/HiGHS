@@ -85,6 +85,7 @@ HighsDebugStatus debugDualChuzcFailQuad1(
   return HighsDebugStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
 HighsDebugStatus debugDualChuzcFailHeap(
     const HighsOptions& options, const HighsInt workCount,
     const std::vector<std::pair<HighsInt, double>>& workData,
@@ -148,3 +149,4 @@ HighsDebugStatus debugNonbasicFlagConsistent(const HighsOptions& options,
   return return_status;
 #endif
 }
+#endif

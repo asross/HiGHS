@@ -393,7 +393,7 @@ impl<'a> Dual<'a> {
     /// has not done so since
     fn flush_analysis_data(&mut self) {
         if self.analysis_data_pending {
-            (self.x.host.dual_report)(self.x.host.ctx, 0, &self.analysis_data, 0);
+            self.x.dual_report(0, &self.analysis_data, 0, self.e.sense);
             self.analysis_data_pending = false;
         }
     }
@@ -1234,7 +1234,7 @@ impl<'a> Dual<'a> {
 
     fn report_rebuild(&mut self, reason: i32) {
         self.record_analysis_data();
-        (self.x.host.dual_report)(self.x.host.ctx, 2, &self.analysis_data, reason);
+        self.x.dual_report(2, &self.analysis_data, reason, self.e.sense);
         self.analysis_data_pending = false;
     }
 
@@ -1305,7 +1305,7 @@ impl<'a> Dual<'a> {
     fn iteration_analysis(&mut self) {
         if self.x.iteration_report {
             self.record_analysis_data();
-            (self.x.host.dual_report)(self.x.host.ctx, 1, &self.analysis_data, 0);
+            self.x.dual_report(1, &self.analysis_data, 0, self.e.sense);
             self.analysis_data_pending = false;
         } else {
             self.record_analysis_data();

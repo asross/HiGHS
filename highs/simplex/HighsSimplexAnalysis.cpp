@@ -145,6 +145,20 @@ void HighsSimplexAnalysis::setup(const std::string lp_name, const HighsLp& lp,
   // choice has found nothing in primal (dual) simplex
   entering_variable = -1;
   pivotal_row_index = -1;
+#ifdef HIGHS_RUST
+  rs_report_.highs_run_time = 0;
+  rs_report_.last_user_log_time = -kHighsInf;
+  rs_report_.delta_user_log_time = 5e0;
+  rs_report_.timeless_log = options.timeless_log;
+  rs_report_.num_iteration_report_since_last_header = -1;
+  rs_report_.num_invert_report_since_last_header = -1;
+  rs_report_.entering_variable = -1;
+  rs_report_.pivotal_row_index = -1;
+  rs_report_.col_aq_density = 0;
+  rs_report_.row_ep_density = 0;
+  rs_report_.row_ap_density = 0;
+  rs_report_.row_DSE_density = 0;
+#endif
 
   // Set following averages to illegal values so that first average is
   // set equal to first value
@@ -610,6 +624,7 @@ void HighsSimplexAnalysis::afterTranStage(
   regressScatterData(stage.rhs_density_);
 }
 #else
+#ifndef HIGHS_RUST
 void HighsSimplexAnalysis::dualSteepestEdgeWeightError(
     const double computed_edge_weight, const double updated_edge_weight) {
 }
@@ -628,6 +643,7 @@ void HighsSimplexAnalysis::afterTranStage(
     const bool use_solve_sparse_new_HFactor_logic) {
 }
 #endif
+#endif
 
 void HighsSimplexAnalysis::simplexTimerStart(const HighsInt simplex_clock,
                                              const HighsInt thread_id) {
@@ -645,6 +661,7 @@ void HighsSimplexAnalysis::simplexTimerStop(const HighsInt simplex_clock,
       thread_simplex_clocks[thread_id].clock_[simplex_clock]);
 }
 
+#ifndef HIGHS_RUST
 bool HighsSimplexAnalysis::simplexTimerRunning(const HighsInt simplex_clock,
                                                const HighsInt thread_id) const {
   if (!analyse_simplex_time) return false;
@@ -678,6 +695,7 @@ HighsTimerClock* HighsSimplexAnalysis::getThreadFactorTimerClockPointer() {
   }
   return factor_timer_clock_pointer;
 }
+#endif
 
 #ifndef HIGHS_RUST  // simplex analysis is not in Crestline
 void HighsSimplexAnalysis::iterationRecord() {
@@ -1306,11 +1324,13 @@ void HighsSimplexAnalysis::reportInvertFormData() const {
          running_average_major_kernel_fill_factor);
 }
 #else
+#ifndef HIGHS_RUST
 void HighsSimplexAnalysis::iterationRecord() {
 }
 
 void HighsSimplexAnalysis::iterationRecordMajor() {
 }
+#endif
 
 void HighsSimplexAnalysis::operationRecordBefore(
     const HighsInt operation_type, const HVector& vector,
@@ -1330,23 +1350,29 @@ void HighsSimplexAnalysis::operationRecordAfter(const HighsInt operation_type,
                                                 const HighsInt result_count) {
 }
 
+#ifndef HIGHS_RUST
 void HighsSimplexAnalysis::summaryReport() {
 }
 
 void HighsSimplexAnalysis::summaryReportFactor() const {
 }
+#endif
 
 void HighsSimplexAnalysis::reportSimplexTimer() const {
 }
 
+#ifndef HIGHS_RUST
 void HighsSimplexAnalysis::reportFactorTimer() {
 }
+#endif
 
 void HighsSimplexAnalysis::updateInvertFormData(const HFactor& factor) {
 }
 
+#ifndef HIGHS_RUST
 void HighsSimplexAnalysis::reportInvertFormData() const {
 }
+#endif
 #endif
 
 void HighsSimplexAnalysis::iterationReport(const bool header) {
@@ -1507,11 +1533,13 @@ void HighsSimplexAnalysis::reportThreads(const bool header) {
 void HighsSimplexAnalysis::reportMulti(const bool header) {
 }
 
+#ifndef HIGHS_RUST
 void HighsSimplexAnalysis::reportOneDensity(const double density) {
 }
 
 void HighsSimplexAnalysis::printOneDensity(const double density) const {
 }
+#endif
 
 void HighsSimplexAnalysis::reportDensity(const bool header) {
 }
@@ -1589,9 +1617,11 @@ void HighsSimplexAnalysis::reportRunTime(const bool header,
 #endif
 }
 
+#ifndef HIGHS_RUST
 HighsInt HighsSimplexAnalysis::intLog10(const double v) const {
   return static_cast<HighsInt>(v > 0 ? -2.0 * log(v) / log(10.0) : 99);
 }
+#endif
 
 bool HighsSimplexAnalysis::dualAlgorithm() const {
   return (simplex_strategy == kSimplexStrategyDual ||

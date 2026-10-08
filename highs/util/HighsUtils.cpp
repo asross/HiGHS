@@ -57,6 +57,7 @@ HighsInt create(HighsIndexCollection& index_collection, const HighsInt* mask,
   return kIndexCollectionCreateOk;
 }
 
+#ifndef HIGHS_RUST
 void highsSparseTranspose(HighsInt numRow, HighsInt numCol,
                           const std::vector<HighsInt>& Astart,
                           const std::vector<HighsInt>& Aindex,
@@ -172,6 +173,7 @@ bool ok(const HighsIndexCollection& index_collection) {
   }
   return true;
 }
+#endif
 
 void limits(const HighsIndexCollection& index_collection, HighsInt& from_k,
             HighsInt& to_k) {
@@ -286,21 +288,25 @@ bool doubleUserDataNotNull(const HighsLogOptions& log_options,
   return null_data;
 }
 
+#ifndef HIGHS_RUST
 double getNorm2(const std::vector<double>& values) {
   double sum = 0;
   HighsInt values_size = values.size();
   for (HighsInt i = 0; i < values_size; i++) sum += values[i] * values[i];
   return sum;
 }
+#endif
 
 bool highs_isInfinity(double val) {
   if (val >= kHighsInf) return true;
   return false;
 }
 
+#ifndef HIGHS_RUST
 double highsRelativeDifference(const double v0, const double v1) {
   return fabs(v0 - v1) / std::max(v0, std::max(v1, 1.0));
 }
+#endif
 
 void analyseVectorValues(const HighsLogOptions* log_options,
                          const std::string& message, HighsInt vecDim,
@@ -696,6 +702,7 @@ void analyseMatrixSparsity(const HighsLogOptions& log_options,
               maxRowCount, numCol);
 }
 
+#ifndef HIGHS_RUST
 bool initialiseValueDistribution(const std::string& distribution_name,
                                  const std::string& value_name,
                                  const double min_value_limit,
@@ -960,6 +967,7 @@ bool logValueDistribution(const HighsLogOptions& log_options,
                 sum_report_count, sum_count);
   return true;
 }
+#endif
 
 bool initialiseScatterData(const HighsInt max_num_point,
                            HighsScatterData& scatter_data) {
@@ -982,6 +990,7 @@ bool initialiseScatterData(const HighsInt max_num_point,
   return true;
 }
 
+#ifndef HIGHS_RUST
 bool updateScatterData(const double value0, const double value1,
                        HighsScatterData& scatter_data) {
   if (value0 <= 0 || value1 <= 0) return false;
@@ -1230,6 +1239,7 @@ double nearestPowerOfTwoScale(const double value) {
   double scale = std::ldexp(1, exp_scale);
   return scale;
 }
+#endif
 
 void highsAssert(const bool assert_condition, const std::string& message) {
   if (assert_condition) return;
@@ -1245,6 +1255,7 @@ void highsAssert(const bool assert_condition, const std::string& message) {
 #endif
 }
 
+#ifndef HIGHS_RUST
 bool highsPause(const bool pause_condition, const std::string& message) {
   if (!pause_condition) return pause_condition;
   printf("Satisfying highsPause(\"%s\")\n", message.c_str());
@@ -1257,3 +1268,4 @@ bool highsPause(const bool pause_condition, const std::string& message) {
   }
   return pause_condition;
 }
+#endif

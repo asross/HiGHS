@@ -261,8 +261,6 @@ struct CostPerturbationReport {
   bool perturbed;
 };
 
-struct AnalysisData;
-struct PrimalReport;
 
 // Mirror of Host in rust/src/simplex/hekk.rs
 struct Host {
@@ -270,9 +268,6 @@ struct Host {
   void (*log)(void*, int channel, int type, const char* msg);
   double (*timer_read)(void*);
   bool (*interrupt)(void*);
-  void (*user_invert_report)(void*);
-  void (*dual_report)(void*, int kind, const AnalysisData*, int reason);
-  void (*primal_report)(void*, int kind, const PrimalReport*);
   void (*chuzc_fail)(void*, int kind, int work_count,
                      const std::pair<HighsInt, double>* work_data,
                      double select_theta, double remain_theta);
@@ -412,6 +407,7 @@ struct Hekk {
   bool dev_log;
   bool iteration_report;
   bool interrupt_callback;
+  SimplexReport* report;
 };
 
 }  // namespace highs_rs

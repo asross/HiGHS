@@ -182,10 +182,8 @@ class HEkk {
 #ifdef HIGHS_RUST
   // The view of the data for the Rust kernels (simplex/HEkkRust.cpp)
   highs_rs::Ekk rustView();
-  // HEkk::solve in Rust (rust/src/simplex/hekk.rs), used when no simplex
-  // analysis, timing or debugging is asked for and the strategy is serial:
-  // its set-up and wrap-up, and the C++ it calls, are in HEkkRustSolve.cpp
-  bool rustSolveEligible() const;
+  // HEkk::solve in Rust (rust/src/simplex/hekk.rs): its set-up and
+  // wrap-up, and the C++ it calls, are in HEkkRustSolve.cpp
   HighsStatus solveRust(const bool force_phase2);
   highs_rs::Hekk rustHekk(void* host_ctx, const bool draw_random_vectors);
   struct RustHost;

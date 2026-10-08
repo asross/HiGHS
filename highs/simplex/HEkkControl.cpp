@@ -47,6 +47,7 @@ void HEkk::updateOperationResultDensity(const double local_density,
             kRunningAverageMultiplier * local_density;
 }
 
+#ifndef HIGHS_RUST
 void HEkk::assessDSEWeightError(const double computed_edge_weight,
                                 const double updated_edge_weight) {
   // Compute the (relative) dual steepest edge weight error for
@@ -144,3 +145,4 @@ bool HEkk::switchToDevex() {
   }
   return switch_to_devex;
 }
+#endif

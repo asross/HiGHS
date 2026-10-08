@@ -26,8 +26,8 @@
 //!
 //! Only through [`Host`]: the log messages (formatted here with C's
 //! printf rules, see util/printf.rs, and printed by highsLogUser or
-//! highsLogDev); HighsSimplexAnalysis's iteration and rebuild reports
-//! (when the log level asks for them); the run clock (read once per
+//! highsLogDev; the simplex reports are formatted in report.rs); the run
+//! clock (read once per
 //! solver when there is a time limit); a user interrupt callback; and,
 //! rarely, the handling of a rank deficient initial basis and the debug
 //! check of a rank deficient INVERT.
@@ -38,13 +38,14 @@ use std::cell::Cell;
 use std::ffi::{c_char, c_void, CString};
 
 use super::basis_records::{BasisRecords, HotStart, REASON_ALL};
-use super::dual::{AnalysisData, Dual};
+use super::dual::Dual;
+use super::report::SimplexReport;
 use super::dual_row::WorkPair;
 use super::ekk::{
     choose_price_technique, update_operation_result_density, CEkk, CSlice,
     CostPerturbationReport, EkkView, SimplexStatus,
 };
-use super::primal::{Primal, PrimalReport};
+use super::primal::Primal;
 use crate::factor::BUILD_KERNEL_RETURN_TIMEOUT;
 use crate::hvector::{HVec, OwnedHVec, K_HIGHS_TINY, K_HIGHS_ZERO};
 use crate::sprintf;
@@ -156,14 +157,6 @@ pub struct Host {
     /// The user interrupt part of HEkk::bailout: whether to bail out
     /// (setting solve_bailout_ and model_status_)
     pub interrupt: extern "C" fn(Ctx) -> bool,
-    /// analysis_.userInvertReport(true)
-    pub user_invert_report: extern "C" fn(Ctx),
-    /// HEkkDual's analysis data (kind 0), iteration report (1) or rebuild
-    /// report (2, with the reason)
-    pub dual_report: extern "C" fn(Ctx, i32, *const AnalysisData, i32),
-    /// HEkkPrimal's iteration report (0), rebuild report (1) or analysis
-    /// data (2)
-    pub primal_report: extern "C" fn(Ctx, i32, *const PrimalReport),
     /// debugDualChuzcFailQuad0 (kind 1) or Quad1 (2)
     pub chuzc_fail: extern "C" fn(Ctx, i32, i32, *const WorkPair, f64, f64),
     /// The handling of a rank deficient initial basis in
@@ -323,6 +316,8 @@ pub struct CHekk {
     pub iteration_report: bool,
     /// Whether a user callback for simplex interrupts is active
     pub interrupt_callback: bool,
+    /// HighsSimplexAnalysis's report data and header counters
+    pub report: Shared<SimplexReport>,
 }
 
 /// Whether highsLogDev prints a message of type `t` at log level `level`
@@ -1586,7 +1581,7 @@ pub fn return_from_solve(e: &mut EkkView, x: &CHekk, return_status: i32) -> i32 
     });
     compute_primal_objective_value(e);
     if x.log_dev_level == 0 {
-        (x.host.user_invert_report)(x.host.ctx);
+        x.user_invert_report(true);
     }
     return_status
 }

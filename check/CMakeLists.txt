@@ -95,6 +95,9 @@ if ((NOT FAST_BUILD OR ALL_TESTS) AND NOT (BUILD_EXTRA_UNIT_ONLY))
       # (rust/PORTING.md, "Crestline's scope"): their tests are skipped
       list(REMOVE_ITEM TEST_SOURCES TestICrash.cpp TestMultiObjective.cpp
         TestPdlpHi.cpp)
+      # HSet is only used by the C++ primal simplex, which is not built
+      # (rust/src/util/hset.rs is the Rust one)
+      list(REMOVE_ITEM TEST_SOURCES TestHSet.cpp)
   endif()
 
   set(OPT_LEVEL_CHANGED OFF)

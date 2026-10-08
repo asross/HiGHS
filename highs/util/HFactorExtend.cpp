@@ -15,6 +15,7 @@
 
 using std::fabs;
 
+#ifndef HIGHS_RUST
 void HFactor::addCols(const HighsInt num_new_col) {
   invalidAMatrixAction();
   num_col += num_new_col;
@@ -24,6 +25,7 @@ void HFactor::deleteNonbasicCols(const HighsInt num_deleted_col) {
   invalidAMatrixAction();
   num_col -= num_deleted_col;
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HFactor::addRows(const HighsSparseMatrix* ar_matrix) {

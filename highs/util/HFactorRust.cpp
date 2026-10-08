@@ -239,6 +239,7 @@ RefactorInfo HFactor::getRefactorInfo() const {
   return refactor_info;
 }
 
+#ifndef HIGHS_RUST
 void HFactor::setRefactorInfo(const RefactorInfo& refactor_info) {
   const int n = std::min({refactor_info.pivot_row.size(),
                           refactor_info.pivot_var.size(),
@@ -248,6 +249,7 @@ void HFactor::setRefactorInfo(const RefactorInfo& refactor_info) {
       refactor_info.pivot_var.data(), refactor_info.pivot_type.data(), n,
       refactor_info.build_synthetic_tick);
 }
+#endif
 
 void HFactor::clearRefactorInfo() { highs_rs_factor_refactor_clear(rs_.p); }
 
@@ -295,6 +297,7 @@ void HFactor::update(HVector* aq, HVector* ep, HighsInt* iRow, HighsInt* hint) {
                          num_basic);
 }
 
+#ifndef HIGHS_RUST
 void HFactor::addRows(const HighsSparseMatrix* ar_matrix) {
   invalidAMatrixAction();
   assert(kExtendInvertWhenAddingRows);
@@ -304,6 +307,7 @@ void HFactor::addRows(const HighsSparseMatrix* ar_matrix) {
                            ar_matrix->value_.data(), num_new_row);
   num_row += num_new_row;
 }
+#endif
 
 InvertibleRepresentation HFactor::getInvert() const {
   void* p = rs_.p;
@@ -370,8 +374,10 @@ void HFactor::setInvert(const InvertibleRepresentation& invert) {
   highs_rs_factor_check_indices(p);
 }
 
+#ifndef HIGHS_RUST
 // The factor's data is in Rust: no reports
 void HFactor::reportLu(const HighsInt, const bool) const {}
 void HFactor::reportAsm() const {}
+#endif
 
 #endif  // HIGHS_RUST

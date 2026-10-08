@@ -50,6 +50,28 @@ if(HIGHS_RUST)
     simplex/HEkkDualMulti.cpp
     test_kkt/DevKkt.cpp
     test_kkt/KktCh2.cpp)
+  # The simplex solve is Rust (rust/src/simplex): the C++ dual and primal
+  # simplex were only the fallback for the product form update, which
+  # nothing sets up (it served the deprecated frozen bases)
+  list(REMOVE_ITEM highs_sources
+    simplex/HEkkDual.cpp
+    simplex/HEkkDualRHS.cpp
+    simplex/HEkkDualRHSRust.cpp
+    simplex/HEkkDualRow.cpp
+    simplex/HEkkDualRowRust.cpp
+    simplex/HEkkPrimal.cpp
+    simplex/HSimplexNlaProductForm.cpp
+    # unused once the C++ simplex is gone (HighsLinearSumBounds: presolve
+    # and the MIP domain are Rust)
+    simplex/HEkkInterface.cpp
+    simplex/HSimplexReport.cpp
+    util/HSet.cpp
+    util/HighsLinearSumBounds.cpp)
+  list(REMOVE_ITEM highs_headers
+    simplex/HEkkDual.h
+    simplex/HEkkDualRHS.h
+    simplex/HEkkDualRow.h
+    simplex/HEkkPrimal.h)
   list(REMOVE_ITEM highs_headers
     interfaces/highs_c_api.h
     pdlp/HiPdlpWrapper.h

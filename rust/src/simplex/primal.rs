@@ -24,6 +24,7 @@ use crate::simplex::hekk::{
 use crate::sprintf;
 use crate::util::hset::HSet;
 use crate::util::random::HighsRandom;
+use crate::util::sort::{add_to_decreasing_heap, sort_decreasing_heap};
 
 const K_HIGHS_INF: f64 = f64::INFINITY;
 const K_HYPER_PRICE_DENSITY: f64 = 0.1;
@@ -133,25 +134,6 @@ pub enum Op {
 const REPORT_ITERATION: i32 = 0;
 const REPORT_REBUILD: i32 = 1;
 const REPORT_ANALYSIS_DATA: i32 = 2;
-
-/// The data of HEkkPrimal::iterationAnalysisData (and reportRebuild's
-/// reason) for HighsSimplexAnalysis
-#[repr(C)]
-pub struct PrimalReport {
-    pub solve_phase: i32,
-    pub edge_weight_mode: i32,
-    pub num_devex_iterations: i32,
-    pub row_out: i32,
-    pub variable_out: i32,
-    pub variable_in: i32,
-    pub rebuild_reason: i32,
-    pub reason_for_rebuild: i32,
-    pub theta_primal: f64,
-    pub theta_dual: f64,
-    pub alpha_col: f64,
-    pub alpha_row: f64,
-    pub numerical_trouble: f64,
-}
 
 /// Log messages: see [`Primal::message`]
 #[repr(i32)]
@@ -270,93 +252,6 @@ pub struct Primal {
 }
 
 const MAX_NUM_HYPER_CHUZC_CANDIDATES: i32 = 50;
-
-/// addToDecreasingHeap (util/HighsSort.cpp)
-fn add_to_decreasing_heap(n: &mut i32, mx_n: i32, heap_v: &mut [f64], heap_ix: &mut [i32], v: f64, ix: i32) {
-    if *n < mx_n {
-        // The heap is not full so put the new value at the bottom of the
-        // heap and let it rise up to its correct level
-        *n += 1;
-        let mut cd_p = *n as usize;
-        let mut pa_p = cd_p / 2;
-        while pa_p > 0 && v < heap_v[pa_p] {
-            heap_v[cd_p] = heap_v[pa_p];
-            heap_ix[cd_p] = heap_ix[pa_p];
-            cd_p = pa_p;
-            pa_p /= 2;
-        }
-        heap_v[cd_p] = v;
-        heap_ix[cd_p] = ix;
-    } else if v > heap_v[1] {
-        // The heap is full so replace the least value with the new value
-        // and let it sink down to its correct level
-        let n = *n as usize;
-        let mut pa_p = 1;
-        let mut cd_p = pa_p + pa_p;
-        while cd_p <= n {
-            if cd_p < n && heap_v[cd_p] > heap_v[cd_p + 1] {
-                cd_p += 1;
-            }
-            if v > heap_v[cd_p] {
-                heap_v[pa_p] = heap_v[cd_p];
-                heap_ix[pa_p] = heap_ix[cd_p];
-                pa_p = cd_p;
-                cd_p += cd_p;
-                continue;
-            }
-            break;
-        }
-        heap_v[pa_p] = v;
-        heap_ix[pa_p] = ix;
-    }
-    // Set heap_ix[0]=1 to indicate that the values form a heap
-    heap_ix[0] = 1;
-}
-
-/// sortDecreasingHeap (util/HighsSort.cpp)
-fn sort_decreasing_heap(n: i32, heap_v: &mut [f64], heap_ix: &mut [i32]) {
-    if n <= 1 {
-        return;
-    }
-    let n = n as usize;
-    let (mut fo_p, mut srt_p) = if heap_ix[0] != 1 { (n / 2 + 1, n) } else { (1, n) };
-    loop {
-        let (v, ix);
-        if fo_p > 1 {
-            fo_p -= 1;
-            v = heap_v[fo_p];
-            ix = heap_ix[fo_p];
-        } else {
-            v = heap_v[srt_p];
-            ix = heap_ix[srt_p];
-            heap_v[srt_p] = heap_v[1];
-            heap_ix[srt_p] = heap_ix[1];
-            srt_p -= 1;
-            if srt_p == 1 {
-                heap_v[1] = v;
-                heap_ix[1] = ix;
-                return;
-            }
-        }
-        let mut pa_p = fo_p;
-        let mut cd_p = fo_p + fo_p;
-        while cd_p <= srt_p {
-            if cd_p < srt_p && heap_v[cd_p] > heap_v[cd_p + 1] {
-                cd_p += 1;
-            }
-            if v > heap_v[cd_p] {
-                heap_v[pa_p] = heap_v[cd_p];
-                heap_ix[pa_p] = heap_ix[cd_p];
-                pa_p = cd_p;
-                cd_p += cd_p;
-                continue;
-            }
-            break;
-        }
-        heap_v[pa_p] = v;
-        heap_ix[pa_p] = ix;
-    }
-}
 
 /// HVectorBase::copy
 fn copy_hvec(to: &mut OwnedHVec, from: &OwnedHVec) {
@@ -613,24 +508,27 @@ impl Primal {
         }
     }
 
+    /// HEkkPrimal::iterationAnalysisData and its iteration or rebuild
+    /// report (`CHekk::primal_report`)
     fn report(&self, kind: i32, reason_for_rebuild: i32) {
         let solve_phase = if kind == REPORT_ANALYSIS_DATA { self.analysed_phase } else { self.solve_phase };
-        let r = PrimalReport {
+        let e = &self.ekk;
+        self.x.primal_report(
+            kind,
             solve_phase,
-            edge_weight_mode: self.edge_weight_mode,
-            num_devex_iterations: self.num_devex_iterations,
-            row_out: self.row_out,
-            variable_out: self.variable_out,
-            variable_in: self.variable_in,
-            rebuild_reason: self.rebuild_reason,
+            self.row_out,
+            self.variable_in,
+            self.rebuild_reason,
             reason_for_rebuild,
-            theta_primal: self.theta_primal,
-            theta_dual: self.theta_dual,
-            alpha_col: self.alpha_col,
-            alpha_row: self.alpha_row,
-            numerical_trouble: self.numerical_trouble,
-        };
-        (self.x.host.primal_report)(self.x.host.ctx, kind, &r);
+            *e.updated_primal_objective_value,
+            (
+                *e.num_primal_infeasibilities,
+                *e.sum_primal_infeasibilities,
+                *e.num_dual_infeasibilities,
+                *e.sum_dual_infeasibilities,
+            ),
+            [*e.col_aq_density, *e.row_ep_density, *e.row_ap_density, *e.row_dse_density],
+        );
     }
 
     fn report_rebuild(&mut self, reason_for_rebuild: i32) {
@@ -2845,23 +2743,4 @@ fn row_ep_2norm_in_scaled_space(e: &EkkView, i_row: usize, row_ep: &HVec) -> f64
         };
     }
     row_ep_2norm
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn decreasing_heap_keeps_largest_sorted() {
-        let mx = 5;
-        let mut v = vec![0.0; mx as usize + 1];
-        let mut ix = vec![0; mx as usize + 1];
-        let mut n = 0;
-        for (k, x) in [3.0, 1.0, 4.0, 1.5, 5.0, 9.0, 2.0, 6.0].iter().enumerate() {
-            add_to_decreasing_heap(&mut n, mx, &mut v, &mut ix, *x, k as i32);
-        }
-        sort_decreasing_heap(n, &mut v, &mut ix);
-        assert_eq!(&v[1..], &[9.0, 6.0, 5.0, 4.0, 3.0]);
-        assert_eq!(&ix[1..], &[5, 7, 4, 2, 0]);
-    }
 }

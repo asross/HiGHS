@@ -15,8 +15,10 @@
 #include "lp_data/HighsModelUtils.h"
 #include "lp_data/HighsSolutionDebug.h"
 #include "parallel/HighsParallel.h"
+#ifndef HIGHS_RUST
 #include "simplex/HEkkDual.h"
 #include "simplex/HEkkPrimal.h"
+#endif
 #include "simplex/HEkkRust.h"
 #include "simplex/HSimplexDebug.h"
 #include "simplex/HSimplexReport.h"
@@ -252,6 +254,7 @@ void HEkk::clearEkkDataInfo() {
   info.num_basic_logicals = 0;
 }
 
+#ifndef HIGHS_RUST
 void HEkk::clearEkkControlInfo() {
   HighsSimplexInfo& info = this->info_;
   info.control_iteration_count0 = 0;
@@ -277,6 +280,7 @@ void HEkk::clearEkkNlaInfo() {
   info.factor_pivot_threshold = 0;
   info.update_limit = 0;
 }
+#endif
 
 void HEkk::invalidate() {
   this->status_.initialised_for_new_lp = false;
@@ -396,6 +400,7 @@ void HEkk::setNlaPointersForLpAndScale(const HighsLp& lp) {
   simplex_nla_.setLpAndScalePointers(&lp);
 }
 
+#ifndef HIGHS_RUST
 void HEkk::setNlaPointersForTrans(const HighsLp& lp) {
   assert(status_.has_nla);
   assert(status_.has_basis);
@@ -408,6 +413,7 @@ void HEkk::setNlaRefactorInfo() {
   refactor_info.use = true;
   simplex_nla_.factor_.setRefactorInfo(refactor_info);
 }
+#endif
 
 void HEkk::btran(HVector& rhs, const double expected_density) {
   assert(status_.has_nla);
@@ -1030,8 +1036,10 @@ HighsStatus HEkk::solve(const bool force_phase2) {
   initialiseAnalysis();
   initialiseControl();
 #ifdef HIGHS_RUST
-  if (rustSolveEligible()) return solveRust(force_phase2);
-#endif
+  // The solve is Rust (rust/src/simplex/hekk.rs); the C++ dual and primal
+  // simplex are not built
+  return solveRust(force_phase2);
+#else
 
   if (analysis_.analyse_simplex_time)
     analysis_.simplexTimerStart(SimplexTotalClock);
@@ -1146,6 +1154,7 @@ HighsStatus HEkk::solve(const bool force_phase2) {
   if (analysis_.analyse_factor_data) analysis_.reportInvertFormData();
   if (analysis_.analyse_factor_time) analysis_.reportFactorTimer();
   return returnFromEkkSolve(return_status);
+#endif
 }
 
 HighsStatus HEkk::setBasis() {
@@ -1640,6 +1649,7 @@ void HEkk::initialiseEkk() {
   status_.initialised_for_new_lp = true;
 }
 
+#ifndef HIGHS_RUST
 bool HEkk::isUnconstrainedLp() const {
   bool is_unconstrained_lp = lp_.num_row_ <= 0;
   if (is_unconstrained_lp)
@@ -1701,6 +1711,7 @@ void HEkk::initialiseForSolve() {
   if (primal_feasible && dual_feasible)
     model_status_ = HighsModelStatus::kOptimal;
 }
+#endif
 
 void HEkk::setSimplexOptions() {
   // Copy values of HighsOptions for the simplex solver
@@ -1774,6 +1785,7 @@ void HEkk::initialiseSimplexLpRandomVectors() {
   }
 }
 
+#ifndef HIGHS_RUST
 void HEkk::chooseSimplexStrategyThreads(const HighsOptions& options,
                                         HighsSimplexInfo& info) {
   // Ensure that this is not called with an optimal basis
@@ -2117,6 +2129,7 @@ bool HEkk::rebuildRefactor(HighsInt rebuild_reason) {
   }
   return refactor;
 }
+#endif
 
 HighsInt HEkk::computeFactor() {
   assert(status_.has_nla);
@@ -2162,6 +2175,7 @@ HighsInt HEkk::computeFactor() {
   return rank_deficiency;
 }
 
+#ifndef HIGHS_RUST
 void HEkk::computeDualSteepestEdgeWeights(const bool initial) {
   if (analysis_.analyse_simplex_time) {
     analysis_.simplexTimerStart(SimplexIzDseWtClock);
@@ -2212,6 +2226,7 @@ double HEkk::computeDualSteepestEdgeWeight(const HighsInt iRow,
   updateOperationResultDensity(local_row_ep_density, info_.row_ep_density);
   return row_ep.norm2();
 }
+#endif
 
 // The DSE weight of a row is a property of its basic variable, so
 // scatter the weights of the first num_weighted_row rows over the
@@ -2250,6 +2265,7 @@ std::vector<double> HEkk::scatterDualEdgeWeights(
   return saved;
 }
 
+#ifndef HIGHS_RUST
 // Set the DSE weights from saved_dual_edge_weight_ if the basis is the
 // saved one up to added/deleted logicals, so that they are exact:
 // computing those of new rows' logicals. A basis that differs in other
@@ -2486,6 +2502,7 @@ void HEkk::updateDualDevexWeights(const HVector* column,
   }
   analysis_.simplexTimerStop(DevexUpdateWeightClock);
 }
+#endif
 
 void HEkk::resetSyntheticClock() {
   this->build_synthetic_tick_ = this->simplex_nla_.build_synthetic_tick_;
@@ -2539,6 +2556,7 @@ std::string HEkk::simplexStrategyToString(
   return "Unknown";
 }
 
+#ifndef HIGHS_RUST
 void HEkk::zeroBasicDuals() {
 #ifdef HIGHS_RUST
   const highs_rs::Ekk view = rustView();
@@ -2548,6 +2566,7 @@ void HEkk::zeroBasicDuals() {
   for (HighsInt iRow = 0; iRow < lp_.num_row_; iRow++)
     info_.workDual_[basis_.basicIndex_[iRow]] = 0;
 }
+#endif
 
 void HEkk::setNonbasicMove() {
   const bool have_solution = false;
@@ -2653,6 +2672,7 @@ void HEkk::allocateWorkAndBaseArrays() {
   info_.baseValue_.resize(lp_.num_row_);
 }
 
+#ifndef HIGHS_RUST
 void HEkk::initialiseLpColBound() {
 #ifdef HIGHS_RUST
   const highs_rs::Ekk view = rustView();
@@ -3115,6 +3135,7 @@ void HEkk::pivotColumnFtran(const HighsInt iCol, HVector& col_aq) {
   updateOperationResultDensity(local_col_aq_density, info_.col_aq_density);
   analysis_.simplexTimerStop(FtranClock);
 }
+#endif
 
 void HEkk::unitBtran(const HighsInt iRow, HVector& row_ep) {
   analysis_.simplexTimerStart(BtranClock);
@@ -3146,6 +3167,7 @@ void HEkk::unitBtran(const HighsInt iRow, HVector& row_ep) {
   analysis_.simplexTimerStop(BtranClock);
 }
 
+#ifndef HIGHS_RUST
 void HEkk::fullBtran(HVector& buffer) {
   // Performs BTRAN on the buffer supplied. Make sure that
   // buffer.count is large (>lp_.num_row_ to be sure) rather
@@ -3512,7 +3534,7 @@ void HEkk::updateFactor(HVector* column, HVector* row_ep, HighsInt* iRow,
                         HighsInt* hint) {
   analysis_.simplexTimerStart(UpdateFactorClock);
 #ifdef HIGHS_RUST
-  if (!simplex_nla_.update_.valid_ && !column->next) {
+  if (!column->next) {
     simplex_nla_.factor_.clearRefactorInfo();
     {
       const highs_rs::Ekk view = rustView();
@@ -3983,6 +4005,7 @@ bool HEkk::bailout() {
   }
   return solve_bailout_;
 }
+#endif
 
 HighsStatus HEkk::returnFromEkkSolve(const HighsStatus return_status) {
   // Saved weights not used by this solve are stale for the next one
@@ -4006,13 +4029,22 @@ HighsStatus HEkk::returnFromEkkSolve(const HighsStatus return_status) {
   simplex_stats_.last_invert_num_el = simplex_nla_.factor_.invert_num_el;
   simplex_stats_.last_factored_basis_num_el =
       simplex_nla_.factor_.basis_matrix_num_el;
+#ifdef HIGHS_RUST
+  const highs_rs::SimplexReport& report = analysis_.rs_report_;
+  simplex_stats_.col_aq_density = report.col_aq_density;
+  simplex_stats_.row_ep_density = report.row_ep_density;
+  simplex_stats_.row_ap_density = report.row_ap_density;
+  simplex_stats_.row_DSE_density = report.row_DSE_density;
+#else
   simplex_stats_.col_aq_density = analysis_.col_aq_density;
   simplex_stats_.row_ep_density = analysis_.row_ep_density;
   simplex_stats_.row_ap_density = analysis_.row_ap_density;
   simplex_stats_.row_DSE_density = analysis_.row_DSE_density;
+#endif
   return return_status;
 }
 
+#ifndef HIGHS_RUST
 HighsStatus HEkk::returnFromSolve(const HighsStatus return_status) {
   // Always called before returning from HEkkPrimal/Dual::solve()
   if (solve_bailout_) {
@@ -4161,6 +4193,7 @@ HighsStatus HEkk::returnFromSolve(const HighsStatus return_status) {
   }
   return return_status;
 }
+#endif
 
 double HEkk::computeBasisCondition(const HighsLp& lp, const bool exact,
                                    const bool report) const {
@@ -4355,6 +4388,7 @@ HighsStatus HEkk::getIterate() {
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
 double HEkk::factorSolveError() {
   // Cheap assessment of factor accuracy.
   //
@@ -4434,17 +4468,20 @@ double HEkk::factorSolveError() {
   double solution_error = max(ftran_solution_error, btran_solution_error);
   return solution_error;
 }
+#endif
 
 #ifdef HIGHS_RUST
 void HEkk::clearBadBasisChange(const BadBasisChangeReason reason) {
   highs_rs_bad_basis_clear(basis_records_.p, (int)reason);
 }
 
+#ifndef HIGHS_RUST
 void HEkk::updateBadBasisChange(const HVector& col_aq, double theta_primal) {
   highs_rs_bad_basis_update(basis_records_.p, col_aq.array.data(),
                             (int)col_aq.array.size(), theta_primal,
                             options_->primal_feasibility_tolerance);
 }
+#endif
 
 HighsInt HEkk::addBadBasisChange(const HighsInt row_out,
                                  const HighsInt variable_out,
@@ -4459,6 +4496,7 @@ HighsInt HEkk::addBadBasisChange(const HighsInt row_out,
                                 variable_in, (int)reason, taboo);
 }
 
+#ifndef HIGHS_RUST
 void HEkk::clearBadBasisChangeTabooFlag() {
   highs_rs_bad_basis_clear_taboo_flag(basis_records_.p);
 }
@@ -4489,6 +4527,7 @@ void HEkk::unapplyTabooVariableIn(vector<double>& values) {
   highs_rs_bad_basis_unapply_taboo(basis_records_.p, values.data(),
                                    (int)values.size(), 1);
 }
+#endif
 #else
 void HEkk::clearBadBasisChange(const BadBasisChangeReason reason) {
   if (reason == BadBasisChangeReason::kAll) {
@@ -4615,12 +4654,14 @@ void HEkk::unapplyTabooVariableIn(vector<double>& values) {
 
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 bool HEkk::logicalBasis() const {
   for (HighsInt iRow = 0; iRow < this->lp_.num_row_; iRow++) {
     if (basis_.basicIndex_[iRow] < this->lp_.num_col_) return false;
   }
   return true;
 }
+#endif
 
 bool HEkk::proofOfPrimalInfeasibility() {
   // To be called from outside HEkk when row_ep is not known
@@ -4857,6 +4898,7 @@ bool HEkk::proofOfPrimalInfeasibility(HVector& row_ep, const HighsInt move_out,
   return proof_of_primal_infeasibility;
 }
 
+#ifndef HIGHS_RUST
 double HEkk::getValueScale(const HighsInt count,
                            const double* value) const {
   if (count <= 0) return 1;
@@ -4865,6 +4907,7 @@ double HEkk::getValueScale(const HighsInt count,
     max_abs_value = std::max(fabs(value[iX]), max_abs_value);
   return nearestPowerOfTwoScale(max_abs_value);
 }
+#endif
 
 double HEkk::getMaxAbsRowValue(HighsInt row) {
   if (!status_.has_ar_matrix) initialisePartitionedRowwiseMatrix();
@@ -4889,6 +4932,7 @@ double HEkk::getMaxAbsRowValue(HighsInt row) {
   return val;
 }
 
+#ifndef HIGHS_RUST
 void HEkk::unitBtranIterativeRefinement(const HighsInt row_out,
                                         HVector& row_ep) {
   // Perform an iteration of refinement
@@ -4969,6 +5013,7 @@ void HEkk::unitBtranResidual(const HighsInt row_out, const HVector& row_ep,
     residual_norm = max(fabs(residual.array[iRow]), residual_norm);
   }
 }
+#endif
 
 void HighsSimplexStats::report(FILE* file, std::string message) const {
   fprintf(file, "\nSimplex stats: %s\n", message.c_str());

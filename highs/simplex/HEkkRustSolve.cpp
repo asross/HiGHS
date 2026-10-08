@@ -22,63 +22,6 @@
 #include "simplex/HEkkRust.h"
 #include "simplex/HSimplexDebug.h"
 
-namespace highs_rs {
-// Mirrors of the #[repr(C)] structs in rust/src/simplex/dual.rs and
-// primal.rs
-struct DualState {
-  int solve_phase;
-  int edge_weight_mode;
-  int num_devex_iterations;
-  int row_out;
-  int variable_out;
-  int variable_in;
-  int rebuild_reason;
-  double delta_primal;
-  double theta_primal;
-  double theta_dual;
-  double alpha_col;
-  double alpha_row;
-  double numerical_trouble;
-};
-
-struct AnalysisData {
-  DualState state;
-  int iteration_count;
-  double factor_pivot_threshold;
-  double edge_weight_error;
-  double updated_dual_objective_value;
-  int num_primal_infeasibilities;
-  double sum_primal_infeasibilities;
-  int num_dual_infeasibilities;
-  double sum_dual_infeasibilities;
-  double col_aq_density;
-  double row_ep_density;
-  double row_ap_density;
-  double row_dse_density;
-  double col_bfrt_density;
-  double primal_col_density;
-  double dual_col_density;
-  int num_costly_dse_iteration;
-  double costly_dse_measure;
-};
-
-struct PrimalReport {
-  int solve_phase;
-  int edge_weight_mode;
-  int num_devex_iterations;
-  int row_out;
-  int variable_out;
-  int variable_in;
-  int rebuild_reason;
-  int reason_for_rebuild;
-  double theta_primal;
-  double theta_dual;
-  double alpha_col;
-  double alpha_row;
-  double numerical_trouble;
-};
-}  // namespace highs_rs
-
 static_assert(sizeof(HighsModelStatus) == sizeof(int),
               "model_status_ is shared with Rust as an i32");
 static_assert(sizeof(SimplexAlgorithm) == sizeof(int),
@@ -87,6 +30,8 @@ static_assert(sizeof(HighsRandom) == sizeof(uint64_t),
               "random_ is shared with Rust as its 64-bit state");
 static_assert(sizeof(std::pair<HighsInt, double>) == 16,
               "workData is shared with Rust as #[repr(C)] (i32, f64)");
+static_assert(sizeof(highs_rs::SimplexReport) == 128,
+              "SimplexReport is #[repr(C)] in rust/src/simplex/report.rs");
 
 // The context of the C++ that the Rust solve calls
 struct HEkk::RustHost {
@@ -131,127 +76,6 @@ struct HEkk::RustHost {
       ekk.model_status_ = HighsModelStatus::kInterrupt;
     }
     return ekk.solve_bailout_;
-  }
-
-  static void userInvertReport(void* ctx) {
-    const bool force = true;
-    e(ctx).analysis_.userInvertReport(force);
-  }
-
-  // HEkkDual::iterationAnalysisData with the data of the Rust driver, and
-  // its iteration (kind 1) or rebuild (kind 2) report
-  static void dualReport(void* ctx, int kind, const highs_rs::AnalysisData* s,
-                         int reason) {
-    HEkk& ekk = e(ctx);
-    HighsSimplexAnalysis& analysis = ekk.analysis_;
-    const highs_rs::DualState& d = s->state;
-    const double cost_scale_factor = pow(2.0, -ekk.options_->cost_scale_factor);
-    const HighsSimplexInfo& info = ekk.info_;
-    analysis.simplex_strategy = info.simplex_strategy;
-    analysis.edge_weight_mode = static_cast<EdgeWeightMode>(d.edge_weight_mode);
-    analysis.solve_phase = d.solve_phase;
-    analysis.simplex_iteration_count = s->iteration_count;
-    analysis.devex_iteration_count = d.num_devex_iterations;
-    analysis.pivotal_row_index = d.row_out;
-    analysis.leaving_variable = d.variable_out;
-    analysis.entering_variable = d.variable_in;
-    analysis.rebuild_reason = d.rebuild_reason;
-    analysis.reduced_rhs_value = 0;
-    analysis.reduced_cost_value = 0;
-    analysis.edge_weight = 0;
-    analysis.primal_delta = d.delta_primal;
-    analysis.primal_step = d.theta_primal;
-    analysis.dual_step = d.theta_dual * cost_scale_factor;
-    analysis.pivot_value_from_column = d.alpha_col;
-    analysis.pivot_value_from_row = d.alpha_row;
-    analysis.factor_pivot_threshold = s->factor_pivot_threshold;
-    analysis.numerical_trouble = d.numerical_trouble;
-    analysis.edge_weight_error = s->edge_weight_error;
-    analysis.objective_value = s->updated_dual_objective_value;
-    if (d.solve_phase == kSolvePhase2)
-      analysis.objective_value *= (HighsInt)ekk.lp_.sense_;
-    analysis.num_primal_infeasibility = s->num_primal_infeasibilities;
-    analysis.sum_primal_infeasibility = s->sum_primal_infeasibilities;
-    analysis.num_dual_infeasibility = s->num_dual_infeasibilities;
-    analysis.sum_dual_infeasibility = s->sum_dual_infeasibilities;
-    analysis.col_aq_density = s->col_aq_density;
-    analysis.row_ep_density = s->row_ep_density;
-    analysis.row_ap_density = s->row_ap_density;
-    analysis.row_DSE_density = s->row_dse_density;
-    analysis.col_basic_feasibility_change_density =
-        info.col_basic_feasibility_change_density;
-    analysis.row_basic_feasibility_change_density =
-        info.row_basic_feasibility_change_density;
-    analysis.col_BFRT_density = s->col_bfrt_density;
-    analysis.primal_col_density = s->primal_col_density;
-    analysis.dual_col_density = s->dual_col_density;
-    analysis.num_costly_DSE_iteration = s->num_costly_dse_iteration;
-    analysis.costly_DSE_measure = s->costly_dse_measure;
-    if (kind == 1) {
-      analysis.iterationReport();
-    } else if (kind == 2) {
-      analysis.rebuild_reason = reason;
-      analysis.rebuild_reason_string = ekk.rebuildReason(reason);
-      if (ekk.options_->output_flag) analysis.invertReport();
-    }
-  }
-
-  // HEkkPrimal::iterationAnalysisData with the data of the Rust solver,
-  // and its iteration (kind 0) or rebuild (kind 1) report
-  static void primalReport(void* ctx, int kind,
-                           const highs_rs::PrimalReport* r) {
-    HEkk& ekk = e(ctx);
-    HighsSimplexAnalysis& analysis = ekk.analysis_;
-    const HighsSimplexInfo& info = ekk.info_;
-    analysis.simplex_strategy = kSimplexStrategyPrimal;
-    analysis.edge_weight_mode = static_cast<EdgeWeightMode>(r->edge_weight_mode);
-    analysis.solve_phase = r->solve_phase;
-    analysis.simplex_iteration_count = ekk.iteration_count_;
-    analysis.devex_iteration_count = r->num_devex_iterations;
-    analysis.pivotal_row_index = r->row_out;
-    analysis.leaving_variable = r->variable_out;
-    analysis.entering_variable = r->variable_in;
-    analysis.rebuild_reason = r->rebuild_reason;
-    analysis.reduced_rhs_value = 0;
-    analysis.reduced_cost_value = 0;
-    analysis.edge_weight = 0;
-    analysis.primal_delta = 0;
-    analysis.primal_step = r->theta_primal;
-    analysis.dual_step = r->theta_dual;
-    analysis.pivot_value_from_column = r->alpha_col;
-    analysis.pivot_value_from_row = r->alpha_row;
-    analysis.numerical_trouble = r->numerical_trouble;
-    analysis.edge_weight_error = ekk.edge_weight_error_;
-    analysis.objective_value = info.updated_primal_objective_value;
-    analysis.num_primal_infeasibility = info.num_primal_infeasibilities;
-    analysis.num_dual_infeasibility = info.num_dual_infeasibilities;
-    analysis.sum_primal_infeasibility = info.sum_primal_infeasibilities;
-    analysis.sum_dual_infeasibility = info.sum_dual_infeasibilities;
-    if ((analysis.edge_weight_mode == EdgeWeightMode::kDevex) &&
-        (r->num_devex_iterations == 0))
-      analysis.num_devex_framework++;
-    analysis.col_aq_density = info.col_aq_density;
-    analysis.row_ep_density = info.row_ep_density;
-    analysis.row_ap_density = info.row_ap_density;
-    analysis.row_DSE_density = info.row_DSE_density;
-    analysis.col_steepest_edge_density = info.col_steepest_edge_density;
-    analysis.col_basic_feasibility_change_density =
-        info.col_basic_feasibility_change_density;
-    analysis.row_basic_feasibility_change_density =
-        info.row_basic_feasibility_change_density;
-    analysis.col_BFRT_density = info.col_BFRT_density;
-    analysis.primal_col_density = info.primal_col_density;
-    analysis.dual_col_density = info.dual_col_density;
-    analysis.num_costly_DSE_iteration = info.num_costly_DSE_iteration;
-    analysis.costly_DSE_measure = info.costly_DSE_measure;
-    if (kind == 0) {
-      analysis.iterationReport();
-    } else if (kind == 1) {
-      analysis.rebuild_reason = r->reason_for_rebuild;
-      analysis.rebuild_reason_string =
-          ekk.rebuildReason(r->reason_for_rebuild);
-      if (ekk.options_->output_flag) analysis.invertReport();
-    }
   }
 
   static void chuzcFail(void* ctx, int kind, int work_count,
@@ -301,12 +125,6 @@ struct HEkk::RustHost {
   }
 };
 
-// Every strategy (SIP and PAMI run as the serial dual simplex), and no
-// simplex analysis or debugging, which Crestline leaves out
-bool HEkk::rustSolveEligible() const {
-  return !simplex_nla_.update_.valid_;
-}
-
 highs_rs::Hekk HEkk::rustHekk(void* host_ctx, const bool draw_random_vectors) {
   using highs_rs::slice;
   highs_rs::Hekk x;
@@ -315,9 +133,6 @@ highs_rs::Hekk HEkk::rustHekk(void* host_ctx, const bool draw_random_vectors) {
   x.host.log = RustHost::log;
   x.host.timer_read = RustHost::timerRead;
   x.host.interrupt = RustHost::interrupt;
-  x.host.user_invert_report = RustHost::userInvertReport;
-  x.host.dual_report = RustHost::dualReport;
-  x.host.primal_report = RustHost::primalReport;
   x.host.chuzc_fail = RustHost::chuzcFail;
   x.host.initial_rank_deficiency = RustHost::initialRankDeficiency;
   x.host.debug_check_invert = RustHost::debugCheckInvert;
@@ -459,6 +274,7 @@ highs_rs::Hekk HEkk::rustHekk(void* host_ctx, const bool draw_random_vectors) {
       *log_options.log_dev_level >= (HighsInt)kIterationReportLogType;
   x.interrupt_callback =
       callback_->user_callback && callback_->active[kCallbackSimplexInterrupt];
+  x.report = &analysis_.rs_report_;
   return x;
 }
 

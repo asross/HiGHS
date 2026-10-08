@@ -102,15 +102,35 @@ cmake --build build-rust -j8`.
 
 ## The simplex solve
 
-HEkkDual::solve for the serial strategy runs in Rust (simplex/dual.rs);
-SIP and PAMI are left out (they run as the serial dual). What it still
-calls in
-C++ is listed in the `DualCallbacks` of dual.rs: INVERT with backtracking,
-the primal clean-up, the infeasibility proof and dual ray, the quad
-precision refinement of a pivotal row, and logging/reports. In the common
-case an iteration makes no call into C++. HEkkDual.cpp is compiled in a
-unity build, so clang inlines e.g. HVector::norm2 into chooseRow
-contracted: check each compiled copy.
+The dual and primal simplex run in Rust (simplex/dual.rs, primal.rs,
+from HEkk::solve, see below); SIP and PAMI are left out (they run as the
+serial dual). The C++ HEkkDual, HEkkPrimal, HEkkDualRow and HEkkDualRHS
+are not built with HIGHS_RUST: they were kept only as the fallback for an
+INVERT with a product form update (HSimplexNlaProductForm.cpp), which
+nothing sets up any more (it served the deprecated frozen bases), so the
+fallback and the product form are not built either. The HEkk methods only
+they called are under `#ifndef HIGHS_RUST` (found by linking the app, with
+every Highs method as a root, and the unit tests with -dead_strip at -O0),
+as are those of HSimplexNla, HighsSimplexAnalysis, HFactor,
+HighsSparseMatrix (the C++ price), HSimplex.cpp and HighsUtils.cpp (the
+value distributions and scatter data of the analysis); HEkkInterface.cpp,
+HSimplexReport.cpp, HSet.cpp (and TestHSet) and HighsLinearSumBounds.cpp
+are not built.
+
+The simplex logs are Rust (simplex/report.rs): HighsSimplexAnalysis's
+iteration report (dev, verbose), INVERT report (dev) and user INVERT
+report (the user log's iteration lines, every 5 s, or each line with
+timeless_log), with the data the dual and primal record for them. The data
+and header counters are a `SimplexReport` in HighsSimplexAnalysis
+(`rs_report_`), kept over solves as the C++ fields were (a solve that
+records nothing reports the previous values), reset by
+HighsSimplexAnalysis::setup as before; HEkk::returnFromEkkSolve reads its
+densities for the simplex stats. The run time is printed as " %.1fs" (the
+NDEBUG format of the C++). The sorts of HighsSort.cpp are Rust
+(util/sort.rs: the heap sorts, the decreasing heap, increasingSetOk,
+sortSetData; hand-written, so the tie orders do not depend on the
+standard library; golden_sort.cpp checks them); HighsSort.cpp is the
+wrapper.
 
 ## PDLP (cuPDLP-C)
 
@@ -191,21 +211,18 @@ the LP relaxation directly (status, objective, iterations, fractional
 integers, best estimate).
 
 HEkk::solve runs in Rust from initialiseForSolve down (simplex/hekk.rs,
-dual.rs, primal.rs) unless the INVERT has a product form update
-(HEkk::rustSolveEligible; simplex analysis, debugging and SIP/PAMI are
-left out of the build). HEkk's data stays
+dual.rs, primal.rs; simplex analysis, debugging and SIP/PAMI are left out
+of the build). HEkk's data stays
 C++-owned: HEkk::solveRust (highs/simplex/HEkkRustSolve.cpp) sizes every
 vector the solve could resize, fills a `CHekk` of views and pointers,
 calls `highs_rs_ekk_solve`, then takes what Rust left for C++ vectors
 (hot start record, primal phase 1 duals, ray values to clear) and does
 returnFromEkkSolve. Rust calls C++ only through `Host`: log messages
 (formatted in Rust with util/printf.rs, which matches C's printf), the
-analysis iteration/rebuild reports, the run clock (once per solver with a
+run clock (once per solver with a
 time limit), a user interrupt callback, and the rare rank deficient
 initial basis. The factor's refactorization information and the saved
 INVERT of putIterate/getIterate are held by the Rust factor.
-HEkkDual.cpp is compiled in a unity build, so clang inlines e.g.
-HVector::norm2 into chooseRow contracted: check each compiled copy.
 
 ## The MIP domain (HighsDomain)
 
@@ -755,8 +772,11 @@ What blocks a C++-free crest: the whole C++ column of the table below.
 In order of size: the `Highs` class and its data (Highs.cpp,
 HighsInterface.cpp, HighsLp/HighsSolution/HighsOptions/HighsInfo records,
 HighsIO logging), the MIP solver's C++ classes, init, restarts, workers
-and the HighsTask scheduler (concurrent port), HEkk's data and the
-C++ simplex fallback (the product form update), the IPX and QP glue, the
+and the HighsTask scheduler (concurrent port), HEkk's data (its
+remaining methods: basis set-up, LP moves, dualize, model edits,
+getSolution, the infeasibility proof, the condition estimate, the NLA
+wrapper of the API solves; HApp.h), HighsSparseMatrix, the IPX and QP
+glue, the
 IIS and the utilities. highspy stays a C++ wrapper of `Highs`.
 
 Comparisons: `rust/bench/cli_compare.sh build build-rust build-static`
@@ -822,12 +842,11 @@ code under `#ifndef HIGHS_RUST`, "C++" is compiled whole (live, a fallback
 for paths Rust does not take, or debug only, as the last column says).
 
 By area (code lines, C++ build -> HIGHS_RUST): lp_data 19983 -> 13138,
-mip 19455 -> 11161 (concurrent port), simplex 13169 -> 10414 (glue
-added; the C++ dual and primal remain as the product form fallback),
-util 6762 -> 4388, presolve 9015 -> 1176, ipm 1303 -> 997 (the IPX glue),
+mip 19455 -> 11161 (concurrent port), simplex 13169 -> 3314 (the C++
+simplex is not built), util 6762 -> 2775, presolve 9015 -> 1176, ipm 1303 -> 997 (the IPX glue),
 io 3459 -> 736, model 811, qpsolver 278 -> 379, pdlp 141 (cuPDLP-C glue),
-highs 99 (third-party notice), app 95 -> 3: in all 74598 -> 43444 lines
-in 117 files. Before HiPO, HiPDLP, SIP/PAMI, iCrash, multi-objective,
+highs 99 (third-party notice), app 95 -> 3: in all 68766 -> 34731 lines
+in 106 files (the C++ build column counts only the files still built). Before HiPO, HiPDLP, SIP/PAMI, iCrash, multi-objective,
 debugging, the C API and the fixed MPS reader were left out ("Left out
 of the HIGHS_RUST build"), it was 60977 lines in 160 files.
 
@@ -912,42 +931,31 @@ of the HIGHS_RUST build"), it was 60977 lines in 160 files.
 | highs/presolve/PresolveComponent.cpp | 28 | 28 | C++ | presolve glue / C++ owner of the postsolve stack |
 | highs/qpsolver/a_asm.cpp | 123 | 105 | part ported | QP glue: phase 1 and instance building |
 | highs/qpsolver/a_quass.cpp | 155 | 274 | C++ | QP glue: phase 1 and instance building |
-| highs/simplex/HEkk.cpp | 3618 | 3702 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HEkkControl.cpp | 112 | 112 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
+| highs/simplex/HEkk.cpp | 3618 | 1841 | part ported | live: HEkk data owner (basis, LP moves, dualize, edits, getSolution, proofs, condition) |
+| highs/simplex/HEkkControl.cpp | 112 | 29 | part ported | live: HEkk data owner, NLA wrapper, setup |
 | highs/simplex/HEkkDebug.cpp | 1552 | 92 | stubs | no-op stubs (debugging is left out) |
-| highs/simplex/HEkkDual.cpp | 2045 | 1806 | part ported | fallback: C++ dual simplex (product form update); callbacks of the Rust dual |
-| highs/simplex/HEkkDualRHS.cpp | 423 | 48 | part ported | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HEkkDualRHSRust.cpp | 1 | 132 | glue |  |
-| highs/simplex/HEkkDualRow.cpp | 575 | 78 | part ported | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HEkkDualRowRust.cpp | 1 | 209 | glue |  |
-| highs/simplex/HEkkInterface.cpp | 13 | 13 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HEkkPrimal.cpp | 2222 | 2222 | C++ | fallback: C++ primal simplex (product form update) |
 | highs/simplex/HEkkRust.cpp | 1 | 131 | glue |  |
-| highs/simplex/HEkkRustSolve.cpp | 3 | 509 | glue |  |
-| highs/simplex/HSimplex.cpp | 261 | 261 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HSimplexDebug.cpp | 121 | 93 | part ported | live: CHUZC failure reports (dev log) |
-| highs/simplex/HSimplexNla.cpp | 430 | 430 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
+| highs/simplex/HEkkRustSolve.cpp | 3 | 340 | glue |  |
+| highs/simplex/HSimplex.cpp | 261 | 137 | part ported | live: HEkk data owner, NLA wrapper, setup |
+| highs/simplex/HSimplexDebug.cpp | 121 | 66 | part ported | live: CHUZC failure reports (dev log) |
+| highs/simplex/HSimplexNla.cpp | 430 | 301 | part ported | live: NLA wrapper (scaling around the Rust factor) for the API solves |
 | highs/simplex/HSimplexNlaDebug.cpp | 314 | 22 | stubs | no-op stubs (debugging is left out) |
-| highs/simplex/HSimplexNlaFreeze.cpp | 13 | 13 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HSimplexNlaProductForm.cpp | 88 | 88 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HSimplexReport.cpp | 62 | 62 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HighsSimplexAnalysis.cpp | 1314 | 391 | part ported | live: iteration/INVERT logs, timers (analysis stubbed) |
-| highs/util/HFactor.cpp | 1971 | 164 | part ported | live: utilities (sparse matrix, sort, HSet, vectors) |
+| highs/simplex/HSimplexNlaFreeze.cpp | 13 | 13 | C++ | live: HEkk data owner, NLA wrapper, setup |
+| highs/simplex/HighsSimplexAnalysis.cpp | 1314 | 342 | stubs | live: setup and stubs (the logs are rust/src/simplex/report.rs) |
+| highs/util/HFactor.cpp | 1971 | 158 | part ported | glue: HFactor over the Rust factor |
 | highs/util/HFactorDebug.cpp | 212 | 42 | stubs | no-op stubs (debugging is left out) |
-| highs/util/HFactorExtend.cpp | 147 | 12 | part ported | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HFactorRefactor.cpp | 240 | 13 | part ported | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HFactorRust.cpp | 1 | 320 | glue |  |
-| highs/util/HFactorUtils.cpp | 104 | 5 | part ported | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HSet.cpp | 175 | 175 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HVectorBase.cpp | 169 | 169 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HighsDynamicLibrary.cpp | 63 | 63 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HighsHash.cpp | 2 | 2 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HighsLinearSumBounds.cpp | 228 | 228 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
+| highs/util/HFactorExtend.cpp | 147 | 4 | part ported | glue: HFactor over the Rust factor |
+| highs/util/HFactorRefactor.cpp | 240 | 13 | part ported | glue: HFactor over the Rust factor |
+| highs/util/HFactorRust.cpp | 1 | 300 | glue |  |
+| highs/util/HFactorUtils.cpp | 104 | 1 | part ported | glue: HFactor over the Rust factor |
+| highs/util/HVectorBase.cpp | 169 | 169 | C++ | live: HVector container ops (setup, clear, copy) |
+| highs/util/HighsDynamicLibrary.cpp | 63 | 63 | C++ | live: utilities |
+| highs/util/HighsHash.cpp | 2 | 2 | C++ | live: utilities |
 | highs/util/HighsMatrixPic.cpp | 131 | 131 | C++ | debug only (matrix pictures) |
-| highs/util/HighsMatrixUtils.cpp | 319 | 33 | part ported | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HighsSort.cpp | 322 | 322 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HighsSparseMatrix.cpp | 1492 | 1523 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/HighsUtils.cpp | 1132 | 1132 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
-| highs/util/stringutil.cpp | 54 | 54 | C++ | live: utilities (sparse matrix, sort, HSet, vectors) |
+| highs/util/HighsMatrixUtils.cpp | 319 | 33 | part ported | live: utilities |
+| highs/util/HighsSort.cpp | 323 | 101 | part ported | glue: the sorts are Rust (rust/src/util/sort.rs) |
+| highs/util/HighsSparseMatrix.cpp | 1492 | 1167 | part ported | live: HighsSparseMatrix (formats, edits, scaling, products) |
+| highs/util/HighsUtils.cpp | 1132 | 537 | part ported | live: index collections, value analysis logs, user data checks |
+| highs/util/stringutil.cpp | 54 | 54 | C++ | live: utilities |
 | app/RunHighs.cpp | 95 | 3 | part ported | main: calls the Rust app (rust/src/lp_data/app.rs) |
-| **total** (117 files) | 74598 | 43444 | | |
+| **total** (106 files) | 68766 | 34731 | | |

@@ -548,12 +548,14 @@ void HFactor::update(HVector* aq, HVector* ep, HighsInt* iRow, HighsInt* hint) {
 
 #endif
 
+#ifndef HIGHS_RUST
 bool HFactor::setPivotThreshold(const double new_pivot_threshold) {
   if (new_pivot_threshold < kMinPivotThreshold) return false;
   if (new_pivot_threshold > kMaxPivotThreshold) return false;
   pivot_threshold = new_pivot_threshold;
   return true;
 }
+#endif
 
 void HFactor::setTimeLimit(const double time_limit) {
   this->time_limit_ = kHighsInf;

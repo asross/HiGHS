@@ -145,7 +145,9 @@ class HSimplexNla {
   bool report_;
   double build_synthetic_tick_;
 
+#ifndef HIGHS_RUST
   ProductFormUpdate update_;
+#endif
 
   // Simplex iterate data
   SimplexIterate simplex_iterate_;

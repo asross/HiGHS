@@ -36,6 +36,7 @@ bool HighsSparseMatrix::operator==(const HighsSparseMatrix& matrix) const {
   return equal;
 }
 
+#ifndef HIGHS_RUST
 bool HighsSparseMatrix::equivalent(const HighsSparseMatrix& matrix) const {
   // Use this to test when the matrices may be in opposite format
   if (*this == matrix) return true;
@@ -49,6 +50,7 @@ bool HighsSparseMatrix::equivalent(const HighsSparseMatrix& matrix) const {
   }
   return *this == lc_matrix;
 }
+#endif
 
 void HighsSparseMatrix::clear() {
   this->num_col_ = 0;
@@ -99,6 +101,7 @@ HighsInt HighsSparseMatrix::numNz() const {
   }
 }
 
+#ifndef HIGHS_RUST
 void HighsSparseMatrix::range(double& min_value, double& max_value) const {
   assert(this->formatOk());
   for (HighsInt iEl = 0; iEl < this->numNz(); iEl++) {
@@ -107,6 +110,7 @@ void HighsSparseMatrix::range(double& min_value, double& max_value) const {
     max_value = max(max_value, value);
   }
 }
+#endif
 
 void HighsSparseMatrix::setFormat(const MatrixFormat desired_format) {
   assert(this->formatOk());
@@ -539,6 +543,7 @@ void HighsSparseMatrix::addRows(const HighsSparseMatrix new_rows,
   this->num_row_ += num_new_row;
 }
 
+#ifndef HIGHS_RUST
 void HighsSparseMatrix::getCol(const HighsInt iCol, HighsInt& num_nz,
                                HighsInt* index, double* value) const {
   assert(iCol >= 0 && iCol < this->num_col_);
@@ -564,6 +569,7 @@ void HighsSparseMatrix::getCol(const HighsInt iCol, HighsInt& num_nz,
     }
   }
 }
+#endif
 
 void HighsSparseMatrix::getRow(const HighsInt iRow, HighsInt& num_nz,
                                HighsInt* index, double* value) const {
@@ -996,6 +1002,7 @@ void HighsSparseMatrix::applyRowScale(const HighsScale& scale) {
   }
 }
 
+#ifndef HIGHS_RUST
 void HighsSparseMatrix::unapplyScale(const HighsScale& scale) {
   assert(this->formatOk());
   if (this->isColwise()) {
@@ -1047,6 +1054,7 @@ void HighsSparseMatrix::createSlice(const HighsSparseMatrix& matrix,
   this->num_row_ = num_row;
   this->format_ = MatrixFormat::kColwise;
 }
+#endif
 
 void HighsSparseMatrix::createRowwise(const HighsSparseMatrix& matrix) {
   assert(matrix.formatOk());
@@ -1097,6 +1105,7 @@ void HighsSparseMatrix::createRowwise(const HighsSparseMatrix& matrix) {
   this->num_row_ = num_row;
 }
 
+#ifndef HIGHS_RUST
 void HighsSparseMatrix::createColwise(const HighsSparseMatrix& matrix) {
   assert(matrix.formatOk());
   assert(matrix.isRowwise());
@@ -1145,6 +1154,7 @@ void HighsSparseMatrix::createColwise(const HighsSparseMatrix& matrix) {
   this->num_col_ = num_col;
   this->num_row_ = num_row;
 }
+#endif
 
 void HighsSparseMatrix::alphaProductPlusY(const double alpha,
                                           const std::vector<double>& x,
@@ -1426,6 +1436,7 @@ int highs_rs_price_by_row(int num_row, int num_col, const int* start,
 }
 #endif
 
+#ifndef HIGHS_RUST
 void HighsSparseMatrix::priceByColumn(const bool quad_precision,
                                       HVector& result, const HVector& column,
                                       const HighsInt debug_report) const {
@@ -1642,6 +1653,7 @@ void HighsSparseMatrix::update(const HighsInt var_in, const HighsInt var_out,
     }
   }
 }
+#endif
 
 double HighsSparseMatrix::computeDot(const std::vector<double>& array,
                                      const HighsInt use_col) const {
@@ -1678,6 +1690,7 @@ void HighsSparseMatrix::collectAj(HVector& column, const HighsInt use_col,
   }
 }
 
+#ifndef HIGHS_RUST
 void HighsSparseMatrix::priceByRowDenseResult(
     std::vector<double>& result, const HVector& column,
     const HighsInt from_index, const HighsInt debug_report) const {
@@ -1731,6 +1744,7 @@ void HighsSparseMatrix::priceByRowDenseResult(
     }
   }
 }
+#endif
 
 void HighsSparseMatrix::debugReportRowPrice(
     const HighsInt iRow, const double multiplier, const HighsInt to_iEl,

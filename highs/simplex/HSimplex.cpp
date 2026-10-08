@@ -43,6 +43,7 @@ void SimplexBasis::setup(const HighsInt num_col, const HighsInt num_row) {
   this->debug_origin_name = "None";
 }
 
+#ifndef HIGHS_RUST
 void appendNonbasicColsToBasis(HighsLp& lp, HighsBasis& highs_basis,
                                HighsInt XnumNewCol) {
   assert(highs_basis.valid);
@@ -153,6 +154,7 @@ void appendBasicRowsToBasis(HighsLp& lp, SimplexBasis& basis,
     basis.basicIndex_[iRow] = lp.num_col_ + iRow;
   }
 }
+#endif
 
 void getUnscaledInfeasibilities(const HighsOptions& options,
                                 const HighsScale& scale,
@@ -271,6 +273,7 @@ void setSolutionStatus(HighsInfo& highs_info) {
 }
 // SCALING
 
+#ifndef HIGHS_RUST
 void scaleSimplexCost(const HighsOptions& options, HighsLp& lp,
                       double& cost_scale) {
   // Scale the costs by no less than minAlwCostScale
@@ -316,6 +319,7 @@ void unscaleSimplexCost(HighsLp& lp, double cost_scale) {
   for (HighsInt iCol = 0; iCol < lp.num_col_; iCol++)
     lp.col_cost_[iCol] *= cost_scale;
 }
+#endif
 
 bool isBasisRightSize(const HighsLp& lp, const SimplexBasis& basis) {
   bool right_size = true;

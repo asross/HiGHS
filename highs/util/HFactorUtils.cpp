@@ -10,10 +10,12 @@
  */
 #include "util/HFactor.h"
 
+#ifndef HIGHS_RUST
 void HFactor::invalidAMatrixAction() {
   this->a_matrix_valid = false;
   clearRefactorInfo();
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HFactor::reportLu(const HighsInt l_u_or_both, const bool full) const {

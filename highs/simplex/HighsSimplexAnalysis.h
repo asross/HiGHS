@@ -44,6 +44,36 @@ struct TranStageAnalysis {
 const HighsInt kAnIterTraceMaxNumRec = 20;
 const HighsLogType kIterationReportLogType = HighsLogType::kVerbose;
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+// The fields the simplex logs read, kept over solves: mirror of
+// SimplexReport in rust/src/simplex/report.rs, which writes the reports
+struct SimplexReport {
+  int simplex_strategy = 0;
+  int solve_phase = 0;
+  int simplex_iteration_count = 0;
+  int pivotal_row_index = 0;
+  int entering_variable = 0;
+  int rebuild_reason = 0;
+  int num_primal_infeasibility = 0;
+  int num_dual_infeasibility = 0;
+  int num_iteration_report_since_last_header = -1;
+  int num_invert_report_since_last_header = -1;
+  double objective_value = 0;
+  double sum_primal_infeasibility = 0;
+  double sum_dual_infeasibility = 0;
+  double highs_run_time = 0;
+  double last_user_log_time = -kHighsInf;
+  double delta_user_log_time = 1;
+  double col_aq_density = 0;
+  double row_ep_density = 0;
+  double row_ap_density = 0;
+  double row_DSE_density = 0;
+  bool timeless_log = false;
+};
+}  // namespace highs_rs
+#endif
+
 /**
  * @brief Analyse simplex iterations, both for run-time control and data
  * gathering
@@ -270,6 +300,9 @@ class HighsSimplexAnalysis {
 
   // Local copies of IO data
   HighsLogOptions log_options;
+#ifdef HIGHS_RUST
+  highs_rs::SimplexReport rs_report_;
+#endif
 
   // Interpreted shortcuts from bit settings in highs_analysis_level
   bool analyse_lp_data;
