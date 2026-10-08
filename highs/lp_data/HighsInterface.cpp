@@ -3413,6 +3413,7 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
 
 void HighsIllConditioning::clear() { this->record.clear(); }
 
+#ifndef HIGHS_RUST  // ill-conditioning in Rust (rust/src/lp_data/ill_cond.rs)
 HighsStatus Highs::computeIllConditioning(
     HighsIllConditioning& ill_conditioning, const bool constraint,
     const HighsInt method, const double ill_conditioning_bound) {
@@ -3953,6 +3954,7 @@ void Highs::formIllConditioningLp1(HighsLp& ill_conditioning_lp,
   ill_conditioning_matrix.num_col_ = ill_conditioning_lp.num_col_;
   ill_conditioning_matrix.num_row_ = ill_conditioning_lp.num_row_;
 }
+#endif  // HIGHS_RUST: lp_data/HighsIllCondRust.cpp
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)

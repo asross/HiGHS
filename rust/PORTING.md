@@ -126,12 +126,20 @@ the C reads ax past its end when ncols > nrows.
 
 ## The QP solver
 
-QUASS (highs/qpsolver/) runs in Rust (rust/src/qp): solveqp in
-a_quass.cpp hands the Instance to `highs_rs_qp_solve` and maps the result
-back with quass2highs. Phase 1 (computeStartingPointHighs, an LP solve by
-Highs, or the hot start check), the timer and the logging are C++
-callbacks; basis.cpp, quass.cpp, ratiotest.cpp and the unused
-perturbation.cpp and scaling.cpp are not compiled. QpVector::dot is fused
+QUASS (highs/qpsolver/) runs in Rust (rust/src/qp), and so does its glue
+(qp/glue.rs): Highs::callSolveQp up to the objective and KKT check (the
+Hessian dimension check, the Instance with triangularToSquareHessian's
+square Hessian, negated for a maximization, the Settings from the options
+and their log lines), quass2highs, and phase 1 (computeStartingPointHighs:
+the hot start check, of which only the infeasibility counts matter, or a
+feasibility LP, then the starting active set). The C++ callSolveQp
+(qpsolver/QpRust.cpp) passes views and does one `op` per step on a C++
+object: the profiling clock, the timer, sizing the solution and basis, and
+the phase 1 LP solved by a silent `Highs`; it then computes the objective
+and KKT failures and calls checkOptimality as before. a_quass.cpp and
+a_asm.cpp are empty under HIGHS_RUST; basis.cpp, quass.cpp, ratiotest.cpp
+and the unused perturbation.cpp and scaling.cpp are not compiled.
+QpVector::dot is fused
 in most compiled copies but split by 4 in SteepestEdgePricing and
 Instance::objval (dot_split4). The C++ Cholesky factor writes past the
 size of its std::vector once the null space was empty at a recompute;
@@ -730,9 +738,33 @@ Still C++ in lp_data: Highs.cpp and HighsInterface.cpp outside the above
 (run()'s file handling, which is only calls of other Highs methods; the
 model passing; getStandardFormLp; completeSolutionFromDiscreteAssignment;
 callSolveMip's post-processing; getDualRay / getPrimalRay's re-solves;
-setBasis on an alien basis; the ill-conditioning solves), LP reporting (reportLp, reportMatrix; a draft port exists
-only as notes), the IPX glue (ipm/IpxWrapper.cpp) and callCrossover
-(presolve/ICrashX.cpp). The writers and readers (writers.rs, readers.rs,
+setBasis on an alien basis; the IIS solves),
+HighsIis.cpp, LP reporting (reportLp, reportMatrix; a draft port exists
+only as notes) and callCrossover (presolve/ICrashX.cpp).
+
+The IPX glue is Rust (lp_data/ipx_glue.rs): solveLpIpx (the IPX
+parameters from the options, fillInIpxData's LP in IPX form, the solve on
+the Rust IPX directly, the status reports and the checks of illegal
+solved/stopped statuses, reportSolveData, the interior or basic solution
+in HiGHS form) and fillInIpxData for callCrossover. ipm/IpxWrapperRust.cpp
+passes the options, the LP view and HighsInfo, model status and validity
+flags in place, with callbacks for the timer and for sizing the solution
+and basis where the C++ resized them; the IPX hooks (logging, task and
+user interrupt) are those of ipx::LpSolver, and a cancelled task returns a
+code on which C++ throws HighsTask::Interrupt. IPX's arrays are null where
+an empty std::vector's data() was (the Rust vectors keep the C++
+capacities). formSimplexLpBasisAndFactor and accommodateAlienBasis
+(lp_data/form_basis.rs; the latter factorizes with the Rust HFactor and
+logs through a copy of the log options without callbacks, as HFactor's
+own) are Rust too, the steps on the LP and the HEkk instance being ops of
+HighsSolutionRust.cpp.
+
+Highs::computeIllConditioning with formIllConditioningLp0/1 is Rust
+(lp_data/ill_cond.rs): the analysis LP (built column-wise, transposed as
+HighsSparseMatrix::ensureRowwise does for the constraint view), the
+multipliers and their report (`ss << x` is `%g`). HighsIllCondRust.cpp
+makes the incumbent matrix column-wise, passes views and names, solves
+the analysis LP with a silent `Highs` and stores the records. The writers and readers (writers.rs, readers.rs,
 io/model_write.rs), options, info and command-line parsing (options.rs,
 info.rs, options_cli.rs) and the app (app.rs) are Rust, see above.
 

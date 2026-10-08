@@ -1007,6 +1007,69 @@ static void iisCases(const std::string& instances) {
       delete h;
     }
   }
+// QPs through the API (passModel with a Hessian, passHessian, hot start)
+// and the ill-conditioning analysis of an optimal basis
+static void qpAndIllConditioning(const std::string& instances) {
+  printf("\n######## QP through the API\n");
+  {
+    Highs* h = fresh();
+    // min x0^2 + x1^2 - x0 x1 + x0 - 2 x1, x0 + x1 >= 1, 0 <= x <= 3
+    const double cost[] = {1, -2}, lower[] = {0, 0}, upper[] = {3, 3};
+    const double row_lower[] = {1}, row_upper[] = {kHighsInf};
+    const HighsInt a_start[] = {0, 1}, a_index[] = {0, 0};
+    const double a_value[] = {1, 1};
+    const HighsInt q_start[] = {0, 2}, q_index[] = {0, 1, 1};
+    const double q_value[] = {2, -1, 2};
+    HighsStatus s = h->passModel(2, 1, 2, 3, 1, 1, 1, 0.5, cost, lower,
+                                 upper, row_lower, row_upper, a_start,
+                                 a_index, a_value, q_start, q_index, q_value,
+                                 nullptr);
+    printf("passModel %d\n", int(s));
+    s = h->run();
+    report(*h, "qp", s);
+    h->changeObjectiveSense(ObjSense::kMaximize);
+    const double neg[] = {-2, 1, -2};
+    s = h->passHessian(2, 3, 1, q_start, q_index, neg);
+    printf("passHessian %d\n", int(s));
+    s = h->run();
+    report(*h, "qp max", s);
+    delete h;
+  }
+  for (const char* f : {"qjh.mps", "primal1.mps", "qptestnw.lp"}) {
+    Highs* h = fresh();
+    printf("\n######## QP %s hot start\n", f);
+    h->readModel(instances + "/" + f);
+    HighsStatus s = h->run();
+    report(*h, "qp", s);
+    h->setOptionValue("qp_allow_hot_start", true);
+    s = h->run();
+    report(*h, "qp hot start", s);
+    h->changeColBounds(0, -1, 1);
+    s = h->run();
+    report(*h, "qp hot start after bound change", s);
+    delete h;
+  }
+  for (const char* f : {"afiro.mps", "adlittle.mps", "israel.mps"}) {
+    Highs* h = fresh();
+    printf("\n######## ill-conditioning %s\n", f);
+    h->readModel(instances + "/" + f);
+    HighsIllConditioning ic;
+    HighsStatus s = h->getIllConditioning(ic, true);
+    printf("before solve %d\n", int(s));
+    h->run();
+    for (int constraint = 0; constraint < 2; constraint++)
+      for (int method = 0; method < 2; method++)
+        for (double bound : {1e-4, 1.0, 1e3}) {
+          if (method == 0 && bound > 1e-4) continue;
+          s = h->getIllConditioning(ic, constraint, method, bound);
+          printf("constraint %d method %d bound %g: %d, %d records\n",
+                 constraint, method, bound, int(s), int(ic.record.size()));
+          for (const auto& r : ic.record)
+            printf("  %d %.17g\n", int(r.index), r.multiplier);
+        }
+    delete h;
+  }
+  fflush(stdout);
 }
 
 int main(int argc, char** argv) {
@@ -1051,5 +1114,6 @@ int main(int argc, char** argv) {
   drivers(instances);
   modelPassing(instances);
   iisCases(instances);
+  qpAndIllConditioning(instances);
   return 0;
 }

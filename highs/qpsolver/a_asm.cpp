@@ -5,6 +5,8 @@
 /*    Available as open-source under the MIT License                     */
 /*                                                                       */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+#include "HConfig.h"
+#ifndef HIGHS_RUST  // the QP glue is Rust (rust/src/qp/glue.rs)
 #include "qpsolver/a_asm.hpp"
 
 #include "qpsolver/quass.hpp"
@@ -141,3 +143,4 @@ void assessQpPrimalFeasibility(
     sum_con_residuals += con_residual;
   }
 }
+#endif
