@@ -355,15 +355,18 @@ set(highs_sources
     io/LoadOptions.cpp
     io/filereaderlp/reader.cpp
     ipm/IpxWrapper.cpp
+    ipm/IpxWrapperRust.cpp
     lp_data/Highs.cpp
     lp_data/HighsAppRust.cpp
     lp_data/HighsCallback.cpp
     lp_data/HighsDebug.cpp
     lp_data/HighsIis.cpp
+    lp_data/HighsIisRust.cpp
     lp_data/HighsInfo.cpp
     lp_data/HighsInfoDebug.cpp
     lp_data/HighsDeprecated.cpp
     lp_data/HighsInterface.cpp
+    lp_data/HighsIllCondRust.cpp
     lp_data/HighsLp.cpp
     lp_data/HighsLpUtils.cpp
     lp_data/HighsLpUtilsRust.cpp
@@ -432,6 +435,7 @@ set(highs_sources
     presolve/PresolveComponent.cpp
     qpsolver/a_asm.cpp
     qpsolver/a_quass.cpp
+    qpsolver/QpRust.cpp
     qpsolver/basis.cpp
     qpsolver/perturbation.cpp
     qpsolver/quass.cpp

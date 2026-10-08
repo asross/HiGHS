@@ -17,9 +17,11 @@
 #include <sstream>
 #include <vector>
 
+#include "lp_data/HighsRust.h"
 #include "lp_data/HighsSolution.h"
 #include "util/stringutil.h"
 
+#ifndef HIGHS_RUST
 void analyseModelBounds(const HighsLogOptions& log_options, const char* message,
                         HighsInt numBd, const std::vector<double>& lower,
                         const std::vector<double>& upper) {
@@ -132,6 +134,48 @@ std::string typeToString(const HighsVarType type) {
   }
   return "";
 }
+#else
+// rust/src/lp_data/model_utils.rs
+extern "C" {
+int highs_rs_normalise_names(const RsLog* log, bool column,
+                             HighsInt num_name_required, RsName name_prefix,
+                             HighsInt* name_suffix, RsMut<RsName> names,
+                             int type, const void* out,
+                             void (*set_prefix)(void*, const char*, size_t),
+                             void* prefix_ctx);
+HighsInt highs_rs_max_name_length(RsMut<RsName> names);
+int highs_rs_file_type(const char* name, size_t len);
+void highs_rs_find_model_objective_name(
+    RsMut<double> cost, HighsInt hessian_dim, RsMut<RsName> row_names,
+    HighsInt num_row, void (*set)(void*, const char*, size_t), void* ctx);
+void highs_rs_lp_objective_cdouble(double offset, RsMut<double> cost,
+                                   RsMut<double> x, HighsCDouble* out);
+RsName highs_rs_status_string(int which, int value);
+int highs_rs_status_from_model_status(int model_status);
+}
+
+namespace {
+// model_utils.rs: CNamesOut
+struct RsNamesOut {
+  void* vec;
+  void (*resize)(void*, size_t);
+  void (*set)(void*, size_t, const char*, size_t);
+};
+void namesResize(void* v, size_t n) {
+  static_cast<std::vector<std::string>*>(v)->resize(n);
+}
+void namesSet(void* v, size_t i, const char* p, size_t n) {
+  (*static_cast<std::vector<std::string>*>(v))[i].assign(p, n);
+}
+void stringSet(void* s, const char* p, size_t n) {
+  static_cast<std::string*>(s)->assign(p, n);
+}
+std::string statusString(int which, int value) {
+  const RsName s = highs_rs_status_string(which, value);
+  return std::string(s.ptr, s.len);
+}
+}  // namespace
+#endif
 
 #ifndef HIGHS_RUST
 void writeModelBoundSolution(
@@ -180,6 +224,7 @@ void writeModelBoundSolution(
 
 #endif
 
+#ifndef HIGHS_RUST
 void writeModelObjective(FILE* file, const HighsLogOptions& log_options,
                          const HighsModel& model,
                          const std::vector<double>& primal_solution) {
@@ -195,6 +240,23 @@ void writeLpObjective(FILE* file, const HighsLogOptions& log_options,
   HighsCDouble objective_value = lp.objectiveCDoubleValue(primal_solution);
   writeObjectiveValue(file, log_options, (double)objective_value);
 }
+#else
+void writeModelObjective(FILE* file, const HighsLogOptions& log_options,
+                         const HighsModel& model,
+                         const std::vector<double>& primal_solution) {
+  HighsCDouble objective_value =
+      model.lp_.objectiveCDoubleValue(primal_solution);
+  objective_value += model.hessian_.objectiveCDoubleValue(primal_solution);
+  writeObjectiveValue(file, log_options, (double)objective_value);
+}
+
+void writeLpObjective(FILE* file, const HighsLogOptions& log_options,
+                      const HighsLp& lp,
+                      const std::vector<double>& primal_solution) {
+  writeObjectiveValue(file, log_options,
+                      (double)lp.objectiveCDoubleValue(primal_solution));
+}
+#endif
 
 #ifndef HIGHS_RUST
 void writeObjectiveValue(FILE* file, const HighsLogOptions& log_options,
@@ -329,6 +391,7 @@ void writeModelSolution(FILE* file, const HighsLogOptions& log_options,
 
 #endif
 
+#ifndef HIGHS_RUST
 bool replaceSpacesByUnderscores(std::string& name) {
   // Find the first occurrence of the substring
   const std::string replace_word = " ";
@@ -497,6 +560,50 @@ HighsFileType getFileType(const std::string filename) {
   }
   return HighsFileType::kMinimal;
 }
+#else
+HighsInt maxNameLength(const HighsLp& lp) {
+  return std::max(maxNameLength(lp.col_names_), maxNameLength(lp.row_names_));
+}
+
+HighsInt maxNameLength(const std::vector<std::string>& names) {
+  RsNameList list(names);
+  return highs_rs_max_name_length(list.view());
+}
+
+HighsStatus normaliseNames(const HighsLogOptions& log_options, HighsLp& lp,
+                           HighsFileType type) {
+  HighsStatus call_status =
+      normaliseNames(log_options, true, lp.num_col_, lp.col_name_prefix_,
+                     lp.col_name_suffix_, lp.col_names_, lp.col_hash_, type);
+  HighsStatus return_status = call_status;
+  call_status =
+      normaliseNames(log_options, false, lp.num_row_, lp.row_name_prefix_,
+                     lp.row_name_suffix_, lp.row_names_, lp.row_hash_, type);
+  if (call_status != HighsStatus::kOk) return call_status;
+  return return_status;
+}
+
+HighsStatus normaliseNames(const HighsLogOptions& log_options, bool column,
+                           HighsInt num_name_required, std::string& name_prefix,
+                           HighsInt& name_suffix,
+                           std::vector<std::string>& names,
+                           HighsNameHash& name_hash, HighsFileType type) {
+  const RsLog log = rsLog(log_options);
+  const RsNameList list(names);
+  const RsNamesOut out{&names, namesResize, namesSet};
+  const RsName prefix{name_prefix.c_str(), strlen(name_prefix.c_str())};
+  const HighsStatus status = HighsStatus(highs_rs_normalise_names(
+      &log, column, num_name_required, prefix, &name_suffix,
+      const_cast<RsNameList&>(list).view(), int(type), &out, stringSet,
+      &name_prefix));
+  name_hash.name2index.clear();
+  return status;
+}
+
+HighsFileType getFileType(const std::string filename) {
+  return HighsFileType(highs_rs_file_type(filename.data(), filename.size()));
+}
+#endif
 
 #ifndef HIGHS_RUST
 void writeSolutionFile(FILE* file, const HighsOptions& options,
@@ -1332,6 +1439,7 @@ void writeOldRawSolution(FILE* file, const HighsLogOptions& log_options,
 
 #endif
 
+#ifndef HIGHS_RUST
 HighsBasisStatus checkedVarHighsNonbasicStatus(
     const HighsBasisStatus ideal_status, const double lower,
     const double upper) {
@@ -1582,7 +1690,33 @@ HighsStatus highsStatusFromHighsModelStatus(HighsModelStatus model_status) {
       return HighsStatus::kError;
   }
 }
+#else
+std::string utilSolutionStatusToString(const HighsInt solution_status) {
+  return statusString(0, solution_status);
+}
 
+std::string utilBasisStatusToString(const HighsBasisStatus basis_status) {
+  return statusString(1, int(basis_status));
+}
+
+std::string utilBasisValidityToString(const HighsInt basis_validity) {
+  return statusString(2, basis_validity);
+}
+
+std::string utilModelStatusToString(const HighsModelStatus model_status) {
+  return statusString(3, int(model_status));
+}
+
+std::string utilPresolveRuleTypeToString(const HighsInt rule_type) {
+  return statusString(4, rule_type);
+}
+
+HighsStatus highsStatusFromHighsModelStatus(HighsModelStatus model_status) {
+  return HighsStatus(highs_rs_status_from_model_status(int(model_status)));
+}
+#endif
+
+#ifndef HIGHS_RUST
 std::string findModelObjectiveName(const HighsLp* lp,
                                    const HighsHessian* hessian) {
   // Return any non-trivial current objective name
@@ -1634,6 +1768,19 @@ std::string findModelObjectiveName(const HighsLp* lp,
   assert(objective_name != "");
   return objective_name;
 }
+#else
+std::string findModelObjectiveName(const HighsLp* lp,
+                                   const HighsHessian* hessian) {
+  if (lp->objective_name_ != "") return lp->objective_name_;
+  std::string objective_name;
+  RsNameList row_names(lp->row_names_);
+  highs_rs_find_model_objective_name(
+      {const_cast<double*>(lp->col_cost_.data()), size_t(lp->num_col_)},
+      hessian ? hessian->dim_ : 0, row_names.view(), lp->num_row_, stringSet,
+      &objective_name);
+  return objective_name;
+}
+#endif
 
 /*
 void print_map(std::string comment, const std::map<std::string, HighsInt>& m)

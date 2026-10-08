@@ -155,6 +155,7 @@ void Highs::reportModelStats() const {
 
 #endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::formStandardFormLp() {
   this->clearStandardFormLp();
   HighsLp& lp = this->model_.lp_;
@@ -424,6 +425,44 @@ HighsStatus Highs::basisForSolution() {
   return this->setBasis(basis);
 }
 
+#endif
+#else
+// rust/src/lp_data/api.rs
+struct RsStandardForm {
+  double* offset;
+  RsVec<double> cost, rhs;
+  RsVec<HighsInt> start, index;
+  RsVec<double> value;
+};
+extern "C" void highs_rs_form_standard_form_lp(
+    const RsLog* log, HighsInt num_col, HighsInt sense, double offset,
+    RsMut<double> col_cost, RsMut<double> col_lower, RsMut<double> col_upper,
+    RsMut<double> row_lower, RsMut<double> row_upper, RsMut<HighsInt> ar_start,
+    RsMut<HighsInt> ar_index, RsMut<double> ar_value, RsStandardForm* out);
+
+HighsStatus Highs::formStandardFormLp() {
+  this->clearStandardFormLp();
+  HighsLp& lp = this->model_.lp_;
+  HighsSparseMatrix& matrix = lp.a_matrix_;
+  matrix.ensureRowwise();
+  HighsSparseMatrix& sf = this->standard_form_matrix_;
+  RsStandardForm out{&this->standard_form_offset_,
+                     rsVec(this->standard_form_cost_),
+                     rsVec(this->standard_form_rhs_), rsVec(sf.start_),
+                     rsVec(sf.index_), rsVec(sf.value_)};
+  const RsLog log = rsLog(options_.log_options);
+  highs_rs_form_standard_form_lp(
+      &log, lp.num_col_, HighsInt(lp.sense_), lp.offset_, rsMut(lp.col_cost_),
+      rsMut(lp.col_lower_), rsMut(lp.col_upper_), rsMut(lp.row_lower_),
+      rsMut(lp.row_upper_), rsMut(matrix.start_), rsMut(matrix.index_),
+      rsMut(matrix.value_), &out);
+  matrix.ensureColwise();
+  sf.format_ = MatrixFormat::kColwise;
+  sf.num_col_ = HighsInt(this->standard_form_cost_.size());
+  sf.num_row_ = HighsInt(this->standard_form_rhs_.size());
+  this->standard_form_valid_ = true;
+  return HighsStatus::kOk;
+}
 #endif
 
 HighsStatus Highs::addColsInterface(
@@ -1715,6 +1754,7 @@ void Highs::zeroIterationCounts() {
   info_.qp_iteration_count = 0;
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
                                        double* dual_ray_value) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -1845,7 +1885,9 @@ HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
   }
   return return_status;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
                                          double* primal_ray_value) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -1968,6 +2010,7 @@ HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
   }
   return return_status;
 }
+#endif
 
 HighsStatus Highs::getRangingInterface() {
   HighsLpSolverObject solver_object(model_.lp_, basis_, solution_, info_,
@@ -1977,6 +2020,8 @@ HighsStatus Highs::getRangingInterface() {
   return getRangingData(this->ranging_, solver_object);
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsIisRust.cpp, rust/src/lp_data/iis.rs)
 HighsStatus Highs::getIisInterfaceReturn(
     const HighsStatus return_status, const HighsOptions& original_options,
     const std::vector<bool>& original_callback_active) {
@@ -2985,6 +3030,8 @@ HighsStatus Highs::elasticityFilter(const double global_lower_penalty,
       original_col_upper, original_integrality);
 }
 
+#endif
+
 HighsStatus Highs::extractIis(HighsInt& num_iis_col, HighsInt& num_iis_row,
                               HighsInt* iis_col_index, HighsInt* iis_row_index,
                               HighsInt* iis_col_bound,
@@ -3007,6 +3054,7 @@ HighsStatus Highs::extractIis(HighsInt& num_iis_col, HighsInt& num_iis_row,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
 bool Highs::aFormatOk(const HighsInt num_nz, const HighsInt format) {
   if (!num_nz) return true;
   const bool ok_format = format == (HighsInt)MatrixFormat::kColwise ||
@@ -3031,6 +3079,7 @@ bool Highs::qFormatOk(const HighsInt num_nz, const HighsInt format) {
   assert(ok_format);
   return ok_format;
 }
+#endif
 
 void Highs::clearZeroHessian() {
   HighsHessian& hessian = model_.hessian_;
@@ -3046,6 +3095,7 @@ void Highs::clearZeroHessian() {
   }
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::checkOptimality(const std::string& solver_type) {
   // Check for infeasibility measures incompatible with optimality
   assert(model_status_ == HighsModelStatus::kOptimal);
@@ -3091,6 +3141,7 @@ HighsStatus Highs::checkOptimality(const std::string& solver_type) {
                modelStatusToString(model_status_).c_str());
   return HighsStatus::kError;
 }
+#endif
 
 void Highs::callLpKktCheck(const HighsLp& lp, const std::string& message) {
   lpKktCheck(this->model_status_, this->info_, lp, this->solution_,
@@ -3362,6 +3413,7 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
 
 void HighsIllConditioning::clear() { this->record.clear(); }
 
+#ifndef HIGHS_RUST  // ill-conditioning in Rust (rust/src/lp_data/ill_cond.rs)
 HighsStatus Highs::computeIllConditioning(
     HighsIllConditioning& ill_conditioning, const bool constraint,
     const HighsInt method, const double ill_conditioning_bound) {
@@ -3902,6 +3954,7 @@ void Highs::formIllConditioningLp1(HighsLp& ill_conditioning_lp,
   ill_conditioning_matrix.num_col_ = ill_conditioning_lp.num_col_;
   ill_conditioning_matrix.num_row_ = ill_conditioning_lp.num_row_;
 }
+#endif  // HIGHS_RUST: lp_data/HighsIllCondRust.cpp
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)

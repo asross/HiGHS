@@ -28,6 +28,7 @@ HighsStatus solveLpIpx(HighsLpSolverObject& solver_object) {
                     solver_object.highs_info_, solver_object.callback_);
 }
 
+#ifndef HIGHS_RUST  // IPX glue in Rust (rust/src/lp_data/ipx_glue.rs)
 HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
                        const HighsLp& lp, HighsBasis& highs_basis,
                        HighsSolution& highs_solution,
@@ -1519,3 +1520,4 @@ HighsStatus reportHipoCrossoverStatus(const HighsOptions& options,
   return HighsStatus::kError;
 }
 #endif
+#endif  // HIGHS_RUST

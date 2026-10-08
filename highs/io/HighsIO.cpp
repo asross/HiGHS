@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 
 #include "HighsExternalApi.h"
@@ -102,6 +103,79 @@ std::array<char, 32> highsDoubleToString(const double val,
   return printString;
 }
 
+#ifdef HIGHS_RUST
+// The sink (which messages print, the prefix, the log file, stdout and the
+// callbacks) is Rust's (rust/src/io/log.rs): the C++ formats the message
+// only when it prints
+extern "C" {
+bool highs_rs_log_prints(const void* opts, int dev, int type);
+void highs_rs_log(const void* opts, int dev, int type, const char* msg,
+                  size_t len);
+void highs_rs_log_init(bool (*active)(const void*),
+                       void (*call)(const void*, int, const char*));
+}
+// HighsLogOptions' std::function user_callback, for the Rust sink
+static bool highsLogUserCallbackActive(const void* opts) {
+  const HighsLogOptions& o = *static_cast<const HighsLogOptions*>(opts);
+  return o.user_callback && o.user_callback_active;
+}
+static void highsLogUserCallback(const void* opts, int type,
+                                 const char* msg) {
+  const HighsLogOptions& o = *static_cast<const HighsLogOptions*>(opts);
+  HighsCallbackOutput data_out;
+  data_out.log_type = HighsLogType(type);
+  o.user_callback(kCallbackLogging, msg, &data_out, nullptr,
+                  o.user_callback_data);
+}
+[[maybe_unused]] static const bool rs_log_init =
+    (highs_rs_log_init(highsLogUserCallbackActive, highsLogUserCallback),
+     true);
+static_assert(offsetof(HighsLogOptions, user_log_callback_data) ==
+                  5 * sizeof(void*),
+              "HighsLogOptions' head is rust/src/io/log.rs LogOptionsHead");
+static_assert(sizeof(HighsInt) == 4, "log_dev_level is read as i32");
+
+static void rsLogFormatted(const HighsLogOptions& log_options, const int dev,
+                           const HighsLogType type, const char* format,
+                           va_list argptr) {
+  std::array<char, kIoBufferSize> buffer;
+  va_list copy;
+  va_copy(copy, argptr);
+  int len = vsnprintf(buffer.data(), buffer.size(), format, copy);
+  va_end(copy);
+  assert(len >= 0);
+  if (len < 0) return;
+  if (size_t(len) < buffer.size()) {
+    highs_rs_log(&log_options, dev, int(type), buffer.data(), len);
+  } else {
+    std::string s(len, '\0');
+    vsnprintf(&s[0], len + 1, format, argptr);
+    highs_rs_log(&log_options, dev, int(type), s.data(), len);
+  }
+}
+
+void highsLogUser(const HighsLogOptions& log_options_, const HighsLogType type,
+                  const char* format, ...) {
+  if (!highs_rs_log_prints(&log_options_, 0, int(type))) return;
+  // highsLogUser should not be passed HighsLogType::kDetailed or
+  // HighsLogType::kVerbose
+  assert(type != HighsLogType::kDetailed);
+  assert(type != HighsLogType::kVerbose);
+  va_list argptr;
+  va_start(argptr, format);
+  rsLogFormatted(log_options_, 0, type, format, argptr);
+  va_end(argptr);
+}
+
+void highsLogDev(const HighsLogOptions& log_options_, const HighsLogType type,
+                 const char* format, ...) {
+  if (!highs_rs_log_prints(&log_options_, 1, int(type))) return;
+  va_list argptr;
+  va_start(argptr, format);
+  rsLogFormatted(log_options_, 1, type, format, argptr);
+  va_end(argptr);
+}
+#else
 void highsLogUser(const HighsLogOptions& log_options_, const HighsLogType type,
                   const char* format, ...) {
   if (!*log_options_.output_flag) return;
@@ -241,6 +315,8 @@ void highsLogDev(const HighsLogOptions& log_options_, const HighsLogType type,
   }
   va_end(argptr);
 }
+
+#endif
 
 void highsFprintfString(FILE* file, const HighsLogOptions& log_options_,
                         const std::string& s) {

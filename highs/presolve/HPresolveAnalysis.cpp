@@ -8,6 +8,11 @@
 #include "lp_data/HighsModelUtils.h"
 #include "presolve/HPresolve.h"
 
+// With HIGHS_RUST the presolve rule analysis is Rust's
+// (rust/src/presolve/hpresolve: analysis_setup, start/stop_rule_log,
+// analyse_presolve_rule_log); HPresolveAnalysis only holds the log
+#ifndef HIGHS_RUST
+
 void HPresolveAnalysis::setup(const HighsLp* model_,
                               const HighsOptions* options_,
                               const HighsInt& numDeletedRows_,
@@ -237,3 +242,4 @@ bool HPresolveAnalysis::analysePresolveRuleLog(const bool report) {
   }
   return true;
 }
+#endif

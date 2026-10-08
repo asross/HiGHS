@@ -75,8 +75,6 @@ pub struct Host {
     pub timer_read: extern "C" fn(Ctx) -> f64,
     /// highsTimeSecondToString(t) into the buffer
     pub time_string: extern "C" fn(Ctx, f64, *mut c_char, usize),
-    /// analysis_.setup: fills allow_rule, returns allow_logging_
-    pub analysis_setup: extern "C" fn(Ctx, bool, *mut u8) -> bool,
     pub sync_model: extern "C" fn(Ctx, *const CModel, bool),
     pub set_matrix: extern "C" fn(Ctx, *const i32, usize, *const i32, *const f64, usize),
     /// appends records, (type, position) pairs and the not linearly
@@ -127,9 +125,6 @@ impl Host {
         (self.time_string)(self.ctx, t, buf.as_mut_ptr(), buf.len());
         // SAFETY: the C++ writes a NUL-terminated string into buf
         unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned()
-    }
-    pub(crate) fn analysis_setup(&self, silent: bool, allow: &mut [u8; RULE_COUNT]) -> bool {
-        (self.analysis_setup)(self.ctx, silent, allow.as_mut_ptr())
     }
     pub(crate) fn sync_model(&self, p: &Presolve) {
         self.sync_model_ex(p, false);

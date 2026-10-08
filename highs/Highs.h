@@ -43,6 +43,8 @@ const char* highsGithash();
 class Highs {
   // Highs::run's control flow in Rust (lp_data/HighsRunRust.cpp)
   friend struct HighsRunRust;
+  // The IIS in Rust (lp_data/HighsIisRust.cpp)
+  friend struct HighsIisRust;
 
  public:
   Highs();

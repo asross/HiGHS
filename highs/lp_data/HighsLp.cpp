@@ -133,6 +133,7 @@ double HighsLp::objectiveValue(const std::vector<double>& solution) const {
 }
 #endif
 
+#ifndef HIGHS_RUST
 HighsCDouble HighsLp::objectiveCDoubleValue(
     const std::vector<double>& solution) const {
   assert((int)solution.size() >= this->num_col_);
@@ -142,6 +143,22 @@ HighsCDouble HighsLp::objectiveCDoubleValue(
         static_cast<HighsCDouble>(this->col_cost_[iCol]) * solution[iCol];
   return objective_function_value;
 }
+#else
+extern "C" void highs_rs_lp_objective_cdouble(double offset, RsMut<double> cost,
+                                              RsMut<double> x,
+                                              HighsCDouble* out);
+
+HighsCDouble HighsLp::objectiveCDoubleValue(
+    const std::vector<double>& solution) const {
+  assert((int)solution.size() >= this->num_col_);
+  HighsCDouble value;
+  highs_rs_lp_objective_cdouble(
+      this->offset_,
+      {const_cast<double*>(this->col_cost_.data()), size_t(this->num_col_)},
+      {const_cast<double*>(solution.data()), size_t(this->num_col_)}, &value);
+  return value;
+}
+#endif
 
 void HighsLp::setMatrixDimensions() {
   this->a_matrix_.num_col_ = this->num_col_;

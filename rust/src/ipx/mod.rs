@@ -38,6 +38,7 @@ pub(crate) mod utils;
 #[cfg(test)]
 mod tests;
 
+pub use control::Hooks;
 pub use lp_solver::LpSolver;
 
 /// ipxint = HighsInt (32 bit)

@@ -14,11 +14,13 @@
 #include <cmath>
 
 #include "lp_data/HighsModelUtils.h"
+#include "lp_data/HighsRust.h"
 #include "util/HighsMatrixUtils.h"
 #include "util/HighsSort.h"
 
 using std::fabs;
 
+#ifndef HIGHS_RUST
 HighsStatus assessHessian(HighsHessian& hessian, const HighsOptions& options) {
   HighsStatus return_status = HighsStatus::kOk;
   HighsStatus call_status;
@@ -625,3 +627,71 @@ void userScaleHessian(HighsHessian& hessian, HighsUserScaleData& data,
     if (apply) hessian.value_[iEl] = value;
   }
 }
+#else
+// The Hessian's logic is Rust's (rust/src/lp_data/hessian.rs)
+static HighsStatus rsHessianCall(int call, const HighsOptions& options,
+                                 HighsHessian& hessian, HighsInt arg = 0) {
+  RsHessianOptions o{rsLog(options.log_options), options.small_matrix_value,
+                     options.large_matrix_value};
+  RsHessian h = rsHessian(hessian);
+  return HighsStatus(highs_rs_hessian(call, &h, &o, arg, nullptr, nullptr, 0));
+}
+
+HighsStatus assessHessian(HighsHessian& hessian, const HighsOptions& options) {
+  return rsHessianCall(0, options, hessian);
+}
+
+HighsStatus assessHessianDimensions(const HighsOptions& options,
+                                    HighsHessian& hessian) {
+  return rsHessianCall(1, options, hessian);
+}
+
+void completeHessianDiagonal(const HighsOptions& options,
+                             HighsHessian& hessian) {
+  rsHessianCall(5, options, hessian);
+}
+
+bool okHessianDiagonal(const HighsOptions& options, HighsHessian& hessian,
+                       const ObjSense sense) {
+  const RsLog log = rsLog(options.log_options);
+  return highs_rs_ok_hessian_diagonal(&log, rsHessianView(hessian),
+                                      int(sense));
+}
+
+HighsStatus extractTriangularHessian(const HighsOptions& options,
+                                     HighsHessian& hessian) {
+  return rsHessianCall(3, options, hessian);
+}
+
+void triangularToSquareHessian(const HighsHessian& hessian,
+                               vector<HighsInt>& start, vector<HighsInt>& index,
+                               vector<double>& value) {
+  RsVec<HighsInt> s = rsVec(start), i = rsVec(index);
+  RsVec<double> v = rsVec(value);
+  highs_rs_triangular_to_square_hessian(rsHessianView(hessian), &s, &i, &v);
+}
+
+HighsStatus normaliseHessian(const HighsOptions& options,
+                             HighsHessian& hessian) {
+  return rsHessianCall(4, options, hessian);
+}
+
+void completeHessian(const HighsInt full_dim, HighsHessian& hessian) {
+  assert(hessian.dim_ <= full_dim);
+  RsHessian h = rsHessian(hessian);
+  highs_rs_hessian(2, &h, nullptr, full_dim, nullptr, nullptr, 0);
+}
+
+void reportHessian(const HighsLogOptions& log_options, const HighsInt dim,
+                   const HighsInt num_nz, const HighsInt* start,
+                   const HighsInt* index, const double* value) {
+  const RsLog log = rsLog(log_options);
+  highs_rs_report_hessian(&log, dim, num_nz, start, index, value);
+}
+
+void userScaleHessian(HighsHessian& hessian, HighsUserScaleData& data,
+                      const bool apply) {
+  highs_rs_user_scale_hessian(rsHessianView(hessian), &data, apply);
+}
+#endif
+

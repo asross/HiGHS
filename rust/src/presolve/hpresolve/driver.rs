@@ -860,12 +860,41 @@ impl<'h> Presolve<'h> {
 
     // ------------------------------------------------- HPresolveAnalysis
 
+    /// HPresolveAnalysis::setup: the rules presolve_rule_off allows, with
+    /// their log, and whether to log the rules
     fn analysis_setup(&mut self, silent: bool) {
-        let mut allow = [1u8; RULE_COUNT];
-        let allow_logging = self.host.analysis_setup(silent, &mut allow);
-        for (a, &v) in self.analysis.allow_rule.iter_mut().zip(allow.iter()) {
-            *a = v != 0;
+        let rule_off = self.opt.presolve_rule_off;
+        let dev = self.opt.log_dev_level != 0;
+        self.analysis.allow_rule = [true; RULE_COUNT];
+        if rule_off != 0 || dev {
+            if !silent {
+                self.log_user(
+                    LOG_INFO,
+                    if rule_off != 0 {
+                        "Presolve rules not allowed:\n"
+                    } else {
+                        "Permitted suppression of presolve rules via presolve_rule_off option:\n"
+                    },
+                );
+            }
+            let mut bit: i32 = 1;
+            for rule in 0..RULE_COUNT {
+                let allow = rule_off & bit == 0;
+                let args = || [(rule as i32).into(), (rule as i32).into(), bit.into(), RULE_NAMES[rule].into()];
+                if rule >= RULE_FORCING_ROW {
+                    // kPresolveRuleFirstAllowOff: this rule can be off
+                    self.analysis.allow_rule[rule] = allow;
+                    if !silent && (!allow || (rule_off == 0 && dev)) {
+                        self.log_user(LOG_INFO, &sprintf("   Rule %2d (set bit %2d = %5d): %s\n", &args()));
+                    }
+                } else if !allow && !silent {
+                    self.log_user(LOG_WARNING, &sprintf("Cannot disallow rule %2d (bit %2d = %5d): %s\n", &args()));
+                }
+                bit = bit.wrapping_mul(2);
+            }
         }
+        // Logging if the option is set and the model is not a MIP
+        let allow_logging = self.opt.presolve_rule_logging && !self.integrality.iter().any(|&t| t != 0);
         self.analysis.allow_logging = allow_logging;
         self.analysis.logging_on = allow_logging;
         self.analysis.log_rule_type = RULE_ILLEGAL;

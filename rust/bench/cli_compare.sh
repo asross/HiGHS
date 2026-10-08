@@ -40,6 +40,8 @@ while IFS= read -r line || [ -n "$line" ]; do
     printf 'log_file = my.log\nlog_to_console = false\n' > "$d/logfile.set"
     printf 'write_presolved_model_file = p.mps\n' > "$d/presolved.set"
     printf 'write_solution_style = 1\nranging = on\n' > "$d/ranging.set"
+    printf 'iis_strategy = 6\nwrite_iis_model_file = iis.lp\n' > "$d/iis.set"
+    printf 'iis_strategy = 2\nwrite_iis_model_file = iis.mps\n' > "$d/iis2.set"
     (cd "$d" && eval "set -- $line" && "$ROOT/$b" "$@" > stdout 2> stderr; echo $? > exit)
     for f in "$d"/*; do mask < "$f" | sed "s|$ROOT/$b|HIGHS|g" > "$f.m"; mv "$f.m" "$f"; done
     if [ "$k" -gt 0 ] && ! diff -r "$OUT/$n/0" "$d" > "$OUT/$n.$k.diff"; then

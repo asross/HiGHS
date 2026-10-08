@@ -38,6 +38,99 @@ impl<T> RsMut<T> {
     }
 }
 
+/// A C++ std::vector that Rust may resize (HighsRust.h: rsVec): its
+/// address, a function resizing it as std::vector::resize does (new
+/// elements are zero) and returning its data(), and its data and size
+#[repr(C)]
+pub struct RsVec<T> {
+    vec: *mut std::ffi::c_void,
+    resize_fn: unsafe extern "C" fn(*mut std::ffi::c_void, usize) -> *mut T,
+    ptr: *mut T,
+    len: usize,
+}
+
+impl<T: Copy + Default> RsVec<T> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    pub fn as_slice(&self) -> &[T] {
+        if self.len == 0 {
+            &[]
+        } else {
+            // SAFETY: the C++ vector holds len elements at ptr
+            unsafe { from_raw_parts(self.ptr, self.len) }
+        }
+    }
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        if self.len == 0 {
+            &mut []
+        } else {
+            // SAFETY: as as_slice, and &mut self makes it unaliased
+            unsafe { from_raw_parts_mut(self.ptr, self.len) }
+        }
+    }
+    /// std::vector::resize
+    pub fn resize(&mut self, n: usize) {
+        // SAFETY: the C++ function resizes the vector it was given with
+        self.ptr = unsafe { (self.resize_fn)(self.vec, n) };
+        self.len = n;
+    }
+    /// std::vector::assign of a range
+    pub fn assign(&mut self, v: &[T]) {
+        self.resize(0);
+        self.resize(v.len());
+        self.as_mut_slice().copy_from_slice(v);
+    }
+    pub fn push(&mut self, x: T) {
+        let n = self.len;
+        self.resize(n + 1);
+        self.as_mut_slice()[n] = x;
+    }
+    pub fn to_vec(&self) -> Vec<T> {
+        self.as_slice().to_vec()
+    }
+}
+
+#[cfg(test)]
+pub mod rs_vec_test {
+    //! RsVec over a Rust Vec, for tests
+    use super::RsVec;
+    unsafe extern "C" fn resize<T: Copy + Default>(v: *mut std::ffi::c_void, n: usize) -> *mut T {
+        let v = &mut *(v as *mut Vec<T>);
+        v.resize(n, T::default());
+        v.as_mut_ptr()
+    }
+    pub fn rs_vec<T: Copy + Default>(v: &mut Vec<T>) -> RsVec<T> {
+        RsVec { vec: v as *mut Vec<T> as *mut _, resize_fn: resize::<T>, ptr: v.as_mut_ptr(), len: v.len() }
+    }
+}
+
+/// A name as "%s" prints it (HighsRust.h: RsNameList)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RsName {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+
+impl RsName {
+    pub fn bytes(&self) -> &[u8] {
+        if self.len == 0 {
+            &[]
+        } else {
+            // SAFETY: the C++ string lives with its RsNameList
+            unsafe { from_raw_parts(self.ptr, self.len) }
+        }
+    }
+    /// The name as Rust's printf takes it (non-UTF-8 bytes replaced)
+    pub fn text(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(self.bytes())
+    }
+}
+
 /// HighsSparseMatrix
 #[repr(C)]
 pub struct CMatrix {

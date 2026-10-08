@@ -520,6 +520,563 @@ static void getColsRows(const std::string& instances) {
   }
 }
 
+// Completing a MIP solution from a (partial) user assignment, crossover
+// from a user solution, rays of infeasible and unbounded LPs and a QP,
+// presolve and postsolve errors
+static void drivers(const std::string& instances) {
+  printf("\n######## drivers\n");
+  for (const char* f : {"flugpl.mps", "egout.mps", "bell5.mps"}) {
+    for (int variant = 0; variant < 4; variant++) {
+      Highs h;
+      h.setOptionValue("output_flag", false);
+      if (h.readModel(instances + "/" + f) == HighsStatus::kError) break;
+      h.setOptionValue("output_flag", true);
+      h.setOptionValue("timeless_log", true);
+      h.setOptionValue("mip_max_start_nodes", 50);
+      Highs g;
+      g.setOptionValue("output_flag", false);
+      g.passModel(h.getLp());
+      g.run();
+      HighsSolution s = g.getSolution();
+      const HighsLp& lp = h.getLp();
+      printf("-- %s variant %d\n", f, variant);
+      for (HighsInt j = 0; j < lp.num_col_; j++) {
+        const bool discrete = lp.integrality_.size() &&
+                              lp.integrality_[j] != HighsVarType::kContinuous;
+        if (variant == 1 && discrete && j % 2) s.col_value[j] = kHighsUndefined;
+        if (variant == 2 && discrete) s.col_value[j] += 0.3;
+        if (variant == 3 && !discrete) s.col_value[j] = kHighsUndefined;
+      }
+      HighsStatus st = h.setSolution(s);
+      printf("setSolution %d\n", int(st));
+      st = h.run();
+      report(h, "run from user solution", st);
+    }
+  }
+  // Crossover from IPX's interior solution, and for a MIP and QP
+  for (const char* f : {"afiro.mps", "adlittle.mps", "flugpl.mps", "qjh.mps"}) {
+    Highs h;
+    h.setOptionValue("output_flag", false);
+    h.readModel(instances + "/" + f);
+    h.setOptionValue("solver", "ipm");
+    h.setOptionValue("run_crossover", "off");
+    h.setOptionValue("solve_relaxation", true);
+    h.run();
+    HighsSolution s = h.getSolution();
+    h.setOptionValue("output_flag", true);
+    h.setOptionValue("timeless_log", true);
+    HighsStatus st = h.crossover(s);
+    report(h, (std::string("crossover ") + f).c_str(), st);
+  }
+  // Rays: infeasible and unbounded LPs, an infeasible MIP's relaxation, a QP
+  {
+    const double inf = kHighsInf;
+    for (int which = 0; which < 4; which++) {
+      Highs h;
+      h.setOptionValue("timeless_log", true);
+      HighsLp lp;
+      lp.num_col_ = 2;
+      lp.num_row_ = 2;
+      lp.col_cost_ = {which == 1 ? -1.0 : 1.0, 1};
+      lp.col_lower_ = {0, 0};
+      lp.col_upper_ = {inf, inf};
+      lp.row_lower_ = {which == 1 ? -inf : 3.0, -inf};
+      lp.row_upper_ = {inf, which == 1 ? 1.0 : 2.0};
+      lp.a_matrix_.start_ = {0, 2, 4};
+      lp.a_matrix_.index_ = {0, 1, 0, 1};
+      lp.a_matrix_.value_ = {1, which == 1 ? -1.0 : 1.0, 1, 1};
+      if (which == 2) lp.integrality_ = {HighsVarType::kInteger,
+                                         HighsVarType::kInteger};
+      h.passModel(lp);
+      if (which == 3) {
+        HighsHessian q;
+        q.dim_ = 2;
+        q.start_ = {0, 1, 2};
+        q.index_ = {0, 1};
+        q.value_ = {1, 1};
+        h.passHessian(q);
+      }
+      for (int pass = 0; pass < 2; pass++) {
+        HighsStatus st = h.run();
+        report(h, "ray model", st);
+        bool has = false;
+        std::vector<double> ray(2);
+        st = h.getDualRay(has, nullptr);
+        printf("dual ray (no values) %d %d\n", int(st), int(has));
+        st = h.getDualRay(has, ray.data());
+        printf("dual ray %d %d %.17g %.17g\n", int(st), int(has), ray[0],
+               ray[1]);
+        report(h, "after dual ray", st);
+        st = h.getPrimalRay(has, ray.data());
+        printf("primal ray %d %d %.17g %.17g\n", int(st), int(has), ray[0],
+               ray[1]);
+        report(h, "after primal ray", st);
+        // The second time from a cleared solver
+        h.clearSolver();
+      }
+    }
+  }
+  // Presolve of a QP and of a model with semi-variables; postsolve errors
+  for (const char* f : {"qjh.mps", "semi-continuous.mps", "afiro.mps"}) {
+    Highs h;
+    h.setOptionValue("timeless_log", true);
+    h.setOptionValue("output_flag", false);
+    if (h.readModel(instances + "/" + f) == HighsStatus::kError) continue;
+    h.setOptionValue("output_flag", true);
+    HighsStatus st = h.presolve();
+    printf("%s presolve %d\n", f, int(st));
+    // (Postsolve after a failed presolve may throw in the C++)
+    if (st == HighsStatus::kError) continue;
+    HighsSolution s;
+    s.col_value.assign(3, 0);
+    st = h.postsolve(s);
+    printf("postsolve wrong size %d\n", int(st));
+    s.col_value.assign(h.getPresolvedLp().num_col_, 0);
+    s.row_dual.assign(1, 0);
+    st = h.postsolve(s);
+    printf("postsolve wrong dual size %d\n", int(st));
+    HighsBasis b;
+    b.valid = true;
+    st = h.postsolve(s, b);
+    printf("postsolve bad basis %d\n", int(st));
+  }
+}
+
+// Passing models (arrays, Hessians, bad formats and integrality), reading
+// and writing models and bases (unsupported and missing files, repeated
+// names), set errors and a model change after a solve
+static void modelPassing(const std::string& instances) {
+  printf("\n######## model passing\n");
+  Highs h;
+  h.setOptionValue("timeless_log", true);
+  const double inf = kHighsInf;
+  const HighsInt start[3] = {0, 2, 4};
+  const HighsInt index[4] = {0, 1, 0, 1};
+  const double value[4] = {1, 2, 3, 4};
+  const double cost[2] = {1, -1}, lower[2] = {0, 0}, upper[2] = {inf, 4};
+  const double rlower[2] = {-inf, 1}, rupper[2] = {6, inf};
+  HighsInt integrality[2] = {1, 0};
+  for (int variant = 0; variant < 8; variant++) {
+    HighsStatus s;
+    const HighsInt q_start[3] = {0, 2, 3};
+    const HighsInt q_index[3] = {0, 1, 1};
+    const HighsInt q_square_start[3] = {0, 2, 4};
+    const HighsInt q_square_index[4] = {0, 1, 0, 1};
+    const double q_value[4] = {2, 1, 1.5, 2};
+    switch (variant) {
+      case 0:
+        s = h.passModel(2, 2, 4, 1, 1, 0.5, cost, lower, upper, rlower,
+                        rupper, start, index, value, integrality);
+        break;
+      case 1:
+        integrality[1] = 7;
+        s = h.passModel(2, 2, 4, 1, 1, 0.5, cost, lower, upper, rlower,
+                        rupper, start, index, value, integrality);
+        integrality[1] = 0;
+        break;
+      case 2:
+        s = h.passModel(2, 2, 4, 5, 1, 0.5, cost, lower, upper, rlower,
+                        rupper, start, index, value, integrality);
+        break;
+      case 3:
+        s = h.passModel(2, 2, 4, 3, 2, 1, 1, 0, cost, lower, upper, rlower,
+                        rupper, start, index, value, q_start, q_index,
+                        q_value, nullptr);
+        break;
+      case 4:
+        // Square, slightly asymmetric
+        s = h.passModel(2, 2, 4, 4, 1, 2, 1, 0, cost, lower, upper, rlower,
+                        rupper, start, index, value, q_square_start,
+                        q_square_index, q_value, nullptr);
+        break;
+      case 5:
+        s = h.passHessian(3, 3, 1, q_start, q_index, q_value);
+        printf("passHessian wrong dim %d\n", int(s));
+        s = h.passHessian(2, 3, 9, q_start, q_index, q_value);
+        printf("passHessian bad format %d\n", int(s));
+        s = h.passHessian(2, 0, 1, q_start, q_index, q_value);
+        break;
+      case 6:
+        // No rows: the matrix is ignored
+        s = h.passModel(2, 0, 0, 1, 1, 0.5, cost, lower, upper, nullptr,
+                        nullptr, start, index, value, nullptr);
+        break;
+      default: {
+        HighsLp lp;
+        lp.num_col_ = 2;
+        lp.num_row_ = 2;
+        lp.col_cost_ = {1, 1};
+        lp.col_lower_ = {0, 0};
+        lp.col_upper_ = {1, 1};
+        lp.row_lower_ = {0, 0};
+        lp.row_upper_ = {1, 1};
+        lp.a_matrix_.start_ = {0, 1};
+        lp.a_matrix_.index_ = {0};
+        lp.a_matrix_.value_ = {1};
+        s = h.passModel(lp);
+      }
+    }
+    printf("pass variant %d: %d\n", variant, int(s));
+    if (s != HighsStatus::kError) report(h, "after pass", h.run());
+  }
+  // Sets with errors
+  h.readModel(instances + "/afiro.mps");
+  const HighsInt dup[3] = {1, 1, 2}, unordered[3] = {3, 1, 2},
+                 out[3] = {1, 2, 99};
+  const double c3[3] = {1, 2, 3};
+  printf("dup %d\n", int(h.changeColsCost(3, dup, c3)));
+  printf("unordered %d\n", int(h.changeColsBounds(3, unordered, c3, c3)));
+  printf("out %d\n", int(h.changeRowsBounds(3, out, c3, c3)));
+  printf("size %d\n", int(h.deleteCols(-1, dup)));
+  // A model change after a solve: the solution and basis are resized
+  report(h, "afiro", h.run());
+  h.addCol(1, 0, 1, 0, nullptr, nullptr);
+  h.addRow(0, 1, 0, nullptr, nullptr);
+  report(h, "after adding a column and row", h.run());
+  // Reading and writing
+  for (const char* f : {"/nosuchfile.mps", "/afiro.txt", "/afiro.mps.gz",
+                        "/nosuch.lp"}) {
+    HighsStatus s = h.readModel(instances + f);
+    printf("read %s %d\n", f, int(s));
+  }
+  h.readModel(instances + "/adlittle.mps");
+  h.run();
+  for (const char* f : {"m.mps", "m.lp", "m.xyz", ""}) {
+    HighsStatus s = h.writeModel(f);
+    printf("write model '%s' %d\n", f, int(s));
+  }
+  h.passColName(0, "same");
+  h.passColName(1, "same");
+  printf("passColName bad %d %d\n", int(h.passColName(-1, "x")),
+         int(h.passColName(0, "")));
+  printf("write repeated %d\n", int(h.writeModel("r.mps")));
+  printf("write basis %d\n", int(h.writeBasis("b.bas")));
+  printf("read basis %d\n", int(h.readBasis("b.bas")));
+  printf("read basis missing %d\n", int(h.readBasis("nosuch.bas")));
+  printf("read basis wrong %d\n", int(h.readBasis("m.mps")));
+  h.clearSolver();
+  printf("write basis invalid %d\n", int(h.writeBasis("b2.bas")));
+  printf("write basis stdout %d\n", int(h.writeBasis("")));
+  printf("write basis unwritable %d\n", int(h.writeBasis("/nosuchdir/b.bas")));
+}
+
+// getStandardFormLp of LPs with boxed, free, fixed and one-sided rows
+// and columns, before and after a model change
+static void standardForm(const std::string& instances) {
+  printf("\n######## standard form\n");
+  for (const char* f : {"afiro.mps", "adlittle.mps", "box1.mps",
+                        "shell.mps", "25fv47.mps", "egout.mps"}) {
+    Highs h;
+    h.setOptionValue("output_flag", false);
+    if (h.readModel(instances + "/" + f) == HighsStatus::kError) continue;
+    h.setOptionValue("output_flag", true);
+    for (int pass = 0; pass < 2; pass++) {
+      HighsInt num_col, num_row, num_nz;
+      double offset;
+      HighsStatus s =
+          h.getStandardFormLp(num_col, num_row, num_nz, offset);
+      printf("%s pass %d: status %d %d %d %d offset %.17g\n", f, pass, int(s),
+             int(num_col), int(num_row), int(num_nz), offset);
+      std::vector<double> cost(num_col), rhs(num_row), value(num_nz);
+      std::vector<HighsInt> start(num_col + 1), index(num_nz);
+      s = h.getStandardFormLp(num_col, num_row, num_nz, offset, cost.data(),
+                              rhs.data(), start.data(), index.data(),
+                              value.data());
+      sum("cost", cost);
+      sum("rhs", rhs);
+      sum("value", value);
+      ivec("start", start);
+      long long isum = 0;
+      for (size_t k = 0; k < index.size(); k++) isum += index[k] * (k % 13 + 1);
+      printf("index sum %lld\n", isum);
+      // The incumbent matrix after the round trip through row-wise
+      const HighsLp& lp = h.getLp();
+      sum("a_value", lp.a_matrix_.value_);
+      ivec("a_start", lp.a_matrix_.start_);
+      h.changeColBounds(0, -kHighsInf, kHighsInf);
+      h.changeObjectiveSense(ObjSense::kMaximize);
+      h.changeObjectiveOffset(2.5);
+    }
+  }
+}
+
+// Timing-dependent messages (dev level timings, thread numbers) are not
+// printed by the callbacks
+static const char* untimed(const char* message) {
+  const std::string m(message);
+  for (const char* t : {"Strange", "Thread", "MIP  ", "time", "Time"})
+    if (m.find(t) != std::string::npos) return nullptr;
+  return message;
+}
+
+// Log and solver callbacks: the deprecated log callback, the C++ and C
+// callbacks, messages longer than the callback buffer, logging to a file
+static void logCallback(HighsLogType type, const char* message, void* data) {
+  if (!untimed(message)) return;
+  printf("logcb[%s] %d: %s", static_cast<const char*>(data), int(type),
+         untimed(message));
+}
+
+static void cCallback(int type, const char* message,
+                      const HighsCallbackDataOut* out, HighsCallbackDataIn* in,
+                      void* data) {
+  (void)in;
+  if (!untimed(message)) return;
+  printf("ccb[%s] %d log %d: %s", static_cast<const char*>(data), type,
+         out->log_type, untimed(message));
+}
+
+static void callbacks(const std::string& instances) {
+  printf("\n######## callbacks\n");
+  const std::string long_name(1500, 'x');
+  for (int variant = 0; variant < 5; variant++) {
+    printf("-- variant %d\n", variant);
+    fflush(stdout);
+    Highs h;
+    h.setOptionValue("timeless_log", true);
+    if (variant == 1) h.setOptionValue("log_to_console", false);
+    if (variant == 2) h.setOptionValue("log_dev_level", 3);
+    if (variant == 3) h.setOptionValue("log_file", "callbacks.log");
+    if (variant == 4) h.setOptionValue("output_flag", false);
+    static char tag[] = "user";
+    h.setLogCallback(logCallback, tag);
+    if (variant != 1) {
+      h.setCallback(
+          [](int type, const std::string& message,
+             const HighsCallbackOutput* out, HighsCallbackInput* in,
+             void* data) {
+            (void)data;
+            if (type == kCallbackLogging) {
+              if (!untimed(message.c_str())) return;
+              printf("cb %d log %d: %s", type, int(out->log_type),
+                     untimed(message.c_str()));
+            } else if (type == kCallbackSimplexInterrupt) {
+              printf("cb simplex %d\n", int(out->simplex_iteration_count));
+              if (out->simplex_iteration_count > 30) in->user_interrupt = true;
+            } else if (type == kCallbackMipImprovingSolution) {
+              printf("cb mip improving %.17g\n", out->objective_function_value);
+            } else {
+              printf("cb %d\n", type);
+            }
+          },
+          nullptr);
+      h.startCallback(kCallbackLogging);
+      if (variant == 2) h.startCallback(kCallbackSimplexInterrupt);
+      h.startCallback(kCallbackMipImprovingSolution);
+    } else {
+      static char ctag[] = "c";
+      h.setCallback(cCallback, ctag);
+      h.startCallback(kCallbackLogging);
+    }
+    // An unknown option with a long name: a message beyond the 1024-byte
+    // callback buffer
+    h.setOptionValue(long_name, true);
+    h.readModel(instances + "/adlittle.mps");
+    report(h, "adlittle", h.run());
+    h.readModel(instances + "/flugpl.mps");
+    report(h, "flugpl", h.run());
+    h.stopCallback(kCallbackLogging);
+    h.readModel(instances + "/afiro.mps");
+    report(h, "afiro, logging callback stopped", h.run());
+    fflush(stdout);
+  }
+  FILE* f = fopen("callbacks.log", "r");
+  if (f) {
+    printf("-- callbacks.log\n");
+    char line[4096];
+    while (fgets(line, sizeof line, f)) {
+      if (std::string(line).find("time") == std::string::npos) printf("%s", line);
+    }
+    fclose(f);
+  }
+}
+
+
+static void iisReport(Highs& h, const char* what, HighsStatus s,
+                      const HighsIis& iis) {
+  printf("%s %d model status %s iis valid %d status %d strategy %d\n", what,
+         int(s), h.modelStatusToString(h.getModelStatus()).c_str(),
+         int(iis.valid_), int(iis.status_), int(iis.strategy_));
+  ivec("col_index", iis.col_index_);
+  ivec("row_index", iis.row_index_);
+  ivec("col_bound", iis.col_bound_);
+  ivec("row_bound", iis.row_bound_);
+  ivec("col_status", iis.col_status_);
+  ivec("row_status", iis.row_status_);
+  printf("lps %d iterations %d min %d max %d\n", int(iis.info_.num_lp_solved),
+         int(iis.info_.sum_simplex_iteration_counts),
+         int(iis.info_.min_simplex_iteration_count),
+         int(iis.info_.max_simplex_iteration_count));
+  const HighsLp& lp = h.getIisLp();
+  printf("iis lp %s %d x %d nnz %d names %d %d\n", lp.model_name_.c_str(),
+         int(lp.num_row_), int(lp.num_col_), int(lp.a_matrix_.numNz()),
+         int(lp.col_names_.size()), int(lp.row_names_.size()));
+  fflush(stdout);
+}
+
+static int g_log_calls[16];
+static void countCallback(int type, const std::string&,
+                          const HighsCallbackOutput*, HighsCallbackInput*,
+                          void*) {
+  if (type >= 0 && type < 16) g_log_calls[type]++;
+}
+
+static void iisCases(const std::string& instances) {
+  const char* models[] = {"galenet", "woodinfe", "forest6", "klein1",
+                          "ex72a",   "avgas",    "infeasible-mip0",
+                          "infeasible-mip1", "refinery"};
+  const int strategies[] = {0, 1, 2, 4, 6, 10, 12, 18, 22, 30};
+  for (const char* m : models) {
+    for (int strategy : strategies) {
+      for (int solve_first = 0; solve_first < 2; solve_first++) {
+        printf("\n######## iis %s strategy %d solve first %d\n", m, strategy,
+               solve_first);
+        Highs* h = fresh();
+        h->setOptionValue("output_flag", strategy == 6 && solve_first);
+        h->readModel(instances + "/" + m + ".mps");
+        h->setOptionValue("iis_strategy", strategy);
+        if (solve_first) report(*h, "run", h->run());
+        HighsIis iis;
+        HighsStatus s = h->getIis(iis);
+        iisReport(*h, "getIis", s, iis);
+        // Again: the IIS is kept
+        s = h->getIis(iis);
+        iisReport(*h, "getIis again", s, iis);
+        std::string file = std::string("iis_") + m + "_" +
+                           std::to_string(strategy) + "_" +
+                           std::to_string(solve_first) + ".lp";
+        printf("writeIisModel %d\n", int(h->writeIisModel(file)));
+        delete h;
+      }
+    }
+  }
+  // Time limit, callbacks, logging to the console
+  for (const char* m : {"forest6", "avgas", "woodinfe"}) {
+    printf("\n######## iis %s time limit 0\n", m);
+    Highs* h = fresh();
+    h->setOptionValue("output_flag", false);
+    h->readModel(instances + "/" + m + ".mps");
+    h->setOptionValue("iis_time_limit", 0.0);
+    h->setOptionValue("iis_strategy", 6);
+    HighsIis iis;
+    HighsStatus s = h->getIis(iis);
+    iisReport(*h, "getIis", s, iis);
+    delete h;
+  }
+  {
+    printf("\n######## iis callback\n");
+    Highs* h = fresh();
+    h->setOptionValue("log_to_console", false);
+    h->readModel(instances + "/galenet.mps");
+    h->setOptionValue("iis_strategy", 6);
+    h->setCallback(countCallback, nullptr);
+    h->startCallback(kCallbackLogging);
+    h->startCallback(kCallbackMipImprovingSolution);
+    HighsIis iis;
+    HighsStatus s = h->getIis(iis);
+    iisReport(*h, "getIis", s, iis);
+    for (int i = 0; i < 10; i++) printf(" %d", g_log_calls[i]);
+    printf("\n");
+    delete h;
+  }
+  // Feasibility relaxation
+  for (const char* m : {"galenet", "woodinfe", "avgas", "infeasible-mip0",
+                        "klein1"}) {
+    for (int k = 0; k < 4; k++) {
+      printf("\n######## feasibilityRelaxation %s %d\n", m, k);
+      Highs* h = fresh();
+      h->setOptionValue("output_flag", k == 1);
+      h->readModel(instances + "/" + m + ".mps");
+      if (k == 3) h->setOptionValue("iis_strategy", 16);
+      const HighsLp& lp = h->getLp();
+      std::vector<double> lo(lp.num_col_), up(lp.num_col_), rhs(lp.num_row_);
+      for (HighsInt i = 0; i < lp.num_col_; i++) {
+        lo[i] = i % 3 == 0 ? -1 : 1 + i % 2;
+        up[i] = i % 4 == 0 ? -1 : 2;
+      }
+      for (HighsInt i = 0; i < lp.num_row_; i++) rhs[i] = i % 5 == 0 ? -1 : i % 3;
+      HighsStatus s =
+          k == 0   ? h->feasibilityRelaxation(1, 1, 1)
+          : k == 1 ? h->feasibilityRelaxation(-1, 1, 1)
+          : k == 2 ? h->feasibilityRelaxation(1, 1, 0, lo.data(), up.data(),
+                                              rhs.data())
+                   : h->feasibilityRelaxation(1, -1, 1, nullptr, nullptr,
+                                              rhs.data());
+      report(*h, "feasibilityRelaxation", s);
+      printf("objective %.17g\n", h->getInfo().objective_function_value);
+      HighsIis iis;
+      s = h->getIis(iis);
+      iisReport(*h, "getIis after", s, iis);
+      delete h;
+    }
+  }
+}
+
+// QPs through the API (passModel with a Hessian, passHessian, hot start)
+// and the ill-conditioning analysis of an optimal basis
+static void qpAndIllConditioning(const std::string& instances) {
+  printf("\n######## QP through the API\n");
+  {
+    Highs* h = fresh();
+    // min x0^2 + x1^2 - x0 x1 + x0 - 2 x1, x0 + x1 >= 1, 0 <= x <= 3
+    const double cost[] = {1, -2}, lower[] = {0, 0}, upper[] = {3, 3};
+    const double row_lower[] = {1}, row_upper[] = {kHighsInf};
+    const HighsInt a_start[] = {0, 1}, a_index[] = {0, 0};
+    const double a_value[] = {1, 1};
+    const HighsInt q_start[] = {0, 2}, q_index[] = {0, 1, 1};
+    const double q_value[] = {2, -1, 2};
+    HighsStatus s = h->passModel(2, 1, 2, 3, 1, 1, 1, 0.5, cost, lower,
+                                 upper, row_lower, row_upper, a_start,
+                                 a_index, a_value, q_start, q_index, q_value,
+                                 nullptr);
+    printf("passModel %d\n", int(s));
+    s = h->run();
+    report(*h, "qp", s);
+    h->changeObjectiveSense(ObjSense::kMaximize);
+    const double neg[] = {-2, 1, -2};
+    s = h->passHessian(2, 3, 1, q_start, q_index, neg);
+    printf("passHessian %d\n", int(s));
+    s = h->run();
+    report(*h, "qp max", s);
+    delete h;
+  }
+  for (const char* f : {"qjh.mps", "primal1.mps", "qptestnw.lp"}) {
+    Highs* h = fresh();
+    printf("\n######## QP %s hot start\n", f);
+    h->readModel(instances + "/" + f);
+    HighsStatus s = h->run();
+    report(*h, "qp", s);
+    h->setOptionValue("qp_allow_hot_start", true);
+    s = h->run();
+    report(*h, "qp hot start", s);
+    h->changeColBounds(0, -1, 1);
+    s = h->run();
+    report(*h, "qp hot start after bound change", s);
+    delete h;
+  }
+  for (const char* f : {"afiro.mps", "adlittle.mps", "israel.mps"}) {
+    Highs* h = fresh();
+    printf("\n######## ill-conditioning %s\n", f);
+    h->readModel(instances + "/" + f);
+    HighsIllConditioning ic;
+    HighsStatus s = h->getIllConditioning(ic, true);
+    printf("before solve %d\n", int(s));
+    h->run();
+    for (int constraint = 0; constraint < 2; constraint++)
+      for (int method = 0; method < 2; method++)
+        for (double bound : {1e-4, 1.0, 1e3}) {
+          if (method == 0 && bound > 1e-4) continue;
+          s = h->getIllConditioning(ic, constraint, method, bound);
+          printf("constraint %d method %d bound %g: %d, %d records\n",
+                 constraint, method, bound, int(s), int(ic.record.size()));
+          for (const auto& r : ic.record)
+            printf("  %d %.17g\n", int(r.index), r.multiplier);
+        }
+    delete h;
+  }
+  fflush(stdout);
+}
+
 int main(int argc, char** argv) {
   const std::string instances = argc > 1 ? argv[1] : "check/instances";
   g_instances = instances;
@@ -557,5 +1114,11 @@ int main(int argc, char** argv) {
   presolvePostsolve(instances);
   special();
   getColsRows(instances);
+  callbacks(instances);
+  standardForm(instances);
+  drivers(instances);
+  modelPassing(instances);
+  iisCases(instances);
+  qpAndIllConditioning(instances);
   return 0;
 }
