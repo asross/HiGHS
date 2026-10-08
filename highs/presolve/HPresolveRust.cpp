@@ -10,7 +10,7 @@
  * prepares the model as the C++ does, run hands the model and the postsolve
  * stack's index maps to Rust, which presolves and writes the model back.
  * The callbacks below are what the Rust calls in C++: logging, the timer,
- * the presolve rule analysis setup, the HighsLp and postsolve stack
+ * the HighsLp and postsolve stack
  * updates, the dependent equations' HFactor, and the parts of the MIP solver
  * that are C++: the setup of the domain and clique table for probing,
  * HighsImplications::runProbing's C++ glue and its lifting opportunities,
@@ -62,6 +62,7 @@ struct RsOptions {
   bool output_flag;
   bool timeless_log;
   bool use_implied_bounds_from_presolve;
+  bool presolve_rule_logging;
 };
 
 struct RsMipInfo {
@@ -157,7 +158,6 @@ struct RsHost {
   void (*log)(Cb, HighsInt, HighsInt, const char*);
   double (*timer_read)(Cb);
   void (*time_string)(Cb, double, char*, size_t);
-  bool (*analysis_setup)(Cb, bool, uint8_t*);
   void (*sync_model)(Cb, const RsModel*, bool);
   void (*set_matrix)(Cb, const HighsInt*, size_t, const HighsInt*,
                      const double*, size_t);
@@ -203,16 +203,6 @@ double cbTimerRead(Cb c) { return C(c).timer->read(); }
 void cbTimeString(Cb, double t, char* buf, size_t len) {
   std::string s = highsTimeSecondToString(t);
   snprintf(buf, len, "%s", s.c_str());
-}
-
-bool cbAnalysisSetup(Cb c, bool silent, uint8_t* allow) {
-  Ctx& x = C(c);
-  HPresolveAnalysis& a = x.presolve->rustAnalysis();
-  a.setup(x.model, x.options, x.presolve->rustNumDeletedRows(),
-          x.presolve->rustNumDeletedCols(), silent);
-  for (HighsInt i = 0; i < kPresolveRuleCount; i++)
-    allow[i] = a.allow_rule_[i] ? 1 : 0;
-  return a.allow_logging_;
 }
 
 void cbSyncModel(Cb c, const RsModel* m, bool resize_row_names) {
@@ -495,7 +485,6 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
               cbLog,
               cbTimerRead,
               cbTimeString,
-              cbAnalysisSetup,
               cbSyncModel,
               cbSetMatrix,
               cbFlush,
@@ -530,7 +519,8 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
               options->presolve_remove_slacks,
               options->output_flag,
               options->timeless_log,
-              options->use_implied_bounds_from_presolve};
+              options->use_implied_bounds_from_presolve,
+              options->presolve_rule_logging};
   RsMipInfo mi{};
   if (mipsolver != nullptr) {
     mi.epsilon = mipsolver->mipdata_->epsilon;

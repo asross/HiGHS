@@ -22,19 +22,12 @@
 
 static_assert(sizeof(HighsInt) == 4, "Rust's lp_data uses 32-bit ints");
 
-static void rsLogFn(const void* opts, int dev, int type, const char* msg,
-                    size_t len) {
-  const std::string s(msg, len);
-  const HighsLogOptions& log_options =
-      *static_cast<const HighsLogOptions*>(opts);
-  if (dev)
-    highsLogDev(log_options, HighsLogType(type), "%s", s.c_str());
-  else
-    highsLogUser(log_options, HighsLogType(type), "%s", s.c_str());
-}
+// The Rust log sink (rust/src/io/log.rs), called by Rust directly
+extern "C" void highs_rs_log(const void* opts, int dev, int type,
+                             const char* msg, size_t len);
 
 RsLog rsLog(const HighsLogOptions& log_options) {
-  return {&log_options, rsLogFn};
+  return {&log_options, highs_rs_log};
 }
 
 RsLp rsLp(const HighsLp& lp) {

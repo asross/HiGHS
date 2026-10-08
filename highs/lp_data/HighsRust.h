@@ -16,11 +16,14 @@
 
 #ifdef HIGHS_RUST
 #include <cstddef>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "lp_data/HStruct.h"
 #include "lp_data/HighsLp.h"
 #include "lp_data/HighsOptions.h"
+#include "util/HighsCDouble.h"
 #include "util/HighsUtils.h"
 
 // A C++ array (a vector's data() and size()) seen by Rust
@@ -46,6 +49,56 @@ inline RsMut<uint8_t> rsMut(const std::vector<HighsVarType>& v) {
 inline RsMut<uint8_t> rsMut(std::vector<HighsVarType>& v) {
   return rsMut(static_cast<const std::vector<HighsVarType>&>(v));
 }
+
+// A C++ vector that Rust may resize (rust/src/lp_data/ffi.rs RsVec)
+template <typename T>
+struct RsVec {
+  void* vec;
+  T* (*resize)(void* vec, size_t n);
+  T* ptr;
+  size_t len;
+};
+template <typename T>
+T* rsVecResize(void* v, size_t n) {
+  std::vector<T>& x = *static_cast<std::vector<T>*>(v);
+  x.resize(n);
+  return x.data();
+}
+template <typename T>
+RsVec<T> rsVec(std::vector<T>& v) {
+  return {&v, rsVecResize<T>, v.data(), v.size()};
+}
+
+// Names (a vector of strings) as "%s" prints them (rust/src/lp_data/
+// ffi.rs RsName), kept alive by the list
+struct RsName {
+  const char* ptr;
+  size_t len;
+};
+struct RsNameList {
+  std::vector<RsName> v;
+  explicit RsNameList(const std::vector<std::string>& names) {
+    v.reserve(names.size());
+    for (const std::string& s : names) v.push_back({s.c_str(), strlen(s.c_str())});
+  }
+  RsMut<RsName> view() { return {v.data(), v.size()}; }
+};
+
+// A HighsHessian Rust may change (rust/src/lp_data/hessian.rs CHessian)
+// and a read-only view of one (HessianView)
+struct RsHessian {
+  HighsInt* dim;
+  int* format;
+  RsVec<HighsInt> start, index;
+  RsVec<double> value;
+};
+struct RsHessianView {
+  HighsInt dim;
+  int format;
+  const HighsInt* start;
+  const HighsInt* index;
+  const double* value;
+};
 
 // HighsLogOptions and the function through which Rust logs
 struct RsLog {
@@ -113,6 +166,38 @@ struct RsIndexCollection {
   RsMut<HighsInt> mask;
 };
 RsIndexCollection rsIndexCollection(const HighsIndexCollection& ic);
+
+// The Hessian's logic (rust/src/lp_data/hessian.rs)
+struct RsHessianOptions {
+  RsLog log;
+  double small_matrix_value, large_matrix_value;
+};
+class HighsHessian;
+RsHessian rsHessian(HighsHessian& h);
+RsHessianView rsHessianView(const HighsHessian& h);
+extern "C" {
+int highs_rs_hessian(int call, RsHessian* h, const RsHessianOptions* o,
+                     HighsInt arg, RsHessian* out, const char* msg,
+                     size_t len);
+void highs_rs_hessian_delete_cols(RsHessian* h, const RsIndexCollection* ic);
+bool highs_rs_hessian_scale_ok(RsHessianView h, HighsInt scale, double small,
+                               double large);
+double highs_rs_hessian_numeric(int call, RsHessianView h, double alpha,
+                                const double* x, double* y);
+void highs_rs_hessian_objective_cdouble(RsHessianView h, const double* x,
+                                        HighsCDouble* out);
+void highs_rs_triangular_to_square_hessian(RsHessianView h,
+                                           RsVec<HighsInt>* start,
+                                           RsVec<HighsInt>* index,
+                                           RsVec<double>* value);
+bool highs_rs_ok_hessian_diagonal(const RsLog* log, RsHessianView h,
+                                  int sense);
+void highs_rs_report_hessian(const RsLog* log, HighsInt dim, HighsInt num_nz,
+                             const HighsInt* start, const HighsInt* index,
+                             const double* value);
+void highs_rs_user_scale_hessian(RsHessianView h, HighsUserScaleData* d,
+                                 bool apply);
+}
 
 // calculateRowValuesQuad without its debugging report
 void highsRsCalculateRowValuesQuad(const HighsLp& lp,

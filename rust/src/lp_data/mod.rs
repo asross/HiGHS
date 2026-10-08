@@ -5,17 +5,22 @@
 //! (`Log`), so messages are those of the C++ formats, byte for byte.
 
 pub mod ffi;
+pub mod api;
 pub mod app;
+pub mod drivers;
 pub mod basis;
 pub mod edit;
+pub mod hessian;
 pub mod info;
 pub mod lp_utils;
 pub mod model;
+pub mod model_utils;
 pub mod options;
 pub mod options_cli;
 pub mod query;
 pub mod ranging;
 pub mod readers;
+pub mod report;
 pub mod run;
 pub mod semi;
 pub mod solve;
@@ -32,6 +37,12 @@ pub enum Status {
     Error = -1,
     Ok = 0,
     Warning = 1,
+}
+
+impl From<Status> for i32 {
+    fn from(s: Status) -> i32 {
+        s as i32
+    }
 }
 
 impl Status {

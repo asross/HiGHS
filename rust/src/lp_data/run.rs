@@ -272,6 +272,158 @@ pub enum Op {
     PresolveTime,
     /// The view of model_.lp_ (rsLp) into p (CLp)
     LpView,
+    // drivers.rs
+    /// The MIP solver of callSolveMip (the user's solution kept, solver
+    /// data invalidated, semi-variables replaced) run, its result into p
+    /// (MipResult); the solver is kept until MipFinish
+    MipRun,
+    /// solution_.col_value = the solver's solution, the saved solutions,
+    /// the row values (productQuad), value_valid
+    MipTakeSolution,
+    /// activeModifiedUpperBounds(options_, model_.lp_, col_value) -> bool
+    ActiveModifiedUpperBounds,
+    /// options_.primal_feasibility_tolerance saved and set to *p (arg 0)
+    /// or restored (arg 1)
+    SwapPrimalTolerance,
+    /// getKktFailures(options_, model_, solution_, basis_, info_)
+    KktFailures,
+    /// Drops the MIP solver
+    MipFinish,
+    /// solution_.hasUndefined() -> bool
+    SolutionHasUndefined,
+    /// assessLpPrimalSolution("", options_, model_.lp_, solution_) -> feasible
+    SolutionFeasible,
+    /// Saves (arg 0) or restores (1) model_.lp_'s column bounds and integrality
+    SaveColBounds,
+    /// model_.lp_.integrality_.clear()
+    ClearIntegrality,
+    /// solution_.clear()
+    SolutionClear,
+    /// options_.mip_max_nodes saved and set to mip_max_start_nodes (arg 0)
+    /// or restored (1)
+    SwapMipMaxNodes,
+    /// optimizeModel(), then resetProfiling() if profiling -> status
+    OptimizeModel,
+    /// The view of solution_ into p (SolutionView)
+    SolutionView,
+    /// The simplex dual (arg 0) or primal (1) ray record into p (RayRecord)
+    RayRecord,
+    /// The feasibility problem of getDualRay: set up (arg 0 or 1, 1 for a
+    /// QP) or undone (2 or 3)
+    FeasibilityProblem,
+    /// The unboundedness problem of getPrimalRay: set up (arg 0) or
+    /// undone (1)
+    UnboundednessProblem,
+    /// run() -> status
+    HighsRun,
+    /// The known dual (arg 0) or primal (1) ray into p (f64 array)
+    CopyRay,
+    /// The dual / primal ray solved for into p and the record
+    ComputeDualRay,
+    ComputePrimalRay,
+    /// model_.needsMods(options_.infinite_cost) -> bool
+    NeedsMods,
+    /// reportModelStats()
+    ReportModelStats,
+    /// clearPresolve()
+    ClearPresolve,
+    /// initializeMultiThreading() -> status
+    InitializeMultiThreading,
+    /// runPresolve(solve_relaxation, true) with profiling -> presolve status
+    PresolveProfiled,
+    /// reportPresolveReductions of model_.lp_ and the reduced LP
+    ReportPresolveReductions,
+    /// presolved_model_ = model_ (arg 0) or the reduced LP (1)
+    PresolvedModel,
+    /// solution_ = the user solution and callCrossover -> status (arg 0);
+    /// the objective and KKT failures (1)
+    Crossover,
+    /// The sizes of postsolve's solution and basis into p (PostsolveArgs)
+    PostsolveArgs,
+    /// isBasisConsistent(reduced LP, postsolve's basis) -> bool
+    PostsolveBasisConsistent,
+    /// recovered_solution_ = solution with zero row values and value_valid
+    /// (arg 0), no duals and no recovered basis (arg 1), or (arg 2 + d +
+    /// 2 b) dual_valid = d and recovered_basis_ = basis with valid = b
+    PostsolveSetSolution,
+    /// getKktFailures of model_.lp_ with residuals, after objective =
+    /// computeObjectiveValue (arg 1)
+    PostsolveKkt,
+    /// solution_ = recovered_solution_ (zero duals if there are none),
+    /// basis_ = recovered_basis_ with ": after postsolve"
+    PostsolveTakeRecovered,
+    /// simplex_strategy = choose, simplex_min/max_concurrency = 1
+    OptionsPostsolveCleanup,
+    /// setBasis steps with the user's basis: (arg 0) no rows, basis_'s
+    /// basic columns nonbasic; (1) isBasisRightSize, basis_'s and the
+    /// model's sizes into p ([i64; 4]) -> bool; (2) the alien basis
+    /// formed and factored -> status; (3) isBasisConsistent -> bool; (4)
+    /// basis_ = basis
+    SetBasis,
+    /// basis_.debug_origin_name = message
+    SetBasisOrigin,
+    /// basis_'s debug fields into p (BasisDebug)
+    BasisDebug,
+    /// newHighsBasis()
+    NewHighsBasis,
+    /// model_.hessian_'s dimension and nonzeros into p ([i32; 2])
+    HessianDims,
+    /// assessHessian(model_.hessian_, options_) -> status
+    AssessHessian,
+    /// model_.hessian_.clear()
+    HessianClear,
+    /// completeHessian(model_.lp_.num_col_, model_.hessian_)
+    CompleteHessian,
+    /// logHeader()
+    LogHeader,
+    /// clearModel()
+    ClearModel,
+    /// model_ = the passed model, origin "Original"
+    TakeModel,
+    /// The column-wise empty matrix of an LP without rows or columns
+    EmptyMatrix,
+    /// formatOk of model_.lp_'s matrix (arg 0) or Hessian (1) -> bool
+    FormatOk,
+    /// setMatrixDimensions() and resetScale() of model_.lp_
+    PrepareModelLp,
+    /// assessLp(model_.lp_, options_) -> status
+    AssessLp,
+    /// The matrix and Hessian images (write_matrix_image,
+    /// write_hessian_image)
+    MatrixImages,
+    /// clearSolver() -> status
+    ClearSolver2,
+    /// model_.hessian_ = the passed Hessian
+    TakeHessian,
+    /// The C++ reader of the file (message) reads it into a model -> -1
+    /// if there is none, else its FilereaderRetcode
+    ReadModelFile,
+    /// The model read: its name = message (arg 0); passModel -> status (1)
+    ReadModelPass,
+    /// readBasisFile(message) into a copy of basis_ -> status (arg 0);
+    /// isBasisConsistent of it -> bool (1); basis_ = it, valid, useful,
+    /// newHighsBasis (2)
+    ReadBasis,
+    /// The model written: setMatrixDimensions, normaliseNames for the
+    /// file type arg -> status, ensureColwise
+    WriteModelPrepare,
+    /// The view of the written model's LP into p (CLp)
+    WriteModelLpView,
+    /// Checks of the written model: assessHessianDimensions (arg 0, if a
+    /// Hessian), assessStart (1), assessIndexBounds (2) -> status;
+    /// repeated column (3) or row (4) names -> bool
+    WriteModelCheck,
+    /// reportModel of the written model
+    ReportWrittenModel,
+    /// The file writer of message: exists -> bool (arg 0); writes ->
+    /// status (1)
+    WriteModelFile,
+    /// writeBasis: openWriteFile(message) -> status (arg 0),
+    /// normaliseNames -> status (1), writeBasisFile and close (2)
+    WriteBasis,
+    /// The sizes of solution_'s and basis_'s vectors into p ([i64; 6])
+    /// (arg 0); resized to the model (1)
+    SolutionBasisSizes,
 }
 
 /// HighsTimer clocks and actions
@@ -331,7 +483,7 @@ struct Flags {
 }
 
 pub struct Run<'a> {
-    c: &'a CHighs,
+    pub(crate) c: &'a CHighs,
     f: Flags,
     /// A step threw a C++ exception, which C++ rethrows once Rust has
     /// returned: no further step (or log message) is made
@@ -362,7 +514,7 @@ impl<'a> Run<'a> {
         Run { c, f, aborted: Cell::new(false) }
     }
 
-    fn op(&self, op: Op, arg: i64, p: *mut c_void) -> i64 {
+    pub(crate) fn op(&self, op: Op, arg: i64, p: *mut c_void) -> i64 {
         // SAFETY: the C++ steps of the run, called with their context
         let r = unsafe { (self.c.op)(self.c.ctx, op as i32, arg, p, std::ptr::null(), 0) };
         if r == ABORT {
@@ -370,13 +522,13 @@ impl<'a> Run<'a> {
         }
         r
     }
-    fn ab(&self) -> bool {
+    pub(crate) fn ab(&self) -> bool {
         self.aborted.get()
     }
-    fn op0(&self, op: Op) -> i64 {
+    pub(crate) fn op0(&self, op: Op) -> i64 {
         self.op(op, 0, std::ptr::null_mut())
     }
-    fn op_msg(&self, op: Op, arg: i64, msg: &str) -> i64 {
+    pub(crate) fn op_msg(&self, op: Op, arg: i64, msg: &str) -> i64 {
         // SAFETY: as op; the message lives for the call
         let r = unsafe { (self.c.op)(self.c.ctx, op as i32, arg, std::ptr::null_mut(), msg.as_ptr(), msg.len()) };
         if r == ABORT {
@@ -384,64 +536,64 @@ impl<'a> Run<'a> {
         }
         r
     }
-    fn status_op(&self, op: Op) -> Status {
+    pub(crate) fn status_op(&self, op: Op) -> Status {
         status_from_i64(self.op0(op))
     }
-    fn clock(&self, clock: Clock, action: i32) -> f64 {
+    pub(crate) fn clock(&self, clock: Clock, action: i32) -> f64 {
         // SAFETY: as op
         unsafe { (self.c.clock)(self.c.ctx, clock as i32, action) }
     }
-    fn read(&self, clock: Clock) -> f64 {
+    pub(crate) fn read(&self, clock: Clock) -> f64 {
         self.clock(clock, READ)
     }
-    fn facts(&self, which: i64) -> Facts {
+    pub(crate) fn facts(&self, which: i64) -> Facts {
         let mut f = Facts::default();
         self.op(Op::Facts, which, &mut f as *mut Facts as *mut c_void);
         f
     }
 
     // The Highs scalars, read and written in place
-    fn ms(&self) -> i32 {
+    pub(crate) fn ms(&self) -> i32 {
         // SAFETY: the C++ model status lives for the call
         unsafe { *self.c.model_status }
     }
-    fn set_ms(&self, s: i32) {
+    pub(crate) fn set_ms(&self, s: i32) {
         // SAFETY: as ms
         unsafe { *self.c.model_status = s }
     }
     #[allow(clippy::mut_from_ref)]
-    fn info(&self) -> &mut Info {
+    pub(crate) fn info(&self) -> &mut Info {
         // SAFETY: HighsInfo lives for the call; no other Rust reference
         // to it is held across a call into C++
         unsafe { &mut *self.c.info }
     }
     #[allow(clippy::mut_from_ref)]
-    fn run_data(&self) -> &mut RunData {
+    pub(crate) fn run_data(&self) -> &mut RunData {
         // SAFETY: as info
         unsafe { &mut *self.c.run_data }
     }
-    fn get(&self, p: *mut bool) -> bool {
+    pub(crate) fn get(&self, p: *mut bool) -> bool {
         // SAFETY: a flag of the Highs object
         unsafe { *p }
     }
-    fn set(&self, p: *mut bool, v: bool) {
+    pub(crate) fn set(&self, p: *mut bool, v: bool) {
         // SAFETY: as get
         unsafe { *p = v }
     }
     /// highsLogUser would print
-    fn on(&self) -> bool {
+    pub(crate) fn on(&self) -> bool {
         // SAFETY: the C++ log options' flag
         !self.ab() && unsafe { *self.c.o.output_flag }
     }
     /// highsLogDev would print
-    fn dev_on(&self) -> bool {
+    pub(crate) fn dev_on(&self) -> bool {
         // SAFETY: as on
         self.on() && unsafe { *self.c.o.log_dev_level } != 0
     }
-    fn log(&self) -> &Log {
+    pub(crate) fn log(&self) -> &Log {
         &self.c.log
     }
-    fn interpret(&self, call: Status, from: Status, message: &str) -> Status {
+    pub(crate) fn interpret(&self, call: Status, from: Status, message: &str) -> Status {
         if call != Status::Ok && self.dev_on() {
             self.log().interpret(call, from, message)
         } else {
@@ -450,7 +602,7 @@ impl<'a> Run<'a> {
     }
 
     /// Highs::invalidateSolution
-    fn invalidate_solution(&self) {
+    pub(crate) fn invalidate_solution(&self) {
         let info = self.info();
         info.primal_solution_status = SOLUTION_STATUS_NONE;
         info.dual_solution_status = SOLUTION_STATUS_NONE;
@@ -463,11 +615,11 @@ impl<'a> Run<'a> {
         self.set(self.c.value_valid, false);
         self.set(self.c.dual_valid, false);
     }
-    fn invalidate_info(&self) {
+    pub(crate) fn invalidate_info(&self) {
         self.info().invalidate();
     }
     /// HighsRunData::invalidate
-    fn invalidate_run_data(&self) {
+    pub(crate) fn invalidate_run_data(&self) {
         let r = self.run_data();
         r.valid = false;
         r.presolved_model_num_col = ILLEGAL_INT_MEASURE;
@@ -479,13 +631,13 @@ impl<'a> Run<'a> {
         r.postsolve_time = ILLEGAL_DOUBLE_MEASURE;
     }
     /// Highs::setHighsModelStatusAndClearSolutionAndBasis
-    fn set_status_and_clear(&self, s: i32) {
+    pub(crate) fn set_status_and_clear(&self, s: i32) {
         self.set_ms(s);
         self.invalidate_solution();
         self.op0(Op::InvalidateBasis);
         self.info().valid = true;
     }
-    fn warn_solver_invalid(&self, problem: &[u8]) {
+    pub(crate) fn warn_solver_invalid(&self, problem: &[u8]) {
         // The options are unchanged since the start of the run
         // SAFETY: the C++ string lives for the call
         let solver = unsafe { self.c.o.solver.get() };
@@ -494,7 +646,7 @@ impl<'a> Run<'a> {
 
     /// The solveLp lambda of calledOptimizeModel: callSolveLp timed by
     /// the solve clock
-    fn solve_lp(&self, which: i64, message: &str, time: &mut f64) -> Status {
+    pub(crate) fn solve_lp(&self, which: i64, message: &str, time: &mut f64) -> Status {
         *time = -self.read(Clock::Solve);
         self.clock(Clock::Solve, START);
         let call_status = status_from_i64(self.op_msg(Op::CallSolveLp, which, message));
@@ -669,7 +821,7 @@ impl<'a> Run<'a> {
     }
 
     /// The LP part of calledOptimizeModel
-    fn optimize_lp(&self, mut return_status: Status, undo_mods: bool) -> Status {
+    pub(crate) fn optimize_lp(&self, mut return_status: Status, undo_mods: bool) -> Status {
         let c = self.c;
         let log = self.log();
         let mut no_incumbent_lp_solution_or_basis = false;
@@ -1016,7 +1168,7 @@ impl<'a> Run<'a> {
     }
 
     /// The timing report at the end of calledOptimizeModel (dev log)
-    fn log_times(&self, initial_time: f64, pre: f64, pre_lp: f64, post: f64, orig_lp: f64, post_iter: i32) {
+    pub(crate) fn log_times(&self, initial_time: f64, pre: f64, pre_lp: f64, post: f64, orig_lp: f64, post_iter: i32) {
         let log = self.log();
         let this_solve_time = self.read(Clock::Run) - initial_time;
         if post_iter < 0 {
@@ -1075,7 +1227,7 @@ impl<'a> Run<'a> {
     }
 
     /// Highs::infeasibleBoundsOk
-    fn infeasible_bounds_ok(&self) -> bool {
+    pub(crate) fn infeasible_bounds_ok(&self) -> bool {
         let mut lp = std::mem::MaybeUninit::<CLp>::uninit();
         self.op(Op::LpView, 0, lp.as_mut_ptr() as *mut c_void);
         // SAFETY: filled by C++ with model_.lp_'s arrays, which nothing
@@ -1270,7 +1422,7 @@ impl<'a> Run<'a> {
     }
 
     /// Highs::reportSolvedLpQpStats
-    fn report_solved_lp_qp_stats(&self, facts: &Facts) {
+    pub(crate) fn report_solved_lp_qp_stats(&self, facts: &Facts) {
         if !self.on() {
             return;
         }

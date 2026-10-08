@@ -20,6 +20,7 @@ static inline void tolower(std::string& s) {
                  [](unsigned char c) { return std::tolower(c); });
 }
 
+#ifndef HIGHS_RUST
 Filereader* Filereader::getFilereader(const HighsLogOptions& log_options,
                                       const std::string filename) {
   Filereader* reader;
@@ -85,3 +86,50 @@ std::string extractModelName(const std::string& filename) {
   if (found < name.size()) name.erase(found, name.size() - found);
   return name;
 }
+#else
+// The file name logic is Rust's (rust/src/lp_data/model_utils.rs)
+#include "lp_data/HighsRust.h"
+
+extern "C" int highs_rs_filereader(const RsLog* log, int which,
+                                   const char* name, size_t len, int arg,
+                                   void (*set)(void*, const char*, size_t),
+                                   void* ctx);
+
+static void setString(void* s, const char* p, size_t n) {
+  static_cast<std::string*>(s)->assign(p, n);
+}
+
+Filereader* Filereader::getFilereader(const HighsLogOptions& log_options,
+                                      const std::string filename) {
+  const RsLog log = rsLog(log_options);
+#ifdef ZLIB_FOUND
+  const int zlib = 1;
+#else
+  const int zlib = 0;
+#endif
+  switch (highs_rs_filereader(&log, 0, filename.data(), filename.size(), zlib,
+                              setString, nullptr)) {
+    case 1:
+      return new FilereaderMps();
+    case 2:
+      return new FilereaderLp();
+    default:
+      return NULL;
+  }
+}
+
+void interpretFilereaderRetcode(const HighsLogOptions& log_options,
+                                const std::string& filename,
+                                const FilereaderRetcode code) {
+  const RsLog log = rsLog(log_options);
+  highs_rs_filereader(&log, 1, filename.data(), filename.size(), int(code),
+                      setString, nullptr);
+}
+
+std::string extractModelName(const std::string& filename) {
+  std::string name;
+  highs_rs_filereader(nullptr, 2, filename.data(), filename.size(), 0,
+                      setString, &name);
+  return name;
+}
+#endif

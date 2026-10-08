@@ -8,7 +8,7 @@ cd "$(dirname "$0")/../.."
 ROOT=$PWD
 CPP=${1:-build-cpp}; RS=${2:-build-rs}; CXX=${3:-c++}
 OUT=$(mktemp -d)
-mask() { sed -E 's/(hash: )[0-9a-f]+/\1H/; s/ *[0-9]+(\.[0-9]+)?s( |$)/ Ts\2/g; /[Tt]ime|Timing|sub-solver|integral|^ +[0-9.]+ \(|%\)|Sub-MIP|simplex \(|IPX \(|Total|TOTAL|^MIP  /{ s/[0-9][0-9.e+-]*/N/g; s/ +/ /g; }'; }
+mask() { sed -E '/^Strange: /d; s/(hash: )[0-9a-f]+/\1H/; s/ *[0-9]+(\.[0-9]+)?s( |$)/ Ts\2/g; /[Tt]ime|Timing|^Thread |sub-solver|integral|^ +[0-9.]+ \(|%\)|Sub-MIP|simplex \(|IPX \(|Total|TOTAL|^MIP  /{ s/[0-9][0-9.e+-]*/N/g; s/ +/ /g; }'; }
 for b in "$CPP" "$RS"; do
   d="$OUT/$(basename "$b")"
   mkdir -p "$d"

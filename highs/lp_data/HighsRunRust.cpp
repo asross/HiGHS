@@ -19,12 +19,16 @@
 #include <memory>
 
 #include "Highs.h"
+#include "io/Filereader.h"
 #include "lp_data/HighsInfoDebug.h"
 #include "lp_data/HighsModelUtils.h"
 #include "lp_data/HighsSolutionDebug.h"
+#include "lp_data/HighsSolution.h"
 #include "mip/HighsMipSolver.h"
 #include "model/HighsHessianUtils.h"
+#include "presolve/ICrashX.h"
 #include "simplex/HSimplex.h"
+#include "util/HighsMatrixPic.h"
 
 static_assert(sizeof(HighsRunDataStruct) == 48, "HighsRunDataStruct layout");
 static_assert(sizeof(HighsModelStatus) == 4, "HighsModelStatus is an int");
@@ -131,6 +135,100 @@ enum class RunOp {
   kClearReducedIntegrality,
   kPresolveTime,
   kLpView,
+  // drivers.rs
+  kMipRun,
+  kMipTakeSolution,
+  kActiveModifiedUpperBounds,
+  kSwapPrimalTolerance,
+  kKktFailures,
+  kMipFinish,
+  kSolutionHasUndefined,
+  kSolutionFeasible,
+  kSaveColBounds,
+  kClearIntegrality,
+  kSolutionClear,
+  kSwapMipMaxNodes,
+  kOptimizeModel,
+  kSolutionView,
+  kRayRecord,
+  kFeasibilityProblem,
+  kUnboundednessProblem,
+  kHighsRun,
+  kCopyRay,
+  kComputeDualRay,
+  kComputePrimalRay,
+  kNeedsMods,
+  kReportModelStats,
+  kClearPresolve,
+  kInitializeMultiThreading,
+  kPresolveProfiled,
+  kReportPresolveReductions,
+  kPresolvedModel,
+  kCrossover,
+  kPostsolveArgs,
+  kPostsolveBasisConsistent,
+  kPostsolveSetSolution,
+  kPostsolveKkt,
+  kPostsolveTakeRecovered,
+  kOptionsPostsolveCleanup,
+  kSetBasis,
+  kSetBasisOrigin,
+  kBasisDebug,
+  kNewHighsBasis,
+  kHessianDims,
+  kAssessHessian,
+  kHessianClear,
+  kCompleteHessian,
+  kLogHeader,
+  kClearModel,
+  kTakeModel,
+  kEmptyMatrix,
+  kFormatOk,
+  kPrepareModelLp,
+  kAssessLp,
+  kMatrixImages,
+  kClearSolver2,
+  kTakeHessian,
+  kReadModelFile,
+  kReadModelPass,
+  kReadBasis,
+  kWriteModelPrepare,
+  kWriteModelLpView,
+  kWriteModelCheck,
+  kReportWrittenModel,
+  kWriteModelFile,
+  kWriteBasis,
+  kSolutionBasisSizes,
+};
+
+// drivers.rs: BasisDebug
+struct RsBasisDebug {
+  HighsInt id, update_count;
+  RsRunStr origin;
+};
+
+// drivers.rs: PostsolveArgs
+struct RsPostsolveArgs {
+  int64_t col_value_size, col_dual_size, row_dual_size;
+  bool dual_valid;
+  int64_t basis_col_size, basis_row_size;
+  bool basis_valid;
+};
+
+// drivers.rs: MipResult
+struct RsMipResult {
+  HighsInt model_status;
+  double solution_objective;
+  int64_t node_count, total_lp_iterations;
+  double dual_bound, gap, primal_dual_integral, row_violation,
+      bound_violation, integrality_violation;
+};
+
+// drivers.rs: RayRecord
+struct RsRayRecord {
+  HighsInt index, sign;
+  int64_t value_size;
+  bool has_invert;
 };
 
 RsRunStr rsRunStr(const std::string& s) { return {s.data(), s.size()}; }
@@ -149,12 +247,31 @@ int highs_rs_run_postsolve(const RsHighs* h);
 
 // The steps of the run on the Highs object (a friend)
 struct HighsRunRust {
+  explicit HighsRunRust(Highs& highs) : h(highs) {}
   Highs& h;
   // The options saved by kSaveOptions
   std::unique_ptr<HighsOptions> saved_options;
   // An exception thrown by a step (a cancelled task's HighsTask::Interrupt),
   // rethrown once Rust has returned; no step is made after it
   std::exception_ptr pending;
+  // The state of the drivers (drivers.rs) between steps
+  HighsLp mip_lp;
+  std::unique_ptr<HighsMipSolver> mip_solver;
+  double saved_tolerance = 0;
+  HighsInt saved_mip_max_nodes = 0;
+  std::vector<double> saved_lower, saved_upper, saved_cost;
+  std::vector<HighsVarType> saved_integrality;
+  HighsHessian saved_hessian;
+  std::string saved_presolve;
+  bool saved_solve_relaxation = false;
+  bool saved_allow_unbounded_or_infeasible = false;
+  const HighsSolution* user_solution = nullptr;
+  const HighsBasis* user_basis = nullptr;
+  HighsModel* user_model = nullptr;
+  HighsHessian* user_hessian = nullptr;
+  HighsModel read_model;
+  HighsBasis read_basis;
+  FILE* write_file = nullptr;
 
   static int64_t op(void* ctx, int which, int64_t arg, void* p,
                     const char* msg, size_t len) {
@@ -475,7 +592,562 @@ struct HighsRunRust {
       case RunOp::kLpView:
         *static_cast<RsLp*>(p) = rsLp(h.model_.lp_);
         return 0;
+      default:
+        return driverStep(which, arg, p, m, len);
     }
+    assert(false);
+    return 0;
+  }
+
+  // The steps of drivers.rs
+  int64_t driverStep(RunOp which, int64_t arg, void* p, const char* m,
+                     size_t len) {
+    HighsOptions& options = h.options_;
+    HighsLp& lp = h.model_.lp_;
+    switch (which) {
+      case RunOp::kMipRun: {
+        const bool user_solution = h.solution_.value_valid;
+        std::vector<double> user_col_value, user_row_value;
+        if (user_solution) {
+          user_col_value = std::move(h.solution_.col_value);
+          user_row_value = std::move(h.solution_.row_value);
+        }
+        h.invalidateSolverData();
+        if (user_solution) {
+          h.solution_.col_value = std::move(user_col_value);
+          h.solution_.row_value = std::move(user_row_value);
+          h.solution_.value_valid = true;
+        }
+        const HighsInt log_dev_level = options.log_dev_level;
+        assert(lp.a_matrix_.format_ != MatrixFormat::kRowwise);
+        const bool has_semi_variables = lp.hasSemiVariables();
+        if (has_semi_variables)
+          mip_lp = withoutSemiVariables(lp, h.solution_,
+                                        options.primal_feasibility_tolerance);
+        mip_solver.reset(new HighsMipSolver(
+            h.callback_, options, has_semi_variables ? mip_lp : lp,
+            h.solution_));
+        HighsMipSolver& solver = *mip_solver;
+        solver.setProfiling(h.profiling_);
+        h.profiling_->start(kSubSolverMip);
+        solver.run();
+        h.profiling_->stop(kSubSolverMip);
+        options.log_dev_level = log_dev_level;
+        RsMipResult& r = *static_cast<RsMipResult*>(p);
+        r.model_status = HighsInt(solver.modelstatus_);
+        r.solution_objective = solver.solution_objective_;
+        r.node_count = solver.node_count_;
+        r.total_lp_iterations = solver.total_lp_iterations_;
+        r.dual_bound = solver.dual_bound_;
+        r.gap = solver.gap_;
+        r.primal_dual_integral = solver.primal_dual_integral_;
+        r.row_violation = solver.row_violation_;
+        r.bound_violation = solver.bound_violation_;
+        r.integrality_violation = solver.integrality_violation_;
+        return 0;
+      }
+      case RunOp::kMipTakeSolution:
+        h.solution_.col_value = mip_solver->solution_;
+        h.saved_objective_and_solution_ =
+            mip_solver->saved_objective_and_solution_;
+        lp.a_matrix_.productQuad(h.solution_.row_value, h.solution_.col_value);
+        h.solution_.value_valid = true;
+        return 0;
+      case RunOp::kActiveModifiedUpperBounds:
+        return activeModifiedUpperBounds(options, lp, h.solution_.col_value);
+      case RunOp::kSwapPrimalTolerance:
+        if (arg == 0) {
+          saved_tolerance = options.primal_feasibility_tolerance;
+          options.primal_feasibility_tolerance = *static_cast<double*>(p);
+        } else {
+          options.primal_feasibility_tolerance = saved_tolerance;
+        }
+        return 0;
+      case RunOp::kKktFailures:
+        getKktFailures(options, h.model_, h.solution_, h.basis_, h.info_);
+        return 0;
+      case RunOp::kMipFinish:
+        mip_solver.reset();
+        return 0;
+      case RunOp::kSolutionHasUndefined:
+        return h.solution_.hasUndefined();
+      case RunOp::kSolutionFeasible: {
+        bool valid, integral, feasible;
+        HighsStatus status = assessLpPrimalSolution(
+            "", options, lp, h.solution_, valid, integral, feasible);
+        assert(status != HighsStatus::kError);
+        (void)status;
+        return feasible;
+      }
+      case RunOp::kSaveColBounds:
+        if (arg == 0) {
+          saved_lower = lp.col_lower_;
+          saved_upper = lp.col_upper_;
+          saved_integrality = lp.integrality_;
+        } else {
+          lp.col_lower_ = saved_lower;
+          lp.col_upper_ = saved_upper;
+          lp.integrality_ = saved_integrality;
+        }
+        return 0;
+      case RunOp::kClearIntegrality:
+        lp.integrality_.clear();
+        return 0;
+      case RunOp::kSolutionClear:
+        h.solution_.clear();
+        return 0;
+      case RunOp::kSwapMipMaxNodes:
+        if (arg == 0) {
+          saved_mip_max_nodes = options.mip_max_nodes;
+          options.mip_max_nodes = options.mip_max_start_nodes;
+        } else {
+          options.mip_max_nodes = saved_mip_max_nodes;
+        }
+        return 0;
+      case RunOp::kOptimizeModel: {
+        if (h.profiling_) assert(!h.profiling_->isSubMip());
+        const HighsStatus status = h.optimizeModel();
+        if (h.profiling_) h.resetProfiling();
+        return st(status);
+      }
+      case RunOp::kSolutionView:
+        *static_cast<RsSolution*>(p) = rsSolution(h.solution_);
+        return 0;
+      case RunOp::kRayRecord: {
+        const HighsRayRecord& record = arg ? h.ekk_instance_.primal_ray_record_
+                                           : h.ekk_instance_.dual_ray_record_;
+        RsRayRecord& r = *static_cast<RsRayRecord*>(p);
+        r.index = record.index;
+        r.sign = record.sign;
+        r.value_size = record.value.size();
+        r.has_invert = h.ekk_instance_.status_.has_invert;
+        return 0;
+      }
+      case RunOp::kFeasibilityProblem: {
+        const bool is_qp = arg & 1;
+        if (arg < 2) {
+          saved_cost = lp.col_cost_;
+          if (is_qp) saved_hessian = h.model_.hessian_;
+          h.getOptionValue("presolve", saved_presolve);
+          h.getOptionValue("solve_relaxation", saved_solve_relaxation);
+          std::vector<double> zero_costs;
+          zero_costs.assign(lp.num_col_, 0);
+          HighsRayRecord primal_ray_record =
+              h.ekk_instance_.primal_ray_record_.getRayRecord();
+          HighsStatus status =
+              h.changeColsCost(0, lp.num_col_ - 1, zero_costs.data());
+          assert(status == HighsStatus::kOk);
+          (void)status;
+          h.ekk_instance_.primal_ray_record_.setRayRecord(primal_ray_record);
+          if (is_qp) {
+            HighsHessian zero_hessian;
+            h.passHessian(zero_hessian);
+          }
+          h.setOptionValue("presolve", kHighsOffString);
+          h.setOptionValue("solve_relaxation", true);
+        } else {
+          lp.col_cost_ = saved_cost;
+          if (is_qp) h.model_.hessian_ = saved_hessian;
+          h.setOptionValue("presolve", saved_presolve);
+          h.setOptionValue("solve_relaxation", saved_solve_relaxation);
+        }
+        return 0;
+      }
+      case RunOp::kUnboundednessProblem:
+        if (arg == 0) {
+          h.getOptionValue("presolve", saved_presolve);
+          h.getOptionValue("solve_relaxation", saved_solve_relaxation);
+          h.getOptionValue("allow_unbounded_or_infeasible",
+                           saved_allow_unbounded_or_infeasible);
+          h.setOptionValue("presolve", kHighsOffString);
+          h.setOptionValue("solve_relaxation", true);
+          h.setOptionValue("allow_unbounded_or_infeasible", false);
+        } else {
+          h.setOptionValue("presolve", saved_presolve);
+          h.setOptionValue("solve_relaxation", saved_solve_relaxation);
+          h.setOptionValue("allow_unbounded_or_infeasible",
+                           saved_allow_unbounded_or_infeasible);
+        }
+        return 0;
+      case RunOp::kHighsRun:
+        return st(h.run());
+      case RunOp::kCopyRay: {
+        double* value = static_cast<double*>(p);
+        const std::vector<double>& ray =
+            arg ? h.ekk_instance_.primal_ray_record_.value
+                : h.ekk_instance_.dual_ray_record_.value;
+        const HighsInt n = arg ? lp.num_col_ : lp.num_row_;
+        for (HighsInt i = 0; i < n; i++) value[i] = ray[i];
+        return 0;
+      }
+      case RunOp::kComputeDualRay: {
+        double* dual_ray_value = static_cast<double*>(p);
+        const HighsInt num_row = lp.num_row_;
+        std::vector<double> rhs;
+        HighsInt iRow = h.ekk_instance_.dual_ray_record_.index;
+        rhs.assign(num_row, 0);
+        rhs[iRow] = h.ekk_instance_.dual_ray_record_.sign;
+        HighsInt* dual_ray_num_nz = 0;
+        h.basisSolveInterface(rhs, dual_ray_value, dual_ray_num_nz, NULL, true);
+        h.ekk_instance_.dual_ray_record_.value.resize(num_row);
+        for (HighsInt i = 0; i < num_row; i++)
+          h.ekk_instance_.dual_ray_record_.value[i] = dual_ray_value[i];
+        return 0;
+      }
+      case RunOp::kComputePrimalRay: {
+        double* primal_ray_value = static_cast<double*>(p);
+        const HighsInt num_row = lp.num_row_;
+        const HighsInt num_col = lp.num_col_;
+        HighsInt col = h.ekk_instance_.primal_ray_record_.index;
+        assert(h.ekk_instance_.basis_.nonbasicFlag_[col] == kNonbasicFlagTrue);
+        std::vector<double> rhs;
+        std::vector<double> column;
+        column.assign(num_row, 0);
+        rhs.assign(num_row, 0);
+        lp.ensureColwise();
+        HighsInt primal_ray_sign = h.ekk_instance_.primal_ray_record_.sign;
+        if (col < num_col) {
+          for (HighsInt iEl = lp.a_matrix_.start_[col];
+               iEl < lp.a_matrix_.start_[col + 1]; iEl++)
+            rhs[lp.a_matrix_.index_[iEl]] =
+                primal_ray_sign * lp.a_matrix_.value_[iEl];
+        } else {
+          rhs[col - num_col] = primal_ray_sign;
+        }
+        HighsInt* column_num_nz = 0;
+        h.basisSolveInterface(rhs, column.data(), column_num_nz, NULL, false);
+        for (HighsInt iCol = 0; iCol < num_col; iCol++)
+          primal_ray_value[iCol] = 0;
+        for (HighsInt iRow = 0; iRow < num_row; iRow++) {
+          HighsInt iCol = h.ekk_instance_.basis_.basicIndex_[iRow];
+          if (iCol < num_col) primal_ray_value[iCol] = column[iRow];
+        }
+        if (col < num_col) primal_ray_value[col] = -primal_ray_sign;
+        h.ekk_instance_.primal_ray_record_.value.resize(num_col);
+        for (HighsInt iCol = 0; iCol < num_col; iCol++)
+          h.ekk_instance_.primal_ray_record_.value[iCol] =
+              primal_ray_value[iCol];
+        return 0;
+      }
+      case RunOp::kNeedsMods:
+        return h.model_.needsMods(options.infinite_cost);
+      case RunOp::kReportModelStats:
+        h.reportModelStats();
+        return 0;
+      case RunOp::kClearPresolve:
+        h.clearPresolve();
+        return 0;
+      case RunOp::kInitializeMultiThreading:
+        return st(h.initializeMultiThreading());
+      case RunOp::kPresolveProfiled: {
+        HighsProfiling profiling;
+        const bool already_profiling = h.profiling_;
+        if (!already_profiling) h.initializeProfiling(&profiling);
+        const HighsPresolveStatus status =
+            h.runPresolve(options.solve_relaxation, true);
+        if (!already_profiling) h.clearProfiling();
+        return int64_t(status);
+      }
+      case RunOp::kReportPresolveReductions:
+        reportPresolveReductions(options.log_options, h.model_presolve_status_,
+                                 lp, h.presolve_.getReducedProblem());
+        return 0;
+      case RunOp::kPresolvedModel:
+        if (arg == 0) {
+          h.presolved_model_ = h.model_;
+        } else {
+          h.presolved_model_.lp_ = h.presolve_.getReducedProblem();
+          h.presolved_model_.lp_.setMatrixDimensions();
+        }
+        return 0;
+      case RunOp::kCrossover:
+        if (arg == 0) {
+          h.solution_ = *user_solution;
+          return st(callCrossover(options, lp, h.basis_, h.solution_,
+                                  h.model_status_, h.info_, h.callback_));
+        }
+        h.info_.objective_function_value =
+            lp.objectiveValue(h.solution_.col_value);
+        getLpKktFailures(options, lp, h.solution_, h.basis_, h.info_);
+        return 0;
+      case RunOp::kPostsolveArgs: {
+        RsPostsolveArgs& a = *static_cast<RsPostsolveArgs*>(p);
+        a.col_value_size = user_solution->col_value.size();
+        a.col_dual_size = user_solution->col_dual.size();
+        a.row_dual_size = user_solution->row_dual.size();
+        a.dual_valid = user_solution->dual_valid;
+        a.basis_col_size = user_basis->col_status.size();
+        a.basis_row_size = user_basis->row_status.size();
+        a.basis_valid = user_basis->valid;
+        return 0;
+      }
+      case RunOp::kPostsolveBasisConsistent:
+        return isBasisConsistent(h.presolve_.getReducedProblem(), *user_basis);
+      case RunOp::kPostsolveSetSolution: {
+        HighsSolution& recovered = h.presolve_.data_.recovered_solution_;
+        if (arg == 0) {
+          recovered = *user_solution;
+          recovered.row_value.assign(h.presolve_.getReducedProblem().num_row_,
+                                     0);
+          recovered.value_valid = true;
+        } else if (arg == 1) {
+          recovered.dual_valid = false;
+          recovered.col_dual.clear();
+          recovered.row_dual.clear();
+          h.presolve_.data_.recovered_basis_.valid = false;
+        } else {
+          recovered.dual_valid = (arg - 2) & 1;
+          h.presolve_.data_.recovered_basis_ = *user_basis;
+          h.presolve_.data_.recovered_basis_.valid = (arg - 2) & 2;
+        }
+        return 0;
+      }
+      case RunOp::kPostsolveKkt:
+        if (arg)
+          h.info_.objective_function_value =
+              computeObjectiveValue(lp, h.solution_);
+        assert(!h.model_.isQp());
+        getKktFailures(options, false, lp, lp.col_cost_, h.solution_, h.info_,
+                       true);
+        return 0;
+      case RunOp::kPostsolveTakeRecovered:
+        h.solution_.clear();
+        h.solution_ = h.presolve_.data_.recovered_solution_;
+        assert(h.solution_.value_valid);
+        if (!h.solution_.dual_valid) {
+          h.solution_.col_dual.assign(lp.num_col_, 0);
+          h.solution_.row_dual.assign(lp.num_row_, 0);
+        }
+        h.basis_ = h.presolve_.data_.recovered_basis_;
+        h.basis_.debug_origin_name += ": after postsolve";
+        return 0;
+      case RunOp::kOptionsPostsolveCleanup:
+        options.simplex_strategy = kSimplexStrategyChoose;
+        options.simplex_min_concurrency = 1;
+        options.simplex_max_concurrency = 1;
+        return 0;
+      case RunOp::kSetBasis: {
+        const HighsBasis& basis = *user_basis;
+        switch (arg) {
+          case 0:
+            for (HighsInt iCol = 0; iCol < lp.num_col_; iCol++)
+              h.basis_.col_status[iCol] =
+                  basis.col_status[iCol] == HighsBasisStatus::kBasic
+                      ? HighsBasisStatus::kNonbasic
+                      : basis.col_status[iCol];
+            h.basis_.alien = false;
+            return 0;
+          case 1: {
+            int64_t* sizes = static_cast<int64_t*>(p);
+            sizes[0] = h.basis_.col_status.size();
+            sizes[1] = h.basis_.row_status.size();
+            sizes[2] = lp.num_col_;
+            sizes[3] = lp.num_row_;
+            return isBasisRightSize(lp, basis);
+          }
+          case 2: {
+            HighsBasis modifiable_basis = basis;
+            modifiable_basis.was_alien = true;
+            HighsProfiling profiling;
+            const bool already_profiling = h.profiling_;
+            if (!already_profiling)
+              h.initializeSingleThreadedProfiling(&profiling);
+            HighsLpSolverObject solver_object(lp, modifiable_basis, h.solution_,
+                                              h.info_, h.ekk_instance_,
+                                              h.callback_, options, h.timer_);
+            solver_object.setProfiling(h.profiling_);
+            HighsStatus return_status =
+                formSimplexLpBasisAndFactor(solver_object);
+            if (!already_profiling) h.clearProfiling();
+            if (return_status != HighsStatus::kOk) return st(return_status);
+            h.basis_ = std::move(modifiable_basis);
+            return 0;
+          }
+          case 3:
+            return isBasisConsistent(lp, basis);
+          default:
+            h.basis_ = basis;
+            return 0;
+        }
+      }
+      case RunOp::kSetBasisOrigin:
+        h.basis_.debug_origin_name.assign(m, len);
+        return 0;
+      case RunOp::kBasisDebug: {
+        RsBasisDebug& d = *static_cast<RsBasisDebug*>(p);
+        d.id = h.basis_.debug_id;
+        d.update_count = h.basis_.debug_update_count;
+        d.origin = rsRunStr(h.basis_.debug_origin_name);
+        return 0;
+      }
+      case RunOp::kNewHighsBasis:
+        h.newHighsBasis();
+        return 0;
+      case RunOp::kHessianDims: {
+        HighsInt* d = static_cast<HighsInt*>(p);
+        d[0] = h.model_.hessian_.dim_;
+        d[1] = d[0] ? h.model_.hessian_.numNz() : 0;
+        return 0;
+      }
+      case RunOp::kAssessHessian:
+        return st(assessHessian(h.model_.hessian_, options));
+      case RunOp::kHessianClear:
+        h.model_.hessian_.clear();
+        return 0;
+      case RunOp::kCompleteHessian:
+        completeHessian(lp.num_col_, h.model_.hessian_);
+        return 0;
+      case RunOp::kLogHeader:
+        h.logHeader();
+        return 0;
+      case RunOp::kClearModel:
+        h.clearModel();
+        return 0;
+      case RunOp::kTakeModel:
+        lp = std::move(user_model->lp_);
+        h.model_.hessian_ = std::move(user_model->hessian_);
+        lp.origin_name_ = "Original";
+        assert(lp.a_matrix_.formatOk());
+        return 0;
+      case RunOp::kEmptyMatrix:
+        lp.a_matrix_.format_ = MatrixFormat::kColwise;
+        lp.a_matrix_.start_.assign(lp.num_col_ + 1, 0);
+        lp.a_matrix_.index_.clear();
+        lp.a_matrix_.value_.clear();
+        return 0;
+      case RunOp::kFormatOk:
+        return arg ? h.model_.hessian_.formatOk() : lp.a_matrix_.formatOk();
+      case RunOp::kPrepareModelLp:
+        lp.setMatrixDimensions();
+        assert(!lp.is_scaled_);
+        assert(!lp.is_moved_);
+        lp.resetScale();
+        return 0;
+      case RunOp::kAssessLp:
+        return st(assessLp(lp, options));
+      case RunOp::kMatrixImages:
+        if (options.write_matrix_image)
+          writeLpMatrixPicToFile(options, "LpMatrix", lp);
+        if (options.write_hessian_image)
+          writeHessianPicToFile(options, "Hessian", h.model_.hessian_);
+        return 0;
+      case RunOp::kClearSolver2:
+        return st(h.clearSolver());
+      case RunOp::kTakeHessian:
+        h.model_.hessian_ = std::move(*user_hessian);
+        return 0;
+      case RunOp::kReadModelFile: {
+        const std::string filename(m, len);
+        Filereader* reader =
+            Filereader::getFilereader(options.log_options, filename);
+        if (reader == NULL) return -1;
+        FilereaderRetcode call_code =
+            reader->readModelFromFile(options, filename, read_model);
+        delete reader;
+        return int64_t(call_code);
+      }
+      case RunOp::kReadModelPass:
+        if (arg == 0) {
+          read_model.lp_.model_name_.assign(m, len);
+          return 0;
+        }
+        return st(h.passModel(std::move(read_model)));
+      case RunOp::kReadBasis:
+        if (arg == 0) {
+          read_basis = h.basis_;
+          return st(readBasisFile(options.log_options, lp, read_basis,
+                                  std::string(m, len)));
+        } else if (arg == 1) {
+          return isBasisConsistent(lp, read_basis);
+        }
+        h.basis_ = read_basis;
+        h.basis_.valid = true;
+        h.basis_.useful = true;
+        h.newHighsBasis();
+        return 0;
+      case RunOp::kWriteModelPrepare: {
+        HighsLp& model_lp = user_model->lp_;
+        model_lp.setMatrixDimensions();
+        const HighsStatus call_status = normaliseNames(
+            options.log_options, model_lp, HighsFileType(arg));
+        assert(call_status != HighsStatus::kError);
+        model_lp.ensureColwise();
+        return st(call_status);
+      }
+      case RunOp::kWriteModelLpView:
+        *static_cast<RsLp*>(p) = rsLp(user_model->lp_);
+        return 0;
+      case RunOp::kWriteModelCheck: {
+        HighsModel& model = *user_model;
+        switch (arg) {
+          case 0:
+            return model.hessian_.dim_ > 0
+                       ? st(assessHessianDimensions(options, model.hessian_))
+                       : 0;
+          case 1:
+            return st(model.lp_.a_matrix_.assessStart(options.log_options));
+          case 2:
+            return st(
+                model.lp_.a_matrix_.assessIndexBounds(options.log_options));
+          case 3:
+            return model.lp_.col_hash_.hasDuplicate(model.lp_.col_names_);
+          default:
+            return model.lp_.row_hash_.hasDuplicate(model.lp_.row_names_);
+        }
+      }
+      case RunOp::kReportWrittenModel:
+        h.reportModel(*user_model);
+        return 0;
+      case RunOp::kWriteModelFile: {
+        const std::string filename(m, len);
+        Filereader* writer =
+            Filereader::getFilereader(options.log_options, filename);
+        if (arg == 0) {
+          delete writer;
+          return writer != NULL;
+        }
+        const HighsStatus status =
+            writer->writeModelToFile(options, filename, *user_model);
+        delete writer;
+        return st(status);
+      }
+      case RunOp::kWriteBasis:
+        if (arg == 0) {
+          HighsFileType file_type;
+          return st(h.openWriteFile(std::string(m, len), "writeBasis",
+                                    write_file, file_type));
+        } else if (arg == 1) {
+          const HighsStatus call_status =
+              normaliseNames(options.log_options, lp);
+          assert(call_status != HighsStatus::kError);
+          return st(call_status);
+        }
+        writeBasisFile(write_file, options, lp, h.basis_);
+        if (write_file != stdout) fclose(write_file);
+        return 0;
+      case RunOp::kSolutionBasisSizes:
+        if (arg == 0) {
+          int64_t* sizes = static_cast<int64_t*>(p);
+          sizes[0] = h.solution_.col_value.size();
+          sizes[1] = h.solution_.row_value.size();
+          sizes[2] = h.solution_.col_dual.size();
+          sizes[3] = h.solution_.row_dual.size();
+          sizes[4] = h.basis_.col_status.size();
+          sizes[5] = h.basis_.row_status.size();
+        } else {
+          h.solution_.col_value.resize(lp.num_col_, 0);
+          h.solution_.row_value.resize(lp.num_row_, 0);
+          h.solution_.col_dual.resize(lp.num_col_, 0);
+          h.solution_.row_dual.resize(lp.num_row_, 0);
+          h.basis_.col_status.resize(lp.num_col_, HighsBasisStatus::kNonbasic);
+          h.basis_.row_status.resize(lp.num_row_, HighsBasisStatus::kBasic);
+        }
+        return 0;
+      default:
+        break;
+    }
+    (void)m;
+    (void)len;
     assert(false);
     return 0;
   }
@@ -508,8 +1180,189 @@ struct HighsRunRust {
   }
 };
 
+extern "C" {
+int highs_rs_call_solve_mip(const RsHighs* h);
+int highs_rs_check_optimality(const RsHighs* h, const char* solver_type,
+                              size_t len);
+int highs_rs_complete_solution(const RsHighs* h);
+int highs_rs_get_ray(const RsHighs* h, bool primal, bool* has_ray,
+                     double* value, size_t len);
+int highs_rs_presolve(const RsHighs* h);
+int highs_rs_crossover(const RsHighs* h);
+}
+
+HighsStatus Highs::callSolveMip() {
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_call_solve_mip(&v));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::checkOptimality(const std::string& solver_type) {
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  return HighsStatus(
+      highs_rs_check_optimality(&v, solver_type.data(), solver_type.size()));
+}
+
+HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
+  assert(model_.isMip() && solution_.value_valid);
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_complete_solution(&v));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
+                                       double* dual_ray_value) {
+  assert(!model_.lp_.is_moved_);
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_get_ray(
+      &v, false, &has_dual_ray, dual_ray_value, model_.lp_.num_row_));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
+                                         double* primal_ray_value) {
+  assert(!model_.lp_.is_moved_);
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_get_ray(
+      &v, true, &has_primal_ray, primal_ray_value, model_.lp_.num_col_));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::presolve() {
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_presolve(&v));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::crossover(const HighsSolution& user_solution) {
+  HighsRunRust r(*this);
+  r.user_solution = &user_solution;
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_crossover(&v));
+  r.rethrow();
+  return status;
+}
+
+extern "C" int highs_rs_call_run_postsolve(const RsHighs* h);
+extern "C" int highs_rs_pass_model(const RsHighs* h, int which);
+extern "C" bool highs_rs_format_ok(const RsLog* log, bool hessian,
+                                   HighsInt num_nz, HighsInt format);
+
+extern "C" int highs_rs_highs_file(const RsHighs* h, int which,
+                                   const char* filename, size_t len);
+extern "C" void highs_rs_force_solution_basis_size(const RsHighs* h);
+
+HighsStatus Highs::readModel(const std::string& filename) {
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(
+      highs_rs_highs_file(&v, 0, filename.data(), filename.size()));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::readBasis(const std::string& filename) {
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(
+      highs_rs_highs_file(&v, 1, filename.data(), filename.size()));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::writeLocalModel(HighsModel& model,
+                                   const std::string& filename) {
+  HighsRunRust r(*this);
+  r.user_model = &model;
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(
+      highs_rs_highs_file(&v, 2, filename.data(), filename.size()));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::writeBasis(const std::string& filename) {
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(
+      highs_rs_highs_file(&v, 3, filename.data(), filename.size()));
+  r.rethrow();
+  return status;
+}
+
+void Highs::forceHighsSolutionBasisSize() {
+  HighsRunRust r(*this);
+  const RsHighs v = r.view();
+  highs_rs_force_solution_basis_size(&v);
+}
+
+HighsStatus Highs::passModel(HighsModel model) {
+  HighsRunRust r(*this);
+  r.user_model = &model;
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_pass_model(&v, 0));
+  r.rethrow();
+  return status;
+}
+
+HighsStatus Highs::passHessian(HighsHessian hessian_) {
+  HighsRunRust r(*this);
+  r.user_hessian = &hessian_;
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_pass_model(&v, 1));
+  r.rethrow();
+  return status;
+}
+
+bool Highs::aFormatOk(const HighsInt num_nz, const HighsInt format) {
+  const RsLog log = rsLog(options_.log_options);
+  return highs_rs_format_ok(&log, false, num_nz, format);
+}
+
+bool Highs::qFormatOk(const HighsInt num_nz, const HighsInt format) {
+  const RsLog log = rsLog(options_.log_options);
+  return highs_rs_format_ok(&log, true, num_nz, format);
+}
+extern "C" int highs_rs_set_basis(const RsHighs* h, bool alien,
+                                  const char* origin, size_t len);
+
+HighsStatus Highs::setBasis(const HighsBasis& basis,
+                            const std::string& origin) {
+  HighsRunRust r(*this);
+  r.user_basis = &basis;
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(
+      highs_rs_set_basis(&v, basis.alien, origin.data(), origin.size()));
+  r.rethrow();
+  assert(basis_.debug_origin_name != "");
+  assert(!basis_.alien || status != HighsStatus::kOk);
+  return status;
+}
+
+HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
+                                    const HighsBasis& basis) {
+  HighsRunRust r(*this);
+  r.user_solution = &solution;
+  r.user_basis = &basis;
+  const RsHighs v = r.view();
+  const HighsStatus status = HighsStatus(highs_rs_call_run_postsolve(&v));
+  r.rethrow();
+  return status;
+}
+
 HighsStatus Highs::calledOptimizeModel() {
-  HighsRunRust r{*this, nullptr, nullptr};
+  HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status = HighsStatus(highs_rs_called_optimize_model(&v));
   r.rethrow();
@@ -518,7 +1371,7 @@ HighsStatus Highs::calledOptimizeModel() {
 
 HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
                                            const bool undo_mods) {
-  HighsRunRust r{*this, nullptr, nullptr};
+  HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status = HighsStatus(highs_rs_return_from_optimize_model(
       &v, int(run_return_status), undo_mods));
@@ -527,7 +1380,7 @@ HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
 }
 
 HighsStatus Highs::returnFromHighs(HighsStatus highs_return_status) {
-  HighsRunRust r{*this, nullptr, nullptr};
+  HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status =
       HighsStatus(highs_rs_return_from_highs(&v, int(highs_return_status)));
@@ -537,7 +1390,7 @@ HighsStatus Highs::returnFromHighs(HighsStatus highs_return_status) {
 
 HighsPresolveStatus Highs::runPresolve(const bool force_lp_presolve,
                                        const bool force_presolve) {
-  HighsRunRust r{*this, nullptr, nullptr};
+  HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsPresolveStatus status = HighsPresolveStatus(
       highs_rs_run_presolve(&v, force_lp_presolve, force_presolve));
@@ -546,7 +1399,7 @@ HighsPresolveStatus Highs::runPresolve(const bool force_lp_presolve,
 }
 
 HighsPostsolveStatus Highs::runPostsolve() {
-  HighsRunRust r{*this, nullptr, nullptr};
+  HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsPostsolveStatus status =
       HighsPostsolveStatus(highs_rs_run_postsolve(&v));

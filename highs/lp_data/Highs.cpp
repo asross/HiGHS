@@ -25,6 +25,7 @@
 #include "lp_data/HighsCallbackStruct.h"
 #include "lp_data/HighsInfoDebug.h"
 #include "lp_data/HighsLpSolverObject.h"
+#include "lp_data/HighsRust.h"
 #include "lp_data/HighsSolve.h"
 #include "mip/HighsMipSolver.h"
 #include "model/HighsHessianUtils.h"
@@ -440,6 +441,7 @@ HighsStatus Highs::writeInfo(const std::string& filename) const {
 // Methods below change the incumbent model or solver information
 // associated with it. Hence returnFromHighs is called at the end of
 // each
+#ifndef HIGHS_RUST
 HighsStatus Highs::passModel(HighsModel model) {
   // This is the "master" Highs::passModel, in that all the others
   // (and readModel) eventually call it
@@ -523,6 +525,13 @@ HighsStatus Highs::passModel(HighsModel model) {
                                       return_status, "clearSolver");
   return returnFromHighs(return_status);
 }
+#endif
+
+#ifdef HIGHS_RUST
+extern "C" HighsInt highs_rs_check_integrality(const RsLog* log,
+                                               HighsInt num_col,
+                                               const HighsInt* integrality);
+#endif
 
 HighsStatus Highs::passModel(HighsLp lp) {
   HighsModel model;
@@ -602,6 +611,14 @@ HighsStatus Highs::passModel(
   }
   lp.offset_ = offset;
   if (num_col > 0 && integrality != NULL) {
+#ifdef HIGHS_RUST
+    const RsLog log = rsLog(options_.log_options);
+    if (highs_rs_check_integrality(&log, num_col, integrality) >= 0)
+      return HighsStatus::kError;
+    lp.integrality_.resize(num_col);
+    for (HighsInt iCol = 0; iCol < num_col; iCol++)
+      lp.integrality_[iCol] = (HighsVarType)integrality[iCol];
+#else
     lp.integrality_.resize(num_col);
     for (HighsInt iCol = 0; iCol < num_col; iCol++) {
       HighsInt integrality_status = integrality[iCol];
@@ -621,6 +638,7 @@ HighsStatus Highs::passModel(
       }
       lp.integrality_[iCol] = (HighsVarType)integrality_status;
     }
+#endif
   }
   if (q_num_nz > 0) {
     assert(num_col > 0);
@@ -652,6 +670,7 @@ HighsStatus Highs::passModel(const HighsInt num_col, const HighsInt num_row,
                    a_index, a_value, NULL, NULL, NULL, integrality);
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::passHessian(HighsHessian hessian_) {
   this->logHeader();
   HighsStatus return_status = HighsStatus::kOk;
@@ -680,6 +699,7 @@ HighsStatus Highs::passHessian(HighsHessian hessian_) {
                                       return_status, "clearSolver");
   return returnFromHighs(return_status);
 }
+#endif
 
 HighsStatus Highs::passHessian(const HighsInt dim, const HighsInt num_nz,
                                const HighsInt format, const HighsInt* start,
@@ -796,6 +816,7 @@ HighsStatus Highs::passModelName(const std::string& name) {
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::readModel(const std::string& filename) {
   this->logHeader();
   HighsStatus return_status = HighsStatus::kOk;
@@ -821,6 +842,8 @@ HighsStatus Highs::readModel(const std::string& filename) {
     if (return_status == HighsStatus::kError) return return_status;
   }
   model.lp_.model_name_ = extractModelName(filename);
+#ifndef HIGHS_RUST
+  // Never done (and so not in the HIGHS_RUST build)
   const bool remove_rows_of_count_1 = false;
   if (remove_rows_of_count_1) {
     // .lp files from PWSC (notably st-test23.lp) have bounds for
@@ -831,11 +854,13 @@ HighsStatus Highs::readModel(const std::string& filename) {
     // variable.
     removeRowsOfCountOne(options_.log_options, model.lp_);
   }
+#endif
   return_status =
       interpretCallStatus(options_.log_options, passModel(std::move(model)),
                           return_status, "passModel");
   return returnFromHighs(return_status);
 }
+#endif
 
 HighsStatus Highs::matrixImage(
     const std::string& matrix_image_filename,
@@ -852,6 +877,7 @@ HighsStatus Highs::matrixImage(
   return status;
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::readBasis(const std::string& filename) {
   this->logHeader();
   HighsStatus return_status = HighsStatus::kOk;
@@ -877,6 +903,7 @@ HighsStatus Highs::readBasis(const std::string& filename) {
   // Can't use returnFromHighs since...
   return HighsStatus::kOk;
 }
+#endif
 
 HighsStatus Highs::writeModel(const std::string& filename) {
   return writeLocalModel(model_, filename);
@@ -892,6 +919,7 @@ HighsStatus Highs::writeIisModel(const std::string& filename) {
   return writeLocalModel(iis_.model_, filename);
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::writeLocalModel(HighsModel& model,
                                    const std::string& filename) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -961,7 +989,9 @@ HighsStatus Highs::writeLocalModel(HighsModel& model,
   }
   return returnFromHighs(return_status);
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::writeBasis(const std::string& filename) {
   HighsStatus return_status = HighsStatus::kOk;
   HighsStatus call_status;
@@ -992,7 +1022,9 @@ HighsStatus Highs::writeBasis(const std::string& filename) {
   if (file != stdout) fclose(file);
   return return_status;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::presolve() {
   const HighsLogOptions& log_options = options_.log_options;
   if (model_.needsMods(options_.infinite_cost)) {
@@ -1093,6 +1125,7 @@ HighsStatus Highs::presolve() {
                presolveStatusToString(model_presolve_status_).c_str());
   return returnFromHighs(return_status);
 }
+#endif
 
 HighsStatus Highs::run() {
   // Level 0 of Highs::run()
@@ -2762,6 +2795,7 @@ HighsStatus Highs::stopCallback(const HighsCallbackType callback_type) {
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::setBasis(const HighsBasis& basis,
                             const std::string& origin) {
   if (basis.alien) {
@@ -2836,6 +2870,7 @@ HighsStatus Highs::setBasis(const HighsBasis& basis,
   // Can't use returnFromHighs since...
   return HighsStatus::kOk;
 }
+#endif
 
 HighsStatus Highs::setBasis() {
   // Invalidate the basis for HiGHS
@@ -2987,6 +3022,7 @@ HighsStatus Highs::changeColsIntegrality(const HighsInt from_col,
   return returnFromHighs(return_status);
 }
 
+#ifndef HIGHS_RUST
 static HighsStatus analyseSetCreateError(HighsLogOptions log_options,
                                          const std::string& method,
                                          const HighsInt create_error,
@@ -3024,6 +3060,25 @@ static HighsStatus analyseSetCreateError(HighsLogOptions log_options,
   assert(create_error != kIndexCollectionCreateIllegalSetDimension);
   return HighsStatus::kError;
 }
+#else
+extern "C" HighsInt highs_rs_set_create_error(
+    const RsLog* log, const char* method, size_t len, HighsInt create_error,
+    bool ordered, HighsInt num_set_entries, const HighsInt* set,
+    HighsInt dimension);
+
+static HighsStatus analyseSetCreateError(HighsLogOptions log_options,
+                                         const std::string& method,
+                                         const HighsInt create_error,
+                                         const bool ordered,
+                                         const HighsInt num_set_entries,
+                                         const HighsInt* set,
+                                         const HighsInt dimension) {
+  const RsLog log = rsLog(log_options);
+  return HighsStatus(highs_rs_set_create_error(
+      &log, method.data(), method.size(), create_error, ordered,
+      num_set_entries, set, dimension));
+}
+#endif
 
 HighsStatus Highs::changeColsIntegrality(const HighsInt num_set_entries,
                                          const HighsInt* set,
@@ -4010,6 +4065,7 @@ void Highs::invalidateEkk() { ekk_instance_.invalidate(); }
 
 void Highs::clearIis() { iis_.clear(); }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
   // Determine whether the current solution of a MIP is feasible and,
   // if not, try to assign values to continuous variables and discrete
@@ -4154,6 +4210,7 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
   }
   return HighsStatus::kOk;
 }
+#endif
 
 // The method below runs calls solveLp for the given LP
 HighsStatus Highs::callSolveLp(HighsLp& lp, const std::string& message) {
@@ -4365,6 +4422,7 @@ HighsStatus Highs::callSolveQp() {
   return return_status;
 }
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::callSolveMip() {
   // Record whether there is a valid primal solution on entry
   const bool user_solution = solution_.value_valid;
@@ -4487,7 +4545,9 @@ HighsStatus Highs::callSolveMip() {
   options_.primal_feasibility_tolerance = primal_feasibility_tolerance;
   return return_status;
 }
+#endif
 
+#ifndef HIGHS_RUST
 // Only called from Highs::postsolve
 HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
                                     const HighsBasis& basis) {
@@ -4712,6 +4772,7 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
                           "highsStatusFromHighsModelStatus");
   return return_status;
 }
+#endif
 
 // End of public methods
 void Highs::logHeader() {
@@ -4741,6 +4802,7 @@ void Highs::newHighsBasis() {
 // Ensure that the HiGHS solution and basis have the same size as the
 // model, and that the HiGHS basis is kept up-to-date with any solved
 // basis
+#ifndef HIGHS_RUST
 void Highs::forceHighsSolutionBasisSize() {
   // Ensure that the HiGHS solution and basis vectors are the right size
   //
@@ -4776,6 +4838,7 @@ void Highs::forceHighsSolutionBasisSize() {
   basis_.col_status.resize(num_col, HighsBasisStatus::kNonbasic);
   basis_.row_status.resize(num_row, HighsBasisStatus::kBasic);
 }
+#endif
 
 void Highs::setHighsModelStatusAndClearSolutionAndBasis(
     const HighsModelStatus model_status) {
@@ -5106,6 +5169,7 @@ void Highs::reportSolvedLpQpStats() {
 
 #endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::crossover(const HighsSolution& user_solution) {
   HighsStatus return_status = HighsStatus::kOk;
   HighsLogOptions& log_options = options_.log_options;
@@ -5132,6 +5196,7 @@ HighsStatus Highs::crossover(const HighsSolution& user_solution) {
   }
   return returnFromHighs(return_status);
 }
+#endif
 
 HighsStatus Highs::openLogFile(const std::string& log_file) {
   highsOpenLogFile(options_.log_options, options_.records, log_file);

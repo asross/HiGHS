@@ -149,6 +149,7 @@ pub struct Options {
     pub output_flag: bool,
     pub timeless_log: bool,
     pub use_implied_bounds_from_presolve: bool,
+    pub presolve_rule_logging: bool,
 }
 
 /// The MIP solver's values HPresolve reads (when presolving a MIP)

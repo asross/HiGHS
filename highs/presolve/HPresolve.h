@@ -506,13 +506,6 @@ class HPresolve {
 
   // Not currently called
   static void debug(const HighsLp& lp, const HighsOptions& options);
-
-#ifdef HIGHS_RUST
-  // for the callbacks of the Rust presolve (HPresolveRust.cpp)
-  HPresolveAnalysis& rustAnalysis() { return analysis_; }
-  const HighsInt& rustNumDeletedRows() const { return numDeletedRows; }
-  const HighsInt& rustNumDeletedCols() const { return numDeletedCols; }
-#endif
 };
 
 }  // namespace presolve

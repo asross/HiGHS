@@ -1556,6 +1556,7 @@ bool maxValueScaleMatrix(const HighsOptions& options, HighsLp& lp,
 }
 #endif
 
+#ifndef HIGHS_RUST
 HighsStatus applyScalingToLpCol(HighsLp& lp, const HighsInt col,
                                 const double colScale) {
   if (col < 0) return HighsStatus::kError;
@@ -1609,6 +1610,66 @@ void unscaleSolution(HighsSolution& solution, const HighsScale& scale) {
     solution.row_dual[iRow] *= (scale.row[iRow] * scale.cost);
   }
 }
+#else
+// rust/src/lp_data/report.rs
+struct RsPrimalAssessment {
+  bool valid, integral, feasible;
+};
+extern "C" {
+void highs_rs_report_lp(const RsLog* log, const RsLp* lp,
+                        RsMut<RsName> col_names, RsMut<RsName> row_names,
+                        int level);
+void highs_rs_report_matrix(const RsLog* log, const char* message,
+                            size_t message_len, HighsInt num_col,
+                            HighsInt num_nz, const HighsInt* start,
+                            const HighsInt* index, const double* value);
+int highs_rs_assess_lp_primal_solution(
+    const RsLog* log, const char* message, size_t message_len, double pft,
+    double mft, const RsLp* lp, RsMut<RsName> col_names,
+    RsMut<RsName> row_names, bool value_valid, RsMut<double> col_value,
+    RsMut<double> row_value, RsPrimalAssessment* out);
+void highs_rs_assess_col_primal_solution(double pft, double mft,
+                                         double primal, double lower,
+                                         double upper, uint8_t type,
+                                         double* col_infeasibility,
+                                         double* integer_infeasibility);
+bool highs_rs_is_less_infeasible_dse_candidate(const RsLog* log,
+                                               const char* model_name,
+                                               size_t model_name_len,
+                                               HighsInt num_col,
+                                               RsMut<HighsInt> start,
+                                               RsMut<double> value);
+bool highs_rs_user_data_null(const RsLog* log, int which, const bool* null);
+RsName highs_rs_var_type_string(int type);
+void highs_rs_unscale_solution(RsMut<double> col, RsMut<double> row,
+                               double cost, RsMut<double> col_value,
+                               RsMut<double> col_dual, RsMut<double> row_value,
+                               RsMut<double> row_dual);
+int highs_rs_apply_scaling_to_lp(RsLp* lp, bool is_col, HighsInt ix,
+                                 double scale);
+}
+
+HighsStatus applyScalingToLpCol(HighsLp& lp, const HighsInt col,
+                                const double colScale) {
+  RsLp v = rsLp(lp);
+  return HighsStatus(highs_rs_apply_scaling_to_lp(&v, true, col, colScale));
+}
+
+HighsStatus applyScalingToLpRow(HighsLp& lp, const HighsInt row,
+                                const double rowScale) {
+  RsLp v = rsLp(lp);
+  return HighsStatus(highs_rs_apply_scaling_to_lp(&v, false, row, rowScale));
+}
+
+void unscaleSolution(HighsSolution& solution, const HighsScale& scale) {
+  assert(scale.has_scaling);
+  highs_rs_unscale_solution(
+      {const_cast<double*>(scale.col.data()), size_t(scale.num_col)},
+      {const_cast<double*>(scale.row.data()), size_t(scale.num_row)},
+      scale.cost, rsMut(solution.col_value), rsMut(solution.col_dual),
+      rsMut(solution.row_value), rsMut(solution.row_dual));
+}
+#endif
 
 void appendColsToLpVectors(HighsLp& lp, const HighsInt num_new_col,
                            const vector<double>& colCost,
@@ -1883,6 +1944,7 @@ void changeBounds(vector<double>& lower, vector<double>& upper,
 
 #endif
 
+#ifndef HIGHS_RUST
 HighsInt getNumInt(const HighsLp& lp) {
   HighsInt num_int = 0;
   if (lp.integrality_.size()) {
@@ -1891,6 +1953,15 @@ HighsInt getNumInt(const HighsLp& lp) {
   }
   return num_int;
 }
+#else
+HighsInt getNumInt(const HighsLp& lp) {
+  const RsLp v = rsLp(lp);
+  HighsInt num_int = 0;
+  for (size_t i = 0; i < v.integrality.len && i < size_t(lp.num_col_); i++)
+    num_int += v.integrality.ptr[i] == uint8_t(HighsVarType::kInteger);
+  return num_int;
+}
+#endif
 
 void getLpCosts(const HighsLp& lp, const HighsInt from_col,
                 const HighsInt to_col, double* XcolCost) {
@@ -1953,6 +2024,7 @@ void getLpMatrixCoefficient(const HighsLp& lp, const HighsInt Xrow,
 // Methods for reporting an LP, including its row and column data and matrix
 //
 // Report the whole LP
+#ifndef HIGHS_RUST
 void reportLp(const HighsLogOptions& log_options, const HighsLp& lp,
               const HighsLogType report_level) {
   reportLpBrief(log_options, lp);
@@ -2211,6 +2283,32 @@ void analyseLp(const HighsLogOptions& log_options, const HighsLp& lp) {
   analyseModelBounds(log_options, "Row", lp.num_row_, lp.row_lower_,
                      lp.row_upper_);
 }
+#else
+void reportLp(const HighsLogOptions& log_options, const HighsLp& lp,
+              const HighsLogType report_level) {
+  const RsLog log = rsLog(log_options);
+  const RsLp v = rsLp(lp);
+  RsNameList col_names(lp.col_names_), row_names(lp.row_names_);
+  highs_rs_report_lp(&log, &v, col_names.view(), row_names.view(),
+                     int(report_level));
+}
+
+void reportLpBrief(const HighsLogOptions& log_options, const HighsLp& lp) {
+  reportLp(log_options, lp, HighsLogType::kInfo);
+}
+
+void reportMatrix(const HighsLogOptions& log_options,
+                  const std::string& message, const HighsInt num_col,
+                  const HighsInt num_nz, const HighsInt* start,
+                  const HighsInt* index, const double* value) {
+  const RsLog log = rsLog(log_options);
+  highs_rs_report_matrix(&log, message.data(), message.size(), num_col, num_nz,
+                         start, index, value);
+}
+
+// Analysis only: left out of Crestline
+void analyseLp(const HighsLogOptions&, const HighsLp&) {}
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/readers.rs)
@@ -2628,6 +2726,7 @@ bool readSolutionFileIdDoubleIntLineOk(std::string& id, double& value,
 }
 #endif
 
+#ifndef HIGHS_RUST
 void assessColPrimalSolution(const HighsOptions& options, const double primal,
                              const double lower, const double upper,
                              const HighsVarType type, double& col_infeasibility,
@@ -2807,6 +2906,37 @@ HighsStatus assessLpPrimalSolution(const std::string& message,
   if (!(integral && feasible)) return HighsStatus::kWarning;
   return HighsStatus::kOk;
 }
+#else
+void assessColPrimalSolution(const HighsOptions& options, const double primal,
+                             const double lower, const double upper,
+                             const HighsVarType type, double& col_infeasibility,
+                             double& integer_infeasibility) {
+  highs_rs_assess_col_primal_solution(
+      options.primal_feasibility_tolerance, options.mip_feasibility_tolerance,
+      primal, lower, upper, uint8_t(type), &col_infeasibility,
+      &integer_infeasibility);
+}
+
+HighsStatus assessLpPrimalSolution(const std::string& message,
+                                   const HighsOptions& options,
+                                   const HighsLp& lp,
+                                   const HighsSolution& solution, bool& valid,
+                                   bool& integral, bool& feasible) {
+  const RsLog log = rsLog(options.log_options);
+  const RsLp v = rsLp(lp);
+  RsNameList col_names(lp.col_names_), row_names(lp.row_names_);
+  RsPrimalAssessment out{false, false, false};
+  const HighsStatus status = HighsStatus(highs_rs_assess_lp_primal_solution(
+      &log, message.data(), message.size(),
+      options.primal_feasibility_tolerance, options.mip_feasibility_tolerance,
+      &v, col_names.view(), row_names.view(), solution.value_valid,
+      rsMut(solution.col_value), rsMut(solution.row_value), &out));
+  valid = out.valid;
+  integral = out.integral;
+  feasible = out.feasible;
+  return status;
+}
+#endif
 
 #ifndef HIGHS_RUST
 void writeBasisFile(FILE*& file, const HighsOptions& options, const HighsLp& lp,
@@ -3068,13 +3198,12 @@ HighsStatus calculateRowValuesQuad(const HighsLp& lp,
   assert(!data_error);
   if (data_error) return HighsStatus::kError;
 #ifdef HIGHS_RUST
-  // The debugging report of a row stays C++
-  if (report_row < 0) {
-    row_value.resize(lp.num_row_);
-    highsRsCalculateRowValuesQuad(lp, col_value, row_value);
-    return HighsStatus::kOk;
-  }
-#endif
+  // The debugging report of a row (report_row) is left out
+  (void)report_row;
+  row_value.resize(lp.num_row_);
+  highsRsCalculateRowValuesQuad(lp, col_value, row_value);
+  return HighsStatus::kOk;
+#else
 
   std::vector<HighsCDouble> row_value_quad;
   row_value_quad.assign(lp.num_row_, HighsCDouble{0.0});
@@ -3102,6 +3231,7 @@ HighsStatus calculateRowValuesQuad(const HighsLp& lp,
                  row_value.begin(), [](HighsCDouble x) { return double(x); });
 
   return HighsStatus::kOk;
+#endif
 }
 
 HighsStatus calculateRowValuesQuad(const HighsLp& lp, HighsSolution& solution,
@@ -3110,6 +3240,7 @@ HighsStatus calculateRowValuesQuad(const HighsLp& lp, HighsSolution& solution,
                                 report_row);
 }
 
+#ifndef HIGHS_RUST
 bool isColDataNull(const HighsLogOptions& log_options,
                    const double* usr_col_cost, const double* usr_col_lower,
                    const double* usr_col_upper) {
@@ -3154,6 +3285,34 @@ bool isMatrixDataNull(const HighsLogOptions& log_options,
       null_data;
   return null_data;
 }
+#else
+bool isColDataNull(const HighsLogOptions& log_options,
+                   const double* usr_col_cost, const double* usr_col_lower,
+                   const double* usr_col_upper) {
+  const RsLog log = rsLog(log_options);
+  const bool null[3] = {usr_col_cost == nullptr, usr_col_lower == nullptr,
+                        usr_col_upper == nullptr};
+  return highs_rs_user_data_null(&log, 0, null);
+}
+
+bool isRowDataNull(const HighsLogOptions& log_options,
+                   const double* usr_row_lower, const double* usr_row_upper) {
+  const RsLog log = rsLog(log_options);
+  const bool null[2] = {usr_row_lower == nullptr, usr_row_upper == nullptr};
+  return highs_rs_user_data_null(&log, 1, null);
+}
+
+bool isMatrixDataNull(const HighsLogOptions& log_options,
+                      const HighsInt* usr_matrix_start,
+                      const HighsInt* usr_matrix_index,
+                      const double* usr_matrix_value) {
+  const RsLog log = rsLog(log_options);
+  const bool null[3] = {usr_matrix_start == nullptr,
+                        usr_matrix_index == nullptr,
+                        usr_matrix_value == nullptr};
+  return highs_rs_user_data_null(&log, 2, null);
+}
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/run.rs)
@@ -3221,6 +3380,7 @@ void reportPresolveReductions(const HighsLogOptions& log_options,
 
 #endif
 
+#ifndef HIGHS_RUST
 bool isLessInfeasibleDSECandidate(const HighsLogOptions& log_options,
                                   const HighsLp& lp) {
   HighsInt max_col_num_en = -1;
@@ -3260,6 +3420,15 @@ bool isLessInfeasibleDSECandidate(const HighsLogOptions& log_options,
               LiDSE_candidate ? "is" : "is not");
   return LiDSE_candidate;
 }
+#else
+bool isLessInfeasibleDSECandidate(const HighsLogOptions& log_options,
+                                  const HighsLp& lp) {
+  const RsLog log = rsLog(log_options);
+  return highs_rs_is_less_infeasible_dse_candidate(
+      &log, lp.model_name_.c_str(), strlen(lp.model_name_.c_str()),
+      lp.num_col_, rsMut(lp.a_matrix_.start_), rsMut(lp.a_matrix_.value_));
+}
+#endif
 
 HighsLp withoutSemiVariables(const HighsLp& lp_, HighsSolution& solution,
                              const double mip_feasibility_tolerance) {
@@ -3426,6 +3595,7 @@ HighsLp withoutSemiVariables(const HighsLp& lp_, HighsSolution& solution,
   return lp;
 }
 
+#ifndef HIGHS_RUST
 void removeRowsOfCountOne(const HighsLogOptions& log_options, HighsLp& lp) {
   vector<HighsInt>& a_start = lp.a_matrix_.start_;
   vector<HighsInt>& a_index = lp.a_matrix_.index_;
@@ -3529,6 +3699,7 @@ void removeRowsOfCountOne(const HighsLogOptions& log_options, HighsLp& lp) {
   highsLogUser(log_options, HighsLogType::kWarning,
                "Removed %d rows of count 1\n", (int)num_row_count_1);
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
@@ -3726,6 +3897,7 @@ void getSubVectorsTranspose(const HighsIndexCollection& index_collection,
 }
 #endif
 
+#ifndef HIGHS_RUST
 std::string highsVarTypeToString(const HighsVarType type) {
   switch (type) {
     case HighsVarType::kContinuous:
@@ -3750,6 +3922,17 @@ std::string highsVarTypeToString(const HighsInt type) {
   HighsVarType type_ = HighsVarType(uint8_t(type));
   return highsVarTypeToString(type_);
 }
+#else
+std::string highsVarTypeToString(const HighsVarType type) {
+  const RsName s = highs_rs_var_type_string(int(type));
+  return std::string(s.ptr, s.len);
+}
+
+std::string highsVarTypeToString(const HighsInt type) {
+  const RsName s = highs_rs_var_type_string(type);
+  return std::string(s.ptr, s.len);
+}
+#endif
 
 void initialiseUserScaleData(const HighsOptions& options,
                              HighsUserScaleData& user_scale_data) {

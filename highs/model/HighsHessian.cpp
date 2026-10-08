@@ -13,6 +13,8 @@
 #include <cassert>
 #include <cstdio>
 
+#include "lp_data/HighsRust.h"
+
 void HighsHessian::clear() {
   this->dim_ = 0;
   this->start_.clear();
@@ -33,6 +35,7 @@ void HighsHessian::exactResize() {
   }
 }
 
+#ifndef HIGHS_RUST
 void HighsHessian::deleteCols(const HighsIndexCollection& index_collection) {
   if (this->dim_ == 0) return;
   // Can't handle non-triangular matrices yet
@@ -137,12 +140,47 @@ bool HighsHessian::scaleOk(const HighsInt hessian_scale,
   return true;
 }
 
+#else
+// The Hessian's logic is Rust's (rust/src/lp_data/hessian.rs)
+static_assert(sizeof(HessianFormat) == sizeof(int), "HessianFormat is an int");
+static_assert(sizeof(HighsCDouble) == 2 * sizeof(double),
+              "HighsCDouble is (hi, lo)");
+
+RsHessian rsHessian(HighsHessian& h) {
+  return {&h.dim_, reinterpret_cast<int*>(&h.format_), rsVec(h.start_),
+          rsVec(h.index_), rsVec(h.value_)};
+}
+
+RsHessianView rsHessianView(const HighsHessian& h) {
+  return {h.dim_, int(h.format_), h.start_.data(), h.index_.data(),
+          h.value_.data()};
+}
+
+void HighsHessian::deleteCols(const HighsIndexCollection& index_collection) {
+  if (this->dim_ == 0) return;
+  // Can't handle non-triangular matrices yet
+  assert(this->format_ == HessianFormat::kTriangular);
+  assert(ok(index_collection));
+  RsHessian h = rsHessian(*this);
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  highs_rs_hessian_delete_cols(&h, &ic);
+}
+
+bool HighsHessian::scaleOk(const HighsInt hessian_scale,
+                           const double small_matrix_value,
+                           const double large_matrix_value) const {
+  return highs_rs_hessian_scale_ok(rsHessianView(*this), hessian_scale,
+                                   small_matrix_value, large_matrix_value);
+}
+#endif
+
 HighsInt HighsHessian::numNz() const {
   assert(this->formatOk());
   assert((HighsInt)this->start_.size() >= this->dim_ + 1);
   return this->start_[this->dim_];
 }
 
+#ifndef HIGHS_RUST
 void HighsHessian::print(const std::string& message) const {
   HighsInt num_nz = this->numNz();
   printf("%s Hessian of dimension %" HIGHSINT_FORMAT " and %" HIGHSINT_FORMAT
@@ -170,6 +208,14 @@ void HighsHessian::print(const std::string& message) const {
       col[this->index_[iEl]] = "";
   }
 }
+#else
+void HighsHessian::print(const std::string& message) const {
+  RsHessian h = rsHessian(const_cast<HighsHessian&>(*this));
+  highs_rs_hessian(6, &h, nullptr, 0, nullptr, message.data(),
+                   message.size());
+}
+#endif
+
 bool HighsHessian::operator==(const HighsHessian& hessian) const {
   bool equal = true;
   equal = this->dim_ == hessian.dim_ && equal;
@@ -179,6 +225,7 @@ bool HighsHessian::operator==(const HighsHessian& hessian) const {
   return equal;
 }
 
+#ifndef HIGHS_RUST
 void HighsHessian::product(const std::vector<double>& solution,
                            std::vector<double>& product) const {
   if (this->dim_ <= 0) return;
@@ -245,7 +292,39 @@ HighsCDouble HighsHessian::objectiveCDoubleValue(
   return objective_function_value;
 }
 
+#else
+void HighsHessian::product(const std::vector<double>& solution,
+                           std::vector<double>& product) const {
+  if (this->dim_ <= 0) return;
+  product.resize(this->dim_);
+  highs_rs_hessian_numeric(0, rsHessianView(*this), 0, solution.data(),
+                           product.data());
+}
+
+void HighsHessian::alphaProductPlusY(const double alpha,
+                                     const std::vector<double>& x,
+                                     std::vector<double>& y) const {
+  if (this->dim_ <= 0) return;
+  highs_rs_hessian_numeric(1, rsHessianView(*this), alpha, x.data(), y.data());
+}
+
+double HighsHessian::objectiveValue(const std::vector<double>& solution) const {
+  return highs_rs_hessian_numeric(2, rsHessianView(*this), 0, solution.data(),
+                                  nullptr);
+}
+
+HighsCDouble HighsHessian::objectiveCDoubleValue(
+    const std::vector<double>& solution) const {
+  HighsCDouble value;
+  highs_rs_hessian_objective_cdouble(rsHessianView(*this), solution.data(),
+                                     &value);
+  return value;
+}
+
+#endif
+
 bool HighsHessian::empty() const { return dim_ <= 0; }
+#ifndef HIGHS_RUST
 bool HighsHessian::isDiagonal() const {
   for (HighsInt iCol = 0; iCol < this->dim_; iCol++) {
     for (HighsInt iEl = this->start_[iCol]; iEl < this->start_[iCol + 1];
@@ -257,12 +336,21 @@ bool HighsHessian::isDiagonal() const {
   return true;
 }
 
+#else
+bool HighsHessian::isDiagonal() const {
+  return highs_rs_hessian_numeric(3, rsHessianView(*this), 0, nullptr,
+                                  nullptr) != 0;
+}
+
+#endif
+
 double HighsHessian::diag(HighsInt i) const {
   assert(i < dim_);
   assert(index_[start_[i]] == i);
   return value_[start_[i]];
 }
 
+#ifndef HIGHS_RUST
 HighsHessian HighsHessian::toSquare() const {
   if (this->format_ == HessianFormat::kSquare) return *this;
   assert(this->format_ == HessianFormat::kTriangular);
@@ -317,3 +405,13 @@ HighsHessian HighsHessian::toSquare() const {
   }
   return square_hessian;
 }
+#else
+HighsHessian HighsHessian::toSquare() const {
+  HighsHessian square_hessian;
+  RsHessian h = rsHessian(const_cast<HighsHessian&>(*this));
+  RsHessian out = rsHessian(square_hessian);
+  highs_rs_hessian(7, &h, nullptr, 0, &out, nullptr, 0);
+  return square_hessian;
+}
+#endif
+
