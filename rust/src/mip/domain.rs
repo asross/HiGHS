@@ -1292,8 +1292,11 @@ impl<'a> Dom<'a> {
     pub(crate) fn cut<'x>(&self, pool: usize, cut: usize) -> (&'x [i32], &'x [f64], f64) {
         let cp = self.cutpool(pool);
         let [s, e] = cp.ar_range[cut];
+        // a cut deleted since it was a reason has the range [-1, -1]: no
+        // entries, as the C++ loop from getRowStart to getRowEnd
+        let (s, e) = if s < 0 { (0, 0) } else { (s as usize, e as usize) };
         // SAFETY: the pool's matrix, not changed during conflict analysis
-        unsafe { (&cp.ar_index.get()[s as usize..e as usize], &cp.ar_value.get()[s as usize..e as usize], cp.rhs[cut]) }
+        unsafe { (&cp.ar_index.get()[s..e], &cp.ar_value.get()[s..e], cp.rhs[cut]) }
     }
 
     /// The HighsCutPool of a cut pool
