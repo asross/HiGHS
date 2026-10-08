@@ -1961,9 +1961,11 @@ void HighsMipSolverData::basisTransfer() {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 const std::vector<double>& HighsMipSolverData::getSolution() const {
   return incumbent;
 }
+#endif
 
 bool HighsMipSolverData::addIncumbent(const std::vector<double>& sol,
                                       double solobj, const int solution_source,

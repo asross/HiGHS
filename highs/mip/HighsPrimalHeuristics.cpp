@@ -651,46 +651,6 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
     case 18:
       if (d.globalOrbits) d.globalOrbits->orbitalFixing(d.getDomain());
       return 0;
-    case 19: {
-      // transformNewIntegerFeasibleSolution's repair LP: the integers
-      // fixed at their rounded values
-      HighsSolution& solution = d.rsScratch_;
-      HighsLp fixedModel = *ms.orig_model_;
-      fixedModel.integrality_.clear();
-      for (HighsInt c = 0; c != ms.orig_model_->num_col_; ++c) {
-        if (ms.orig_model_->integrality_[c] == HighsVarType::kInteger) {
-          double solval = std::round(solution.col_value[c]);
-          fixedModel.col_lower_[c] = std::max(fixedModel.col_lower_[c], solval);
-          fixedModel.col_upper_[c] = std::min(fixedModel.col_upper_[c], solval);
-        }
-      }
-      d.total_repair_lp++;
-      double time_available =
-          std::max(ms.options_mip_->time_limit - ms.timer_.read(), 0.1);
-      Highs tmpSolver;
-      tmpSolver.setProfiling(ms.profiling_);
-      tmpSolver.setOptionValue("output_flag", false);
-      tmpSolver.setOptionValue("time_limit", time_available);
-      double mip_primal_feasibility_tolerance =
-          ms.options_mip_->mip_feasibility_tolerance;
-      tmpSolver.setOptionValue("primal_feasibility_tolerance",
-                               mip_primal_feasibility_tolerance);
-      const bool use_presolve = !ms.options_mip_->mip_root_presolve_only;
-      const std::string presolve =
-          use_presolve ? kHighsChooseString : kHighsOffString;
-      tmpSolver.setOptionValue("presolve", presolve);
-      tmpSolver.passModel(std::move(fixedModel));
-      tmpSolver.setOptionValue("solver", kSimplexString);
-      tmpSolver.optimizeLp();
-      d.total_repair_lp_iterations += tmpSolver.getInfo().simplex_iteration_count;
-      if (tmpSolver.getInfo().primal_solution_status ==
-          kSolutionStatusFeasible) {
-        d.total_repair_lp_feasible++;
-        solution = tmpSolver.getSolution();
-        return 1;
-      }
-      return 0;
-    }
     case 20:
       const_cast<HighsMipSolver&>(ms).solution_ =
           std::move(d.rsScratch_.col_value);
@@ -736,6 +696,34 @@ static void scratchSolution(void* m, const double* sol, HighsInt n,
   v->nrow = solution.row_value.size();
 }
 static void refill(void* m, MipData* out) { *out = mipData(mip(m)); }
+
+// transformNewIntegerFeasibleSolution's repair LP (rust/src/mip/mip_data.rs
+// repair_lp): the original model with the given bounds, no integers
+static bool repairLp(void* m, const double* lower, const double* upper,
+                     double time_limit, double feasibility_tolerance,
+                     bool presolve, int64_t* iterations) {
+  const HighsMipSolver& ms = mip(m);
+  HighsLp fixedModel = *ms.orig_model_;
+  fixedModel.integrality_.clear();
+  fixedModel.col_lower_.assign(lower, lower + fixedModel.num_col_);
+  fixedModel.col_upper_.assign(upper, upper + fixedModel.num_col_);
+  Highs tmpSolver;
+  tmpSolver.setProfiling(ms.profiling_);
+  tmpSolver.setOptionValue("output_flag", false);
+  tmpSolver.setOptionValue("time_limit", time_limit);
+  tmpSolver.setOptionValue("primal_feasibility_tolerance",
+                           feasibility_tolerance);
+  tmpSolver.setOptionValue("presolve",
+                           presolve ? kHighsChooseString : kHighsOffString);
+  tmpSolver.passModel(std::move(fixedModel));
+  tmpSolver.setOptionValue("solver", kSimplexString);
+  tmpSolver.optimizeLp();
+  *iterations = tmpSolver.getInfo().simplex_iteration_count;
+  if (tmpSolver.getInfo().primal_solution_status != kSolutionStatusFeasible)
+    return false;
+  ms.mipdata_->rsScratch_ = tmpSolver.getSolution();
+  return true;
+}
 
 // The concurrent LNS helper (rust/src/mip/concurrent.rs): its options,
 // model and root basis, copied by the main solver
@@ -851,6 +839,7 @@ static const MipFns fns = {
     mipCallback,
     mipWorker,
     mipWorkerScratch,
+    repairLp,
 };
 }  // namespace mipglue
 

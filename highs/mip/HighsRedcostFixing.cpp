@@ -51,7 +51,7 @@ void highs_rs_redcost_propagate(const Redcost* r);
 std::vector<std::pair<double, HighsDomainChange>>
 HighsRedcostFixing::getLurkingBounds(const HighsMipSolver& mipsolver,
                                      const HighsDomain& globaldom) const {
-  const std::vector<HighsInt>& cols = mipsolver.mipdata_->integral_cols;
+  const auto& cols = mipsolver.mipdata_->integral_cols;
   HighsInt ncol = globaldom.col_lower_.size();
   HighsInt n = highs_rs::highs_rs_redcost_lurking(
       rs_, cols.data(), cols.size(), globaldom.col_lower_.data(),

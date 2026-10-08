@@ -472,8 +472,8 @@ computeNewUpperLimit, limitsToBounds, updateLowerBound, the primal-dual
 integral, checkLimits, moreHeuristicsAllowed, percentageInactiveIntegers,
 removeFixedIndices, printDisplayLine with its key and number formats,
 checkSolution, trySolution, solutionRowFeasible, the trivial heuristics,
-addIncumbent, transformNewIntegerFeasibleSolution (the repair LP and the
-postsolve stay C++ on a scratch HighsSolution), evaluateRootLp,
+addIncumbent, transformNewIntegerFeasibleSolution (the repair LP's
+solve and the postsolve stay C++ on a scratch HighsSolution), evaluateRootLp,
 rootSeparationRound, evaluateRootNode (with its restarts: one pass per
 model), HighsMipSolver::run (the presolve and setup calls, the pre-root
 heuristics, the root, the branch-and-bound loop: node selection, plunging,
@@ -516,7 +516,9 @@ domains, pools, the sub-MIP's HighsMipSolver with its options and model),
 the pools' and pseudocosts' sync calls, the per-worker search steps (each
 a call into the Rust search, with the profiling clocks around it), the
 start of the analytic centre task (a `Highs` IPM solve) and of the
-symmetry detection, the repair LP of transformNewIntegerFeasibleSolution, the profiling
+symmetry detection, the `Highs` solve of transformNewIntegerFeasibleSolution's
+repair LP (Rust fixes the integers, sets the time limit and keeps the
+counts), the profiling
 clocks (HighsProfiling, shared with Highs) and HighsDebugSol (not
 supported).
 

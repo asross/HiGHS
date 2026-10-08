@@ -497,7 +497,9 @@ struct HighsMipSolverData {
                     const bool print_display_line = true,
                     const bool is_user_solution = false);
 
+#ifndef HIGHS_RUST
   const std::vector<double>& getSolution() const;
+#endif
 
   std::string solutionSourceToString(const int solution_source,
                                      const bool code = true) const;

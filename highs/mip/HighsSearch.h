@@ -240,9 +240,6 @@ class HighsSearch {
   double getEpsilon() const;
   double getOptimalityLimit() const;
 
-  const std::vector<double>& getRootLpSol() const;
-  const std::vector<HighsInt>& getIntegralCols() const;
-
   HighsDomain& getDomain() const;
   HighsConflictPool& getConflictPool() const;
   HighsCutPool& getCutPool() const;

@@ -307,6 +307,8 @@ struct MipFns {
   void* (*worker)(void*, HighsInt);
   void (*worker_scratch)(void*, void*, const double*, HighsInt,
                          MipScratchView*);
+  bool (*repair_lp)(void*, const double*, const double*, double, double, bool,
+                    int64_t*);
 };
 
 // The functions (HighsPrimalHeuristics.cpp) and the solver's data

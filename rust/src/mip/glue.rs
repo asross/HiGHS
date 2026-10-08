@@ -223,6 +223,11 @@ pub struct CMipFns {
     /// the worker's scratch solution: col_value = sol, primal postsolve
     /// (thread safe) and row values; its vectors to the view
     pub worker_scratch: unsafe extern "C" fn(P, P, *const f64, i32, *mut ScratchView),
+    /// the repair LP: the original model with these column bounds and no
+    /// integers, simplex with the time limit, primal feasibility tolerance
+    /// and presolve (choose, or off); the iterations to the last argument;
+    /// if primal feasible, its solution becomes the scratch solution
+    pub repair_lp: unsafe extern "C" fn(P, *const f64, *const f64, f64, f64, bool, *mut i64) -> bool,
 }
 
 static FNS: AtomicPtr<CMipFns> = AtomicPtr::new(std::ptr::null_mut());
@@ -1008,6 +1013,20 @@ pub fn fns_call_helper_new(m: &MipData, time_left: f64) -> P {
 /// A helper's root cut into the cut pool (CMipFns::add_root_cut)
 pub fn add_root_cut(m: &MipData, index: &[i32], value: &[f64], rhs: f64, integral: bool) {
     c!(add_root_cut, m.mipsolver, index.as_ptr(), value.as_ptr(), index.len() as i32, rhs, integral)
+}
+
+/// The repair LP (see CMipFns::repair_lp)
+#[allow(clippy::too_many_arguments)]
+pub fn repair_lp(
+    m: &MipData,
+    lower: &[f64],
+    upper: &[f64],
+    time_limit: f64,
+    feasibility_tolerance: f64,
+    presolve: bool,
+    iterations: &mut i64,
+) -> bool {
+    c!(repair_lp, m.mipsolver, lower.as_ptr(), upper.as_ptr(), time_limit, feasibility_tolerance, presolve, iterations)
 }
 
 /// The master worker

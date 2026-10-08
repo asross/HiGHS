@@ -72,8 +72,6 @@ pub mod op {
     pub const EXTRACT_OBJ_CLIQUES: i32 = 17;
     /// globalOrbits->orbitalFixing(getDomain()) if there are global orbits
     pub const ORBITAL_FIXING: i32 = 18;
-    /// the repair LP of the scratch solution (returns 1 if feasible)
-    pub const REPAIR: i32 = 19;
     /// store the scratch solution as the solver's (with the violations in
     /// MipData's solution fields)
     pub const STORE_SOLUTION: i32 = 20;
@@ -960,6 +958,43 @@ impl MipData {
         (feasible, bound_violation, row_violation, integrality_violation, obj)
     }
 
+    /// transformNewIntegerFeasibleSolution's repair LP: the original model
+    /// with the integers fixed at their rounded values in `col` (the
+    /// scratch solution), solved by simplex in C++ (CMipFns::repair_lp);
+    /// if primal feasible, its solution replaces the scratch solution
+    fn repair_lp(&self, col: &[f64]) -> bool {
+        let o = &self.orig;
+        // SAFETY: the original model's vectors, unchanged during the call
+        let (intg, lo, up) = unsafe { ((*o.integrality).as_slice(), (*o.col_lower).as_slice(), (*o.col_upper).as_slice()) };
+        let mut lower = lo.to_vec();
+        let mut upper = up.to_vec();
+        for c in 0..o.num_col as usize {
+            if intg[c] == 1 {
+                let solval = col[c].round();
+                lower[c] = cmax(lower[c], solval);
+                upper[c] = cmin(upper[c], solval);
+            }
+        }
+        self.sc().total_repair_lp += 1;
+        let time_available = cmax(self.opts.time_limit - self.timer_read(), 0.1);
+        let mut iterations = 0;
+        let feasible = glue::repair_lp(
+            self,
+            &lower,
+            &upper,
+            time_available,
+            self.opts.mip_feasibility_tolerance,
+            !self.root_presolve_only,
+            &mut iterations,
+        );
+        let sc = self.sc();
+        sc.total_repair_lp_iterations += iterations;
+        if feasible {
+            sc.total_repair_lp_feasible += 1;
+        }
+        feasible
+    }
+
     /// transformNewIntegerFeasibleSolution: the objective in the
     /// transformed space (infinity if not to be used for bounding)
     pub fn transform_new_integer_feasible_solution(&self, sol: &[f64], possibly_store_as_new_incumbent: bool) -> f64 {
@@ -971,7 +1006,7 @@ impl MipData {
             if !r.0 && allow_try_again {
                 // repair: an LP with the integers fixed at their rounded
                 // values
-                if self.op(op::REPAIR, None, 0, 0.0) != 0.0 {
+                if self.repair_lp(scratch.col()) {
                     allow_try_again = false;
                     scratch = glue::scratch_solution(self, None);
                     continue;
