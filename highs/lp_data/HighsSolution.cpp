@@ -1964,6 +1964,7 @@ HighsStatus ipxBasicSolutionToHighsBasicSolution(
 
 #endif
 
+#ifndef HIGHS_RUST  // in Rust (rust/src/lp_data/form_basis.rs)
 HighsStatus formSimplexLpBasisAndFactorReturn(
     const HighsStatus return_status, HighsLpSolverObject& solver_object) {
   HighsLp& lp = solver_object.lp_;
@@ -2097,6 +2098,7 @@ void accommodateAlienBasis(HighsLpSolverObject& solver_object) {
   assert(num_basic_variables == num_row);
 }
 
+#endif  // HIGHS_RUST: rust/src/lp_data/form_basis.rs
 void resetModelStatusAndHighsInfo(HighsLpSolverObject& solver_object) {
   resetModelStatusAndHighsInfo(solver_object.model_status_,
                                solver_object.highs_info_);

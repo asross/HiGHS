@@ -366,7 +366,7 @@ pub struct COut {
 }
 
 impl COut {
-    unsafe fn view(&self) -> Out<'_> {
+    pub(crate) unsafe fn view(&self) -> Out<'_> {
         Out {
             col_value: self.col_value.get_mut(),
             col_dual: self.col_dual.get_mut(),

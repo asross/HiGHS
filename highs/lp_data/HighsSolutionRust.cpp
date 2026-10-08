@@ -15,6 +15,8 @@
 #include <cstddef>
 
 #include "ipm/IpxSolution.h"
+#include "lp_data/HighsLpSolverObject.h"
+#include "lp_data/HighsLpUtils.h"
 #include "lp_data/HighsSolution.h"
 
 // Rust reads and writes HighsInfoStruct and HighsPrimalDualErrors in
@@ -305,5 +307,104 @@ HighsStatus ipxBasicSolutionToHighsBasicSolution(
   highs_basis.valid = true;
   highs_basis.useful = true;
   return HighsStatus::kOk;
+}
+
+// formSimplexLpBasisAndFactor and accommodateAlienBasis
+// (rust/src/lp_data/form_basis.rs)
+struct RsFormHost {
+  void* ctx;
+  int (*op)(void* ctx, int code, int arg, void* out);
+  RsLog log, factor_log;
+  const bool* is_scaled;
+  bool basis_valid, basis_useful;
+  bool* basis_alien;
+  RsMut<uint8_t> col_status, row_status;
+};
+
+extern "C" {
+int highs_rs_form_simplex_lp_basis_and_factor(const RsFormHost* host,
+                                              bool only_from_known_basis);
+void highs_rs_accommodate_alien_basis(const RsLog* factor_log, const RsLp* lp,
+                                      RsMut<uint8_t> col_status,
+                                      RsMut<uint8_t> row_status);
+}
+
+namespace {
+// The log of an HFactor set up with these log options: no callbacks
+struct FactorLog {
+  bool output_flag, log_to_console;
+  HighsInt log_dev_level;
+  HighsLogOptions log_options;
+  explicit FactorLog(const HighsLogOptions& from) {
+    output_flag = *from.output_flag;
+    log_to_console = *from.log_to_console;
+    log_dev_level = *from.log_dev_level;
+    log_options.output_flag = &output_flag;
+    log_options.log_to_console = &log_to_console;
+    log_options.log_dev_level = &log_dev_level;
+    log_options.log_stream = from.log_stream;
+  }
+};
+
+int formBasisOp(void* ctx, int code, int arg, void* out) {
+  HighsLpSolverObject& so = *static_cast<HighsLpSolverObject*>(ctx);
+  HighsLp& lp = so.lp_;
+  switch (code) {
+    case 0:
+      lp.ensureColwise();
+      break;
+    case 1:
+      considerScaling(so.options_, lp);
+      break;
+    case 2:
+      *static_cast<RsLp*>(out) = rsLp(lp);
+      break;
+    case 3:
+      lp.unapplyScale();
+      break;
+    case 4:
+      so.ekk_instance_.moveLp(so);
+      break;
+    case 5:
+      return so.ekk_instance_.status_.has_basis;
+    case 6:
+      return int(so.ekk_instance_.setBasis(so.basis_));
+    case 7:
+      return int(so.ekk_instance_.initialiseSimplexLpBasisAndFactor(arg != 0));
+    case 8:
+      if (lp.is_moved_) lp.moveBackLpAndUnapplyScaling(so.ekk_instance_.lp_);
+      break;
+  }
+  return 0;
+}
+}  // namespace
+
+HighsStatus formSimplexLpBasisAndFactor(HighsLpSolverObject& solver_object,
+                                        const bool only_from_known_basis) {
+  const FactorLog factor_log(solver_object.options_.log_options);
+  HighsBasis& basis = solver_object.basis_;
+  RsFormHost h;
+  h.ctx = &solver_object;
+  h.op = formBasisOp;
+  h.log = rsLog(solver_object.options_.log_options);
+  h.factor_log = rsLog(factor_log.log_options);
+  h.is_scaled = &solver_object.lp_.is_scaled_;
+  h.basis_valid = basis.valid;
+  h.basis_useful = basis.useful;
+  h.basis_alien = &basis.alien;
+  h.col_status = rsStatus(basis.col_status);
+  h.row_status = rsStatus(basis.row_status);
+  return HighsStatus(
+      highs_rs_form_simplex_lp_basis_and_factor(&h, only_from_known_basis));
+}
+
+void accommodateAlienBasis(HighsLpSolverObject& solver_object) {
+  assert(solver_object.basis_.alien);
+  const FactorLog factor_log(solver_object.options_.log_options);
+  const RsLog log = rsLog(factor_log.log_options);
+  const RsLp v = rsLp(solver_object.lp_);
+  highs_rs_accommodate_alien_basis(&log, &v,
+                                   rsStatus(solver_object.basis_.col_status),
+                                   rsStatus(solver_object.basis_.row_status));
 }
 #endif

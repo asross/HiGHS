@@ -1,14 +1,15 @@
 //! Port of the QP solver QUASS (highs/qpsolver/): a primal active-set
-//! method with a dense Cholesky factor of the reduced Hessian. The C++
-//! solveqp (a_quass.cpp) calls `solve` through ffi.rs; phase 1 (an LP solve
-//! by Highs, or the hot start check) and the logging stay in C++ behind
-//! `Callbacks`. Same floating-point operations as the C++, so solves are
+//! method with a dense Cholesky factor of the reduced Hessian. Highs::
+//! callSolveQp's glue (the instance, settings, logging, phase 1 and the
+//! result in HiGHS form) is glue.rs; the phase 1 LP solve, the timer and
+//! the solution's storage stay in C++ (qpsolver/QpRust.cpp). Same
+//! floating-point operations as the C++, so solves are
 //! bit-identical: clang contracts `a + b * c` (fma here) and compiles the
 //! QpVector dot product fused in most copies (see QpVector::dot_split4).
 
 mod basis;
 mod cholesky;
-pub mod ffi;
+pub mod glue;
 mod pricing;
 mod quass;
 pub mod vector;

@@ -4173,6 +4173,7 @@ HighsStatus Highs::callSolveLp(HighsLp& lp, const std::string& message) {
   return return_status;
 }
 
+#ifndef HIGHS_RUST  // the QP glue is Rust (rust/src/qp/glue.rs)
 HighsStatus Highs::callSolveQp() {
   // Check that the model is column-wise
   HighsLp& lp = model_.lp_;
@@ -4364,6 +4365,7 @@ HighsStatus Highs::callSolveQp() {
   if (model_status_ == HighsModelStatus::kOptimal) return checkOptimality("QP");
   return return_status;
 }
+#endif  // HIGHS_RUST: highs/qpsolver/QpRust.cpp
 
 HighsStatus Highs::callSolveMip() {
   // Record whether there is a valid primal solution on entry
