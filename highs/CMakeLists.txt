@@ -19,9 +19,50 @@ if(HIGHS_RUST)
   # qpsolver/a_quass.cpp calls it (perturbation and scaling are unused)
   list(REMOVE_ITEM highs_sources qpsolver/basis.cpp qpsolver/perturbation.cpp
     qpsolver/quass.cpp qpsolver/ratiotest.cpp qpsolver/scaling.cpp)
+  # The LP reader is Rust (rust/src/io/lp.rs); filereaderlp/reader.cpp is
+  # outside the unity batches, so removing it shifts none
+  list(REMOVE_ITEM highs_sources io/filereaderlp/reader.cpp)
   # With fewer sources the unity batches shift; keep the file-scope
   # `using namespace HighsExtras` of this file out of the hipo batch
   set_source_files_properties(HighsExternalApi.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+  # Left out of Crestline (rust/PORTING.md, "Crestline's scope"): HiPO,
+  # HiPDLP, PAMI (HEkkDualMulti.cpp; SIP is guarded in HEkkDual.cpp),
+  # iCrash (ICrashX.cpp is callCrossover, kept), the C API, the dev KKT
+  # checker and the MIP debug solution (empty without HIGHS_DEBUGSOL).
+  # Requests for them fail cleanly.
+  set(hipo_sources)
+  set(hipo_headers)
+  set(factor_highs_sources)
+  set(factor_highs_headers)
+  set(hipo_util_sources)
+  set(hipo_util_headers)
+  list(REMOVE_ITEM highs_sources
+    interfaces/highs_c_api.cpp
+    mip/HighsDebugSol.cpp
+    pdlp/HiPdlpWrapper.cpp
+    pdlp/hipdlp/linalg.cc
+    pdlp/hipdlp/logger.cc
+    pdlp/hipdlp/pdhg.cc
+    pdlp/hipdlp/restart.cc
+    pdlp/hipdlp/scaling.cc
+    presolve/ICrash.cpp
+    presolve/ICrashUtil.cpp
+    simplex/HEkkDualMulti.cpp
+    test_kkt/DevKkt.cpp
+    test_kkt/KktCh2.cpp)
+  list(REMOVE_ITEM highs_headers
+    interfaces/highs_c_api.h
+    pdlp/HiPdlpWrapper.h
+    pdlp/hipdlp/defs.hpp
+    pdlp/hipdlp/linalg.hpp
+    pdlp/hipdlp/logger.hpp
+    pdlp/hipdlp/pdhg.hpp
+    pdlp/hipdlp/restart.hpp
+    pdlp/hipdlp/scaling.hpp
+    pdlp/hipdlp/solver_results.hpp
+    presolve/ICrashUtil.h
+    test_kkt/DevKkt.h
+    test_kkt/KktCh2.h)
 endif()
 set(sources ${highs_sources} ${cupdlp_sources} ${ipx_sources} ${basiclu_sources} ${hipo_sources} ${factor_highs_sources} ${hipo_util_sources})
 set(headers ${highs_headers} ${cupdlp_headers} ${ipx_headers} ${basiclu_headers} ${hipo_headers} ${factor_highs_headers} ${hipo_util_headers})
@@ -434,7 +475,7 @@ else()
 
 endif()
 
-if(FORTRAN_FOUND)
+if(FORTRAN_FOUND AND NOT HIGHS_RUST)
   set(fortransources interfaces/highs_fortran_api.f90)
   set(CMAKE_Fortran_MODULE_DIRECTORY ${HIGHS_BINARY_DIR}/modules)
   add_library(FortranHighs interfaces/highs_fortran_api.f90)
@@ -459,9 +500,9 @@ if(FORTRAN_FOUND)
   # use link rpath
   # set_target_properties(FortranHighs PROPERTIES INSTALL_RPATH
   #   "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
-endif(FORTRAN_FOUND)
+endif()
 
-if(CSHARP_FOUND)
+if(CSHARP_FOUND AND NOT HIGHS_RUST)
   message(STATUS "CSharp supported")
   set(csharpsources
     interfaces/highs_csharp_api.cs)
@@ -547,4 +588,20 @@ if(HIGHS_RUST)
   add_custom_target(highs_rs DEPENDS ${HIGHS_RUST_LIB})
   add_dependencies(${highs_rust_target} highs_rs)
   target_link_libraries(${highs_rust_target} ${highs_rust_link} ${HIGHS_RUST_LIB})
+
+  # The Rust command line crest (rust/src/bin/crest.rs) links the C++ of
+  # the static library (rust/build.rs); own target dir, since the crest
+  # feature would rebuild libhighs_rs
+  if(TARGET highs AND NOT BUILD_SHARED_LIBS)
+    string(REPLACE "/rust/" "/rust-crest/" crest_out ${highs_rust_out})
+    add_custom_target(crest ALL
+      COMMAND ${CMAKE_COMMAND} -E env HIGHS_LIB_DIR=$<TARGET_FILE_DIR:highs>
+              ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
+              --target-dir ${CMAKE_BINARY_DIR}/rust-crest ${highs_rust_target_args}
+              --features "crest ${HIGHS_RUST_FEATURES}" --bin crest
+      COMMAND ${CMAKE_COMMAND} -E copy ${crest_out}/crest ${CMAKE_BINARY_DIR}/bin/crest
+      WORKING_DIRECTORY ${HIGHS_RUST_DIR}
+      DEPENDS highs
+      COMMENT "Building crest")
+  endif()
 endif()

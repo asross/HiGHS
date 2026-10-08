@@ -1796,6 +1796,12 @@ void HEkk::chooseSimplexStrategyThreads(const HighsOptions& options,
       simplex_strategy = kSimplexStrategyPrimal;
     }
   }
+#ifdef HIGHS_RUST
+  // SIP and PAMI are not in Crestline: use the serial dual simplex
+  if (simplex_strategy == kSimplexStrategyDualTasks ||
+      simplex_strategy == kSimplexStrategyDualMulti)
+    simplex_strategy = kSimplexStrategyDual;
+#endif
   // Set min/max_threads to correspond to serial code. They will be
   // set to other values if parallel options are used.
   info.min_concurrency = 1;

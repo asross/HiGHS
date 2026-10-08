@@ -695,6 +695,7 @@ bool usePdlp(const std::string& solver) {
   return solver == kPdlpString || solver == kHiPdlpString;
 }
 
+#ifndef HIGHS_RUST  // HiPO is not in Crestline
 // Decide whether to use the HiPO IPM solver
 bool useHipo(const HighsOptions& options,
              const std::string& specific_solver_option, const HighsLp& lp,
@@ -726,3 +727,4 @@ bool useHipo(const HighsOptions& options,
   // Later decide between simplex, HiPO and IPX based on LP properties
   return use_hipo;
 }
+#endif

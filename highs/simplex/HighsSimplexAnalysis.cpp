@@ -27,6 +27,14 @@ void HighsSimplexAnalysis::setup(const std::string lp_name, const HighsLp& lp,
   model_name_ = lp.model_name_;
   lp_name_ = lp_name;
   // Set up analysis logic short-cuts
+#ifdef HIGHS_RUST
+  // Simplex analysis is not in Crestline: highs_analysis_level is ignored
+  analyse_lp_data = false;
+  analyse_simplex_summary_data = false;
+  analyse_simplex_runtime_data = false;
+  analyse_factor_data = false;
+  analyse_simplex_data = false;
+#else
   analyse_lp_data = kHighsAnalysisLevelModelData & options.highs_analysis_level;
   analyse_simplex_summary_data =
       kHighsAnalysisLevelSolverSummaryData & options.highs_analysis_level;
@@ -36,6 +44,7 @@ void HighsSimplexAnalysis::setup(const std::string lp_name, const HighsLp& lp,
       kHighsAnalysisLevelNlaData & options.highs_analysis_level;
   analyse_simplex_data =
       analyse_simplex_summary_data || analyse_simplex_runtime_data;
+#endif
   highs_run_time = 0;
   last_user_log_time = -kHighsInf;
   delta_user_log_time = 5e0;
@@ -144,6 +153,7 @@ void HighsSimplexAnalysis::setup(const std::string lp_name, const HighsLp& lp,
   sum_multi_chosen = 0;
   sum_multi_finished = 0;
 
+#ifndef HIGHS_RUST
   if (analyse_simplex_summary_data) {
     AnIterPrevIt = simplex_iteration_count_;
 
@@ -266,11 +276,16 @@ void HighsSimplexAnalysis::setup(const std::string lp_name, const HighsLp& lp,
     initialiseValueDistribution("Cleanup dual step summary", "", 1e-16, 1e16,
                                 10.0, cleanup_dual_step_distribution);
   }
+#endif
 }
 
 void HighsSimplexAnalysis::setupSimplexTime(const HighsOptions& options) {
+#ifdef HIGHS_RUST
+  analyse_simplex_time = false;
+#else
   analyse_simplex_time =
       kHighsAnalysisLevelSolverTime & options.highs_analysis_level;
+#endif
   if (analyse_simplex_time) {
     // Set up the thread clocks
     HighsInt max_threads = highs::parallel::num_threads();
@@ -287,8 +302,12 @@ void HighsSimplexAnalysis::setupSimplexTime(const HighsOptions& options) {
 }
 
 void HighsSimplexAnalysis::setupFactorTime(const HighsOptions& options) {
+#ifdef HIGHS_RUST
+  analyse_factor_time = false;
+#else
   analyse_factor_time =
       kHighsAnalysisLevelNlaTime & options.highs_analysis_level;
+#endif
   if (analyse_factor_time) {
     // Set up the thread clocks
     HighsInt max_threads = highs::parallel::num_threads();
@@ -395,6 +414,7 @@ void HighsSimplexAnalysis::userInvertReport(const bool header,
   if (highs_run_time > 200 * delta_user_log_time) delta_user_log_time *= 10;
 }
 
+#ifndef HIGHS_RUST  // simplex analysis is not in Crestline
 void HighsSimplexAnalysis::dualSteepestEdgeWeightError(
     const double computed_edge_weight, const double updated_edge_weight) {
   const double kWeightErrorThreshold = 4.0;
@@ -589,6 +609,25 @@ void HighsSimplexAnalysis::afterTranStage(
   updateScatterData(start_density, end_density, stage.rhs_density_);
   regressScatterData(stage.rhs_density_);
 }
+#else
+void HighsSimplexAnalysis::dualSteepestEdgeWeightError(
+    const double computed_edge_weight, const double updated_edge_weight) {
+}
+
+bool HighsSimplexAnalysis::predictEndDensity(const HighsInt tran_stage_type,
+                                             const double start_density,
+                                             double& end_density) const {
+  return false;
+}
+
+void HighsSimplexAnalysis::afterTranStage(
+    const HighsInt tran_stage_type, const double start_density,
+    const double end_density, const double historical_density,
+    const double predicted_end_density,
+    const bool use_solve_sparse_original_HFactor_logic,
+    const bool use_solve_sparse_new_HFactor_logic) {
+}
+#endif
 
 void HighsSimplexAnalysis::simplexTimerStart(const HighsInt simplex_clock,
                                              const HighsInt thread_id) {
@@ -640,6 +679,7 @@ HighsTimerClock* HighsSimplexAnalysis::getThreadFactorTimerClockPointer() {
   return factor_timer_clock_pointer;
 }
 
+#ifndef HIGHS_RUST  // simplex analysis is not in Crestline
 void HighsSimplexAnalysis::iterationRecord() {
   assert(analyse_simplex_summary_data);
   HighsInt AnIterCuIt = simplex_iteration_count;
@@ -1265,6 +1305,49 @@ void HighsSimplexAnalysis::reportInvertFormData() const {
          running_average_kernel_fill_factor,
          running_average_major_kernel_fill_factor);
 }
+#else
+void HighsSimplexAnalysis::iterationRecord() {
+}
+
+void HighsSimplexAnalysis::iterationRecordMajor() {
+}
+
+void HighsSimplexAnalysis::operationRecordBefore(
+    const HighsInt operation_type, const HVector& vector,
+    const double historical_density) {
+}
+
+void HighsSimplexAnalysis::operationRecordBefore(
+    const HighsInt operation_type, const HighsInt current_count,
+    const double historical_density) {
+}
+
+void HighsSimplexAnalysis::operationRecordAfter(const HighsInt operation_type,
+                                                const HVector& vector) {
+}
+
+void HighsSimplexAnalysis::operationRecordAfter(const HighsInt operation_type,
+                                                const HighsInt result_count) {
+}
+
+void HighsSimplexAnalysis::summaryReport() {
+}
+
+void HighsSimplexAnalysis::summaryReportFactor() const {
+}
+
+void HighsSimplexAnalysis::reportSimplexTimer() const {
+}
+
+void HighsSimplexAnalysis::reportFactorTimer() {
+}
+
+void HighsSimplexAnalysis::updateInvertFormData(const HFactor& factor) {
+}
+
+void HighsSimplexAnalysis::reportInvertFormData() const {
+}
+#endif
 
 void HighsSimplexAnalysis::iterationReport(const bool header) {
   analysis_log = std::unique_ptr<std::stringstream>(new std::stringstream());
@@ -1338,6 +1421,7 @@ void HighsSimplexAnalysis::reportInfeasibility(const bool header) {
   }
 }
 
+#ifndef HIGHS_RUST  // simplex analysis is not in Crestline
 void HighsSimplexAnalysis::reportThreads(const bool header) {
   assert(analyse_simplex_runtime_data);
   if (header) {
@@ -1416,6 +1500,22 @@ void HighsSimplexAnalysis::reportDensity(const bool header) {
     reportOneDensity(use_steepest_edge_density);
   }
 }
+#else
+void HighsSimplexAnalysis::reportThreads(const bool header) {
+}
+
+void HighsSimplexAnalysis::reportMulti(const bool header) {
+}
+
+void HighsSimplexAnalysis::reportOneDensity(const double density) {
+}
+
+void HighsSimplexAnalysis::printOneDensity(const double density) const {
+}
+
+void HighsSimplexAnalysis::reportDensity(const bool header) {
+}
+#endif
 
 void HighsSimplexAnalysis::reportInvert(const bool header) {
   if (header) return;
@@ -1443,6 +1543,7 @@ void HighsSimplexAnalysis::reportCondition(const bool header) {
 // * dual_step    - ThDu (theta_dual) - dual step from CHUZC
 // * primal_step  - ThPr (theta_primal) - step to bound of leaving variable
 // after pivoting
+#ifndef HIGHS_RUST  // simplex analysis is not in Crestline
 void HighsSimplexAnalysis::reportIterationData(const bool header) {
   if (header) {
     *analysis_log << highsFormatToString(
@@ -1473,6 +1574,10 @@ void HighsSimplexAnalysis::reportIterationData(const bool header) {
         primal_step);
   }
 }
+#else
+void HighsSimplexAnalysis::reportIterationData(const bool header) {
+}
+#endif
 
 void HighsSimplexAnalysis::reportRunTime(const bool header,
                                          const double run_time) {

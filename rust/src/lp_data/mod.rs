@@ -5,6 +5,7 @@
 //! (`Log`), so messages are those of the C++ formats, byte for byte.
 
 pub mod ffi;
+pub mod app;
 pub mod basis;
 pub mod edit;
 pub mod info;
@@ -14,6 +15,7 @@ pub mod options;
 pub mod options_cli;
 pub mod query;
 pub mod ranging;
+pub mod readers;
 pub mod run;
 pub mod semi;
 pub mod solve;

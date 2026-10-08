@@ -729,10 +729,19 @@ HighsStatus Highs::addLinearObjective(
                  "Cannot define additional linear objective for QP\n");
     return HighsStatus::kError;
   }
+#ifdef HIGHS_RUST
+  // Multi-objective solves are not in Crestline
+  (void)linear_objective;
+  (void)iObj;
+  highsLogUser(options_.log_options, HighsLogType::kError,
+               "Multiple linear objectives are not available in this build\n");
+  return HighsStatus::kError;
+#else
   if (!this->validLinearObjective(linear_objective, iObj))
     return HighsStatus::kError;
   this->multi_linear_objective_.push_back(linear_objective);
   return HighsStatus::kOk;
+#endif
 }
 
 HighsStatus Highs::clearLinearObjectives() {
@@ -1141,8 +1150,13 @@ HighsStatus Highs::optimizeHighs() {
   // Level 1 of Highs::run()
   //
   // Move the "mods" to here
+#ifdef HIGHS_RUST
+  // No multi-objective solves in Crestline (addLinearObjective fails)
+  return this->optimizeModel();
+#else
   return this->multi_linear_objective_.size() ? this->multiobjectiveSolve()
                                               : this->optimizeModel();
+#endif
 }
 
 HighsStatus Highs::optimizeLp() {
@@ -4179,6 +4193,7 @@ HighsStatus Highs::callSolveQp() {
   HighsStatus return_status;
 
   // Choose solver
+#ifndef HIGHS_RUST
   bool use_hipo =
       (options_.solver == kHipoString || options_.solver == kIpmString) &&
       HighsExternalApi::isAvailable<HighsExtras::hipo>();
@@ -4190,6 +4205,9 @@ HighsStatus Highs::callSolveQp() {
     if (this->profiling_) this->profiling_->stop(kSubSolverHipo);
     if (return_status == HighsStatus::kError) return return_status;
   } else {
+#else
+  {  // HiPO is not in Crestline
+#endif
     //
     // Run the QP solver
     if (this->profiling_) this->profiling_->start(kSubSolverQpAsm);

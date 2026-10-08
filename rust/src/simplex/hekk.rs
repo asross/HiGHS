@@ -99,8 +99,6 @@ const STRATEGY_DUAL_PLAIN: i32 = 1;
 const STRATEGY_DUAL_TASKS: i32 = 2;
 const STRATEGY_DUAL_MULTI: i32 = 3;
 const STRATEGY_PRIMAL: i32 = 4;
-const K_DUAL_TASKS_MIN_CONCURRENCY: i32 = 3;
-const K_DUAL_MULTI_MIN_CONCURRENCY: i32 = 1;
 
 // Solve phases
 const PHASE_UNKNOWN: i32 = -1;
@@ -1757,21 +1755,17 @@ fn choose_simplex_strategy_threads(e: &EkkView, x: &CHekk) {
     if simplex_strategy == STRATEGY_CHOOSE {
         // HiGHS is left to choose the simplex strategy
         simplex_strategy = if *e.num_primal_infeasibilities > 0 { STRATEGY_DUAL_PLAIN } else { STRATEGY_PRIMAL };
+    } else if simplex_strategy == STRATEGY_DUAL_TASKS || simplex_strategy == STRATEGY_DUAL_MULTI {
+        // SIP and PAMI are not in Crestline (Highs::run warns)
+        simplex_strategy = STRATEGY_DUAL_PLAIN;
     }
     x.simplex_strategy.set(simplex_strategy);
     // Set min/max_threads to correspond to serial code
-    let mut min_concurrency = 1;
-    let mut max_concurrency = 1;
+    let min_concurrency = 1;
+    let max_concurrency = 1;
     let simplex_min_concurrency = x.simplex_min_concurrency;
     let simplex_max_concurrency = x.simplex_max_concurrency;
     let max_threads = x.num_threads;
-    if simplex_strategy == STRATEGY_DUAL_TASKS {
-        min_concurrency = K_DUAL_TASKS_MIN_CONCURRENCY.max(simplex_min_concurrency);
-        max_concurrency = min_concurrency.max(simplex_max_concurrency);
-    } else if simplex_strategy == STRATEGY_DUAL_MULTI {
-        min_concurrency = K_DUAL_MULTI_MIN_CONCURRENCY.max(simplex_min_concurrency);
-        max_concurrency = min_concurrency.max(simplex_max_concurrency);
-    }
     x.min_concurrency.set(min_concurrency);
     x.max_concurrency.set(max_concurrency);
     // Set the concurrency to be used to be the maximum number

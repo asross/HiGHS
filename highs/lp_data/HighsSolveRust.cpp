@@ -15,12 +15,10 @@
 #ifdef HIGHS_RUST
 #include <exception>
 
-#include "HighsExternalApi.h"
 #include "ipm/IpxWrapper.h"
 #include "lp_data/HighsSolutionDebug.h"
 #include "lp_data/HighsSolve.h"
 #include "pdlp/CupdlpWrapper.h"
-#include "pdlp/HiPdlpWrapper.h"
 #include "simplex/HApp.h"
 
 namespace {
@@ -58,9 +56,7 @@ struct SolveCtx {
 // solve.rs: SolveOp
 enum class SolveOp {
   kDebugAssess = 1,
-  kUseHipo,
   kUnconstrained,
-  kHipo,
   kIpx,
   kPdlp,
   kSimplex,
@@ -77,19 +73,8 @@ int64_t solveLpStep(HighsLpSolverObject& solver_object, int which,
       call_status = assessLp(solver_object.lp_, options);
       assert(call_status == HighsStatus::kOk);
       return int(call_status);
-    case SolveOp::kUseHipo:
-      return useHipo(options, kSolverString, solver_object.lp_);
     case SolveOp::kUnconstrained:
       return int(solveUnconstrainedLp(solver_object));
-    case SolveOp::kHipo:
-      try {
-        call_status = solveLpHipo(solver_object);
-      } catch (const std::exception& exception) {
-        highsLogDev(options.log_options, HighsLogType::kError,
-                    "Exception %s in solveLpHipo\n", exception.what());
-        call_status = HighsStatus::kError;
-      }
-      return int(call_status);
     case SolveOp::kIpx:
       try {
         call_status = solveLpIpx(solver_object);
@@ -100,23 +85,15 @@ int64_t solveLpStep(HighsLpSolverObject& solver_object, int which,
       }
       return int(call_status);
     case SolveOp::kPdlp:
+      // cuPDLP-C only: HiPDLP is not in Crestline (the solver option
+      // rejects "hipdlp")
       solver_object.profiling_->start(kSubSolverPdlp);
-      if (options.solver == kPdlpString) {
-        try {
-          call_status = solveLpCupdlp(solver_object);
-        } catch (const std::exception& exception) {
-          highsLogDev(options.log_options, HighsLogType::kError,
-                      "Exception %s in solveLpCupdlp\n", exception.what());
-          call_status = HighsStatus::kError;
-        }
-      } else {
-        try {
-          call_status = solveLpHiPdlp(solver_object);
-        } catch (const std::exception& exception) {
-          highsLogDev(options.log_options, HighsLogType::kError,
-                      "Exception %s in solveHiPdlp\n", exception.what());
-          call_status = HighsStatus::kError;
-        }
+      try {
+        call_status = solveLpCupdlp(solver_object);
+      } catch (const std::exception& exception) {
+        highsLogDev(options.log_options, HighsLogType::kError,
+                    "Exception %s in solveLpCupdlp\n", exception.what());
+        call_status = HighsStatus::kError;
       }
       solver_object.profiling_->stop(kSubSolverPdlp);
       return int(call_status);

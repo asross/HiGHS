@@ -341,6 +341,8 @@ set(hipo_util_headers
 set_source_files_properties (io/filereaderlp/reader.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 # includes zlib.h (and so pthread.h) inside namespace HighsExtras
 set_source_files_properties (HighsExternalDeps.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# includes CLI11.hpp (the app's third-party notice)
+set_source_files_properties (lp_data/HighsAppRust.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 set(highs_sources
     interfaces/highs_c_api.cpp
@@ -354,6 +356,7 @@ set(highs_sources
     io/filereaderlp/reader.cpp
     ipm/IpxWrapper.cpp
     lp_data/Highs.cpp
+    lp_data/HighsAppRust.cpp
     lp_data/HighsCallback.cpp
     lp_data/HighsDebug.cpp
     lp_data/HighsIis.cpp

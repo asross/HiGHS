@@ -13,7 +13,9 @@
 
 #include <cassert>
 
+#ifndef HIGHS_RUST
 #include "HighsExternalApi.h"
+#endif
 #include "lp_data/HighsOptions.h"
 #include "lp_data/HighsSolution.h"
 
@@ -405,6 +407,7 @@ HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
   return return_status;
 }
 
+#ifndef HIGHS_RUST  // HiPO is not in Crestline
 HighsStatus solveLpHipo(HighsLpSolverObject& solver_object) {
   return solveHipo(solver_object.options_, solver_object.timer_,
                    solver_object.lp_, HighsHessian{}, solver_object.basis_,
@@ -656,6 +659,7 @@ HighsStatus solveHipo(const HighsOptions& options, HighsTimer& timer,
   return return_status;
 }
 
+#endif
 void fillInIpxData(const HighsLp& lp, ipx::Int& num_col, ipx::Int& num_row,
                    double& offset, std::vector<double>& obj,
                    std::vector<double>& col_lb, std::vector<double>& col_ub,
@@ -1128,6 +1132,7 @@ void reportIpmNoProgress(const HighsOptions& options,
                ipx_info.abs_dresidual);
 }
 
+#ifndef HIGHS_RUST
 void reportHipoNoProgress(const HighsOptions& options,
                           const hipo::Info& hipo_info) {
   highsLogUser(options.log_options, HighsLogType::kWarning,
@@ -1141,6 +1146,7 @@ void reportHipoNoProgress(const HighsOptions& options,
                hipo_info.d_res_abs);
 }
 
+#endif
 void getHighsNonVertexSolution(const HighsOptions& options, const HighsLp& lp,
                                const ipx::Int num_col, const ipx::Int num_row,
                                const std::vector<double>& rhs,
@@ -1167,6 +1173,7 @@ void getHighsNonVertexSolution(const HighsOptions& options, const HighsLp& lp,
                              num_row, x, slack, y, zl, zu, highs_solution);
 }
 
+#ifndef HIGHS_RUST
 void getHipoNonVertexSolution(const HighsOptions& options, const HighsLp& lp,
                               const hipo::Int num_col, const hipo::Int num_row,
                               const std::vector<double>& rhs,
@@ -1187,6 +1194,7 @@ void getHipoNonVertexSolution(const HighsOptions& options, const HighsLp& lp,
                              num_row, x, slack, y, zl, zu, highs_solution);
 }
 
+#endif
 void reportSolveData(const HighsLogOptions& log_options,
                      const ipx::Info& ipx_info) {
   highsLogDev(log_options, HighsLogType::kInfo, "\nIPX Solve data\n");
@@ -1390,6 +1398,7 @@ void reportSolveData(const HighsLogOptions& log_options,
               ipx_info.volume_increase);
 }
 
+#ifndef HIGHS_RUST
 HighsStatus reportHipoStatus(const HighsOptions& options,
                              const hipo::Int status, const hipo::Solver& hipo) {
   if (hipo.solved()) {
@@ -1509,3 +1518,4 @@ HighsStatus reportHipoCrossoverStatus(const HighsOptions& options,
   }
   return HighsStatus::kError;
 }
+#endif

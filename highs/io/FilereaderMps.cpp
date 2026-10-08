@@ -137,7 +137,16 @@ FilereaderRetcode FilereaderMps::readModelFromFile(const HighsOptions& options,
   HighsHessian& hessian = model.hessian_;
   // if free format parser
   // Parse file and return status.
+#ifdef HIGHS_RUST
+  // The fixed format reader is not in Crestline: always the free one
+  if (!options.mps_parser_type_free)
+    highsLogUser(options.log_options, HighsLogType::kWarning,
+                 "The fixed format MPS reader is not available in this "
+                 "build: using the free format reader\n");
+  {
+#else
   if (options.mps_parser_type_free) {
+#endif
     HMpsFF parser{};
     if (options.time_limit < kHighsInf && options.time_limit > 0)
       parser.time_limit_ = options.time_limit;
@@ -163,10 +172,18 @@ FilereaderRetcode FilereaderMps::readModelFromFile(const HighsOptions& options,
       case FreeFormatParserReturnCode::kFileNotFound:
         return FilereaderRetcode::kFileNotFound;
       case FreeFormatParserReturnCode::kFixedFormat:
+#ifdef HIGHS_RUST
+        highsLogUser(options.log_options, HighsLogType::kError,
+                     "Free format reader has detected row/col names with "
+                     "spaces: the fixed format MPS reader is not available "
+                     "in this build\n");
+        return FilereaderRetcode::kParserError;
+#else
         highsLogUser(options.log_options, HighsLogType::kWarning,
                      "Free format reader has detected row/col names with "
                      "spaces: switching to fixed format parser\n");
         break;
+#endif
       case FreeFormatParserReturnCode::kTimeout:
         highsLogUser(options.log_options, HighsLogType::kWarning,
                      "Free format reader reached time_limit while parsing "
@@ -175,6 +192,10 @@ FilereaderRetcode FilereaderMps::readModelFromFile(const HighsOptions& options,
     }
   }
 
+#ifdef HIGHS_RUST
+  assert(false);
+  return FilereaderRetcode::kParserError;
+#else
   // else use fixed format parser
   //
   // If the fixed format parser has had to be used, then a warning was
@@ -195,6 +216,7 @@ FilereaderRetcode FilereaderMps::readModelFromFile(const HighsOptions& options,
   if (return_code == FilereaderRetcode::kOk && warning_issued)
     return_code = FilereaderRetcode::kWarning;
   return return_code;
+#endif
 }
 
 HighsStatus FilereaderMps::writeModelToFile(const HighsOptions& options,

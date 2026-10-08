@@ -95,8 +95,6 @@ pub struct COptionRecord {
 
 pub type SetStringFn = unsafe extern "C" fn(*mut c_void, *const u8, usize);
 pub type OpenLogFileFn = unsafe extern "C" fn(*mut c_void, *const u8, usize);
-pub type HipoAvailableFn = unsafe extern "C" fn() -> bool;
-pub type HipoUnavailableFn = unsafe extern "C" fn(*const Log, *const u8, usize);
 pub type WriteFn = unsafe extern "C" fn(*mut c_void, *const u8, usize);
 
 /// What the option functions call in C++: `log` is the report log
@@ -108,22 +106,10 @@ pub struct COptionHost {
     pub ctx: *mut c_void,
     pub set_string: Option<SetStringFn>,
     pub open_log_file: Option<OpenLogFileFn>,
-    pub hipo_available: Option<HipoAvailableFn>,
-    pub hipo_unavailable: Option<HipoUnavailableFn>,
     pub write: Option<WriteFn>,
 }
 
 impl COptionHost {
-    fn hipo_available(&self) -> bool {
-        // SAFETY: a C++ function without arguments
-        self.hipo_available.map_or(false, |f| unsafe { f() })
-    }
-    fn hipo_unavailable(&self, name: &[u8]) {
-        if let Some(f) = self.hipo_unavailable {
-            // SAFETY: the log handle and a byte string
-            unsafe { f(&self.log, name.as_ptr(), name.len()) }
-        }
-    }
     fn write(&self, file: *mut c_void, s: &str) {
         if let Some(f) = self.write {
             // SAFETY: the C++ FILE* and a byte string
@@ -253,12 +239,16 @@ pub fn off_on_ok(log: &Log, name: &[u8], value: &[u8]) -> bool {
     false
 }
 
-fn hipo_prefix(host: &COptionHost) -> &'static str {
-    if host.hipo_available() {
-        "hipo\", \""
-    } else {
-        ""
-    }
+/// HiPO and HiPDLP are not in Crestline: a request for either is an error
+fn unavailable(host: &COptionHost, solver: &str, option: &str) -> bool {
+    log_user!(
+        host.log,
+        LogType::Error,
+        "The %s solver was requested via the \"%s\" option: it is not available in this build\n",
+        solver,
+        option
+    );
+    false
 }
 
 /// optionSolverOk
@@ -266,24 +256,22 @@ pub fn solver_ok(host: &COptionHost, value: &[u8]) -> bool {
     if value == CHOOSE
         || value == SIMPLEX
         || value == IPM
-        || (value == HIPO && host.hipo_available())
         || value == IPX
         || value == PDLP
         || value == QPASM
-        || value == HIPDLP
     {
         true
-    } else if value == HIPO && !host.hipo_available() {
-        host.hipo_unavailable(b"solver");
-        false
+    } else if value == HIPO {
+        unavailable(host, "HiPO", "solver")
+    } else if value == HIPDLP {
+        unavailable(host, "HiPDLP", "solver")
     } else {
         log_user!(
             host.log,
             LogType::Warning,
-            "Value \"%s\" for LP solver option (\"%s\") is not one of %s\"%s\", \"%s\", \"%s\", \"%s\" or \"%s\"\n",
+            "Value \"%s\" for LP solver option (\"%s\") is not one of \"%s\", \"%s\", \"%s\", \"%s\" or \"%s\"\n",
             &*st(value),
             "solver",
-            hipo_prefix(host),
             "choose",
             "simplex",
             "ipm",
@@ -298,20 +286,17 @@ pub fn solver_ok(host: &COptionHost, value: &[u8]) -> bool {
 
 /// optionMipLpSolverOk
 pub fn mip_lp_solver_ok(host: &COptionHost, value: &[u8]) -> bool {
-    if value == CHOOSE || value == SIMPLEX || value == IPM || (value == HIPO && host.hipo_available()) || value == IPX
-    {
+    if value == CHOOSE || value == SIMPLEX || value == IPM || value == IPX {
         true
-    } else if value == HIPO && !host.hipo_available() {
-        host.hipo_unavailable(b"mip_lp_solver");
-        false
+    } else if value == HIPO {
+        unavailable(host, "HiPO", "mip_lp_solver")
     } else {
         log_user!(
             host.log,
             LogType::Error,
-            "Value \"%s\" for MIP LP solver option (\"%s\") is not one of %s\"%s\", \"%s\", \"%s\" or \"%s\"\n",
+            "Value \"%s\" for MIP LP solver option (\"%s\") is not one of \"%s\", \"%s\", \"%s\" or \"%s\"\n",
             &*st(value),
             "mip_lp_solver",
-            hipo_prefix(host),
             "choose",
             "simplex",
             "ipm",
@@ -323,19 +308,17 @@ pub fn mip_lp_solver_ok(host: &COptionHost, value: &[u8]) -> bool {
 
 /// optionMipIpmSolverOk
 pub fn mip_ipm_solver_ok(host: &COptionHost, value: &[u8]) -> bool {
-    if value == CHOOSE || value == IPM || (value == HIPO && host.hipo_available()) || value == IPX {
+    if value == CHOOSE || value == IPM || value == IPX {
         true
-    } else if value == HIPO && !host.hipo_available() {
-        host.hipo_unavailable(b"mip_ipm_solver");
-        false
+    } else if value == HIPO {
+        unavailable(host, "HiPO", "mip_ipm_solver")
     } else {
         log_user!(
             host.log,
             LogType::Error,
-            "Value \"%s\" for MIP IPM solver (\"%s\") option is not one of %s\"%s\", \"%s\" or \"%s\"\n",
+            "Value \"%s\" for MIP IPM solver (\"%s\") option is not one of \"%s\", \"%s\" or \"%s\"\n",
             &*st(value),
             "mip_ipm_solver",
-            hipo_prefix(host),
             "choose",
             "ipm",
             "ipx"
@@ -1652,18 +1635,12 @@ mod tests {
     unsafe extern "C" fn write(_: *mut c_void, v: *const u8, len: usize) {
         OUT.with(|o| o.borrow_mut().push_str(std::str::from_utf8(bytes(v, len)).unwrap()));
     }
-    unsafe extern "C" fn no_hipo() -> bool {
-        false
-    }
-
     fn host() -> COptionHost {
         COptionHost {
             log: Log { opts: std::ptr::null(), log: Some(log_fn) },
             ctx: std::ptr::null_mut(),
             set_string: Some(set_string),
             open_log_file: None,
-            hipo_available: Some(no_hipo),
-            hipo_unavailable: None,
             write: Some(write),
         }
     }

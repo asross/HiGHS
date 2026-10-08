@@ -456,7 +456,215 @@ pub fn calculate_col_duals_quad(
     }
 }
 
+/// Where getSubVectors(Transpose) writes: the three data vectors and the
+/// sub-matrix, each optional
+#[derive(Default)]
+pub struct SubOut<'a> {
+    pub data: [Option<&'a mut [f64]>; 3],
+    pub start: Option<&'a mut [i32]>,
+    pub index: Option<&'a mut [i32]>,
+    pub value: Option<&'a mut [f64]>,
+}
+
+/// getSubVectors: the vectors of `ic` (and their part of the matrix,
+/// whose vectors are the same as the data's); returns (num_sub_vector,
+/// sub_matrix_num_nz)
+pub fn get_sub_vectors(
+    ic: &IndexCollection,
+    dim: i32,
+    data: [&[f64]; 3],
+    m_start: &[i32],
+    m_index: &[i32],
+    m_value: &[f64],
+    out: &mut SubOut,
+) -> (usize, usize) {
+    let (from_k, to_k) = ic.limits();
+    let mut s = OutIn::new();
+    let (mut n, mut nnz) = (0usize, 0usize);
+    for _ in from_k..=to_k {
+        update_out_in_index(ic, &mut s);
+        for v in s.out_from..=s.out_to {
+            let v = v as usize;
+            for (o, d) in out.data.iter_mut().zip(data) {
+                if let Some(o) = o {
+                    o[n] = d[v];
+                }
+            }
+            if let Some(o) = &mut out.start {
+                o[n] = nnz as i32 + m_start[v] - m_start[s.out_from as usize];
+            }
+            n += 1;
+        }
+        for el in m_start[s.out_from as usize] as usize..m_start[s.out_to as usize + 1] as usize {
+            if let Some(o) = &mut out.index {
+                o[nnz] = m_index[el];
+            }
+            if let Some(o) = &mut out.value {
+                o[nnz] = m_value[el];
+            }
+            nnz += 1;
+        }
+        if s.out_to == dim - 1 || s.in_to == dim - 1 {
+            break;
+        }
+    }
+    (n, nnz)
+}
+
+/// getSubVectorsTranspose: as get_sub_vectors, of the vectors that are the
+/// matrix's indices
+pub fn get_sub_vectors_transpose(
+    ic: &IndexCollection,
+    dim: i32,
+    data: [&[f64]; 3],
+    m_start: &[i32],
+    m_index: &[i32],
+    m_value: &[f64],
+    out: &mut SubOut,
+) -> (usize, usize) {
+    let (from_k, to_k) = ic.limits();
+    let mut new_index = vec![0i32; dim.max(0) as usize];
+    let mut n = 0i32;
+    if !ic.is_mask {
+        // "In" and "out" swap: the vectors to get are the "in" ones
+        let mut s = OutIn::new();
+        s.out_to = -1;
+        for k in from_k..=to_k {
+            update_out_in_index(ic, &mut s);
+            let (in_from, in_to, out_from, out_to) = (s.out_from, s.out_to, s.in_from, s.in_to);
+            if k == from_k {
+                for v in 0..in_from {
+                    new_index[v as usize] = -1;
+                }
+            }
+            for v in in_from..=in_to {
+                new_index[v as usize] = n;
+                n += 1;
+            }
+            for v in out_from..=out_to {
+                new_index[v as usize] = -1;
+            }
+            if out_to >= dim - 1 {
+                break;
+            }
+        }
+    } else {
+        for (v, x) in new_index.iter_mut().enumerate() {
+            if ic.mask[v] != 0 {
+                *x = n;
+                n += 1;
+            } else {
+                *x = -1;
+            }
+        }
+    }
+    let n = n as usize;
+    if n == 0 {
+        return (0, 0);
+    }
+    for (v, &nv) in new_index.iter().enumerate() {
+        if nv >= 0 {
+            for (o, d) in out.data.iter_mut().zip(data) {
+                if let Some(o) = o {
+                    o[nv as usize] = d[v];
+                }
+            }
+        }
+    }
+    let mut length = vec![0i32; n];
+    let num_vector = m_start.len() - 1;
+    for vector in 0..num_vector {
+        for el in m_start[vector] as usize..m_start[vector + 1] as usize {
+            let nv = new_index[m_index[el] as usize];
+            if nv >= 0 {
+                length[nv as usize] += 1;
+            }
+        }
+    }
+    let Some(start) = &mut out.start else {
+        return (n, length.iter().map(|&l| l as usize).sum());
+    };
+    start[0] = 0;
+    for v in 0..n - 1 {
+        start[v + 1] = start[v] + length[v];
+        length[v] = start[v];
+    }
+    let nnz = (start[n - 1] + length[n - 1]) as usize;
+    if out.index.is_none() && out.value.is_none() {
+        return (n, nnz);
+    }
+    length[n - 1] = start[n - 1];
+    for vector in 0..num_vector {
+        for el in m_start[vector] as usize..m_start[vector + 1] as usize {
+            let nv = new_index[m_index[el] as usize];
+            if nv >= 0 {
+                let row_el = length[nv as usize] as usize;
+                if let Some(o) = &mut out.index {
+                    o[row_el] = vector as i32;
+                }
+                if let Some(o) = &mut out.value {
+                    o[row_el] = m_value[el];
+                }
+                length[nv as usize] += 1;
+            }
+        }
+    }
+    (n, nnz)
+}
+
 // The C++ entry points (highs/lp_data/HighsLpUtilsRust.cpp)
+
+/// getSubVectors (transpose false) or getSubVectorsTranspose; the data
+/// vectors have `ic`'s dimension (null if absent), the outputs are null
+/// or as large as the C++ caller made them for what is got: sized here by
+/// a first pass that writes nothing
+///
+/// # Safety
+/// `ic` valid; data and matrix arrays valid; the non-null outputs hold
+/// num_sub_vector (data, start) or num_nz (index, value) entries
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn highs_rs_get_sub_vectors(
+    transpose: bool,
+    ic: *const CIndexCollection,
+    data_dim: i32,
+    data: *const *const f64,
+    m_start: RsMut<i32>,
+    m_index: RsMut<i32>,
+    m_value: RsMut<f64>,
+    out_data: *const *mut f64,
+    out_start: *mut i32,
+    out_index: *mut i32,
+    out_value: *mut f64,
+    num_sub_vector: *mut i32,
+    num_nz: *mut i32,
+) {
+    let ic = (*ic).view();
+    let dim = data_dim.max(0) as usize;
+    let data: [&[f64]; 3] = std::array::from_fn(|k| {
+        let p = *data.add(k);
+        if p.is_null() {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(p, dim)
+        }
+    });
+    let f = if transpose { get_sub_vectors_transpose } else { get_sub_vectors };
+    let (ms, mi, mv) = (m_start.get(), m_index.get(), m_value.get());
+    let (n, nnz) = f(&ic, data_dim, data, ms, mi, mv, &mut SubOut::default());
+    unsafe fn sl<'a, T>(p: *mut T, n: usize) -> Option<&'a mut [T]> {
+        (!p.is_null()).then(|| std::slice::from_raw_parts_mut(p, n))
+    }
+    let mut out = SubOut {
+        data: std::array::from_fn(|k| sl(*out_data.add(k), n)),
+        start: sl(out_start, n),
+        index: sl(out_index, nnz),
+        value: sl(out_value, nnz),
+    };
+    let (n, nnz) = f(&ic, data_dim, data, ms, mi, mv, &mut out);
+    *num_sub_vector = n as i32;
+    *num_nz = nnz as i32;
+}
 
 /// # Safety
 /// The arrays valid; `ic` a valid collection

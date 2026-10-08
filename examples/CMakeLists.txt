@@ -16,7 +16,8 @@ endif()
 #   endforeach()
 # endif()
 
-if(BUILD_CXX_EXAMPLE)
+# The C examples use the C API, which a HIGHS_RUST build leaves out
+if(BUILD_CXX_EXAMPLE AND NOT HIGHS_RUST)
   file(GLOB C_SRCS "*_minimal.c")
   # set(C_SRCS "call_highs_from_c_minimal.c")
   foreach(FILE_NAME IN LISTS C_SRCS)

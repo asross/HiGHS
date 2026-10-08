@@ -206,13 +206,10 @@ pub fn solve_unconstrained_lp(
 pub enum SolveOp {
     /// assessLp (highs_debug_level > min) -> status
     DebugAssess = 1,
-    /// useHipo(options, "solver", lp) -> bool
-    UseHipo,
     /// solveUnconstrainedLp -> status
     Unconstrained,
-    /// solveLpHipo / solveLpIpx / the PDLP solver of options.solver,
-    /// exceptions caught -> status
-    Hipo,
+    /// solveLpIpx / solveLpCupdlp, exceptions caught -> status (HiPO and
+    /// HiPDLP are not in Crestline)
     Ipx,
     Pdlp,
     /// solveLpSimplex -> status
@@ -320,8 +317,6 @@ impl CSolve {
         // SAFETY: the C++ strings live for the call and are not changed
         let (solver, run_crossover) = unsafe { (self.solver.get(), self.run_crossover.get()) };
         let use_only_ipm = use_ipm(solver) || self.run_centring;
-        let use_hipo = self.op(SolveOp::UseHipo, message) != 0;
-        let use_ipx = use_only_ipm && !use_hipo;
         let use_pdlp = solver == b"pdlp" || solver == b"hipdlp";
         if self.num_row == 0 || self.num_nz == 0 {
             let call_status = status_of(self.op(SolveOp::Unconstrained, message));
@@ -334,19 +329,11 @@ impl CSolve {
             }
         } else if use_only_ipm || use_pdlp {
             if use_only_ipm {
-                if use_hipo {
-                    let call_status = status_of(self.op(SolveOp::Hipo, message));
-                    if self.ab() {
-                        return Status::Error;
-                    }
-                    return_status = self.interpret(call_status, return_status, "solveLpHipo");
-                } else if use_ipx {
-                    let call_status = status_of(self.op(SolveOp::Ipx, message));
-                    if self.ab() {
-                        return Status::Error;
-                    }
-                    return_status = self.interpret(call_status, return_status, "solveLpIpx");
+                let call_status = status_of(self.op(SolveOp::Ipx, message));
+                if self.ab() {
+                    return Status::Error;
                 }
+                return_status = self.interpret(call_status, return_status, "solveLpIpx");
             } else {
                 let call_status = status_of(self.op(SolveOp::Pdlp, message));
                 if self.ab() {

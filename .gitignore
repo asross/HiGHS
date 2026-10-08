@@ -295,3 +295,5 @@ highs-problem-set
 Options.md
 
 build-latest
+# The Rust port's command-line binary (matched by [Bb]in/ above)
+!rust/src/bin/

@@ -1,6 +1,7 @@
 //! HighsRanging.cpp: getRangingData, the cost and bound ranging of an
 //! optimal basis from the (unscaled) simplex data. The FTRAN of each
-//! nonbasic column is a C++ callback (HEkk); writeRangingFile stays C++.
+//! nonbasic column is a C++ callback (HEkk). writeRangingFile is in
+//! writers.rs.
 //!
 //! clang fuses `objective + sense * x` (x a product, or a product times
 //! the dual), `xi - delta * a_in` and `objective + sense * delta * dual`;

@@ -714,6 +714,8 @@ HighsStatus getRangingData(HighsRanging& ranging,
 }
 #endif
 
+#ifndef HIGHS_RUST
+// Ported to Rust (lp_data/HighsWritersRust.cpp)
 void writeRangingFile(FILE* file, const HighsLp& lp,
                       const double objective_function_value,
                       const HighsBasis& basis, const HighsSolution& solution,
@@ -845,3 +847,4 @@ void writeRangingFile(FILE* file, const HighsLp& lp,
     }
   }
 }
+#endif

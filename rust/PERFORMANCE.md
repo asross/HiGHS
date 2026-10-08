@@ -10,6 +10,54 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-07, crest (the Rust binary) against the C++ highs app
+
+`python3 rust/bench/perf.py build/bin/highs build-static/bin/crest`
+(reps 1, M1 loaded by gcc builds part of the time): crest is the app's
+main in Rust (lp_data/app.rs) linked with libhighs.a of a static
+HIGHS_RUST build with IPO, so it runs the same Rust and C++ as the
+HIGHS_RUST app. The app port itself (main, readers, ranging file,
+getSubVectors) is outside every timed path. Every case same path.
+
+| Group | Case | C++ Gcycles | crest Gcycles | crest / C++ | Same path |
+|---|---|---|---|---|---|
+| MIP | air05 | 73.20 | 68.02 | 0.929 | yes |
+| MIP | neos17 | 17.43 | 15.34 | 0.880 | yes |
+| MIP | nu25-pr12 | 7.95 | 5.93 | 0.746 | yes |
+| MIP | neos-911970 | 20.67 | 18.86 | 0.912 | yes |
+| MIP | dispatch lambda_080458 | 31.46 | 28.40 | 0.903 | yes |
+| MIP | dispatch 3c1b60d6 root | 55.25 | 52.55 | 0.951 | yes |
+| LP dual simplex | 25fv47 | 0.68 | 0.57 | 0.837 | yes |
+| LP primal simplex | 25fv47 | 1.00 | 0.97 | 0.964 | yes |
+| LP dual simplex | 80bau3b | 0.56 | 0.43 | 0.775 | yes |
+| LP primal simplex | 80bau3b | 2.41 | 2.11 | 0.875 | yes |
+| LP dual simplex | greenbea | 2.49 | 2.06 | 0.828 | yes |
+| LP primal simplex | greenbea | 8.48 | 8.27 | 0.975 | yes |
+| LP dual simplex | perold | 0.27 | 0.23 | 0.871 | yes |
+| LP primal simplex | perold | 0.43 | 0.41 | 0.964 | yes |
+| LP dual simplex | stair | 0.10 | 0.09 | 0.881 | yes |
+| LP primal simplex | stair | 0.09 | 0.08 | 0.871 | yes |
+| LP dual simplex | air04 relaxation | 3.22 | 2.57 | 0.797 | yes |
+| LP dual simplex | rail507 relaxation | 16.85 | 11.99 | 0.711 | yes |
+| LP dual simplex | co-100 relaxation | 17.27 | 12.16 | 0.704 | yes |
+| LP dual simplex | dispatch 3c1b60d6 relaxation | 50.78 | 46.05 | 0.907 | yes |
+| IPM (IPX) | greenbea | 1.93 | 2.05 | 1.066 | yes |
+| IPM (IPX) | 80bau3b | 1.22 | 1.27 | 1.039 | yes |
+| IPM (IPX) | rail507 relaxation | 16.75 | 15.65 | 0.934 | yes |
+| IPM (IPX) | co-100 relaxation | 15.07 | 12.16 | 0.807 | yes |
+| IPM (IPX) | dispatch 3c1b60d6 relaxation | 5.45 | 5.39 | 0.990 | yes |
+| PDLP | 25fv47 | 2.56 | 2.44 | 0.953 | yes |
+| PDLP | greenbea | 7.83 | 7.37 | 0.941 | yes |
+| PDLP | stair | 0.83 | 0.78 | 0.939 | yes |
+| Read model (time_limit 0) | co-100.mps.gz | 6.64 | 2.26 | 0.340 | yes |
+| Read model (time_limit 0) | neos-5052403-cygnet.mps.gz | 7.98 | 2.50 | 0.313 | yes |
+| Read model (time_limit 0) | dispatch 3c1b60d6.mps | 0.46 | 0.19 | 0.406 | yes |
+| Read model (time_limit 0) | dispatch 3c1b60d6.lp | 0.68 | 0.32 | 0.464 | yes |
+
+Geomeans crest / C++: MIP 0.884, LP dual 0.809, LP primal 0.929, IPX
+0.963, PDLP 0.944, read 0.376; all 0.796. Also: cli_compare.sh and
+api_compare.sh identical on the gcc 14 pair (gcc_builds.sh).
+
 ## 2026-10-07, MIP setup, workers' solutions and the task scheduler in Rust
 
 setup.rs (init, presolve call, runSetup, performRestart, callbacks),

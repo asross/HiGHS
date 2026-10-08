@@ -37,8 +37,10 @@ class HEkkDual {
       : ekk_instance_(simplex), dualRow(simplex), dualRHS(simplex) {
     // sets up dualRow and dualRHS too
     initialiseInstance();
+#ifndef HIGHS_RUST  // SIP and PAMI are not in Crestline
     if (!(ekk_instance_.info_.simplex_strategy == kSimplexStrategyDualPlain))
       initialiseInstanceParallel(simplex);
+#endif
   }
 
   /**

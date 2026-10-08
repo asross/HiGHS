@@ -10,6 +10,7 @@
  */
 #include "lp_data/HighsInfoDebug.h"
 
+#ifndef HIGHS_RUST
 HighsDebugStatus debugInfo(const HighsOptions& options, const HighsLp& lp,
                            const HighsBasis& basis,
                            const HighsSolution& solution, const HighsInfo& info,
@@ -173,3 +174,15 @@ HighsDebugStatus debugNoInfo(const HighsInfo& info) {
   if (error_found) return HighsDebugStatus::kLogicalError;
   return HighsDebugStatus::kOk;
 }
+#else
+// Debugging is not in Crestline: the checks are no-ops
+HighsDebugStatus debugInfo(const HighsOptions& options, const HighsLp& lp,
+                           const HighsBasis& basis,
+                           const HighsSolution& solution, const HighsInfo& info,
+                           const HighsModelStatus model_status) {
+  return HighsDebugStatus::kNotChecked;
+}
+HighsDebugStatus debugNoInfo(const HighsInfo& info) {
+  return HighsDebugStatus::kNotChecked;
+}
+#endif
