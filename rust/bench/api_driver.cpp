@@ -888,6 +888,124 @@ static void callbacks(const std::string& instances) {
       if (std::string(line).find("time") == std::string::npos) printf("%s", line);
     }
     fclose(f);
+
+static void iisReport(Highs& h, const char* what, HighsStatus s,
+                      const HighsIis& iis) {
+  printf("%s %d model status %s iis valid %d status %d strategy %d\n", what,
+         int(s), h.modelStatusToString(h.getModelStatus()).c_str(),
+         int(iis.valid_), int(iis.status_), int(iis.strategy_));
+  ivec("col_index", iis.col_index_);
+  ivec("row_index", iis.row_index_);
+  ivec("col_bound", iis.col_bound_);
+  ivec("row_bound", iis.row_bound_);
+  ivec("col_status", iis.col_status_);
+  ivec("row_status", iis.row_status_);
+  printf("lps %d iterations %d min %d max %d\n", int(iis.info_.num_lp_solved),
+         int(iis.info_.sum_simplex_iteration_counts),
+         int(iis.info_.min_simplex_iteration_count),
+         int(iis.info_.max_simplex_iteration_count));
+  const HighsLp& lp = h.getIisLp();
+  printf("iis lp %s %d x %d nnz %d names %d %d\n", lp.model_name_.c_str(),
+         int(lp.num_row_), int(lp.num_col_), int(lp.a_matrix_.numNz()),
+         int(lp.col_names_.size()), int(lp.row_names_.size()));
+  fflush(stdout);
+}
+
+static int g_log_calls[16];
+static void countCallback(int type, const std::string&,
+                          const HighsCallbackOutput*, HighsCallbackInput*,
+                          void*) {
+  if (type >= 0 && type < 16) g_log_calls[type]++;
+}
+
+static void iisCases(const std::string& instances) {
+  const char* models[] = {"galenet", "woodinfe", "forest6", "klein1",
+                          "ex72a",   "avgas",    "infeasible-mip0",
+                          "infeasible-mip1", "refinery"};
+  const int strategies[] = {0, 1, 2, 4, 6, 10, 12, 18, 22, 30};
+  for (const char* m : models) {
+    for (int strategy : strategies) {
+      for (int solve_first = 0; solve_first < 2; solve_first++) {
+        printf("\n######## iis %s strategy %d solve first %d\n", m, strategy,
+               solve_first);
+        Highs* h = fresh();
+        h->setOptionValue("output_flag", strategy == 6 && solve_first);
+        h->readModel(instances + "/" + m + ".mps");
+        h->setOptionValue("iis_strategy", strategy);
+        if (solve_first) report(*h, "run", h->run());
+        HighsIis iis;
+        HighsStatus s = h->getIis(iis);
+        iisReport(*h, "getIis", s, iis);
+        // Again: the IIS is kept
+        s = h->getIis(iis);
+        iisReport(*h, "getIis again", s, iis);
+        std::string file = std::string("iis_") + m + "_" +
+                           std::to_string(strategy) + "_" +
+                           std::to_string(solve_first) + ".lp";
+        printf("writeIisModel %d\n", int(h->writeIisModel(file)));
+        delete h;
+      }
+    }
+  }
+  // Time limit, callbacks, logging to the console
+  for (const char* m : {"forest6", "avgas", "woodinfe"}) {
+    printf("\n######## iis %s time limit 0\n", m);
+    Highs* h = fresh();
+    h->setOptionValue("output_flag", false);
+    h->readModel(instances + "/" + m + ".mps");
+    h->setOptionValue("iis_time_limit", 0.0);
+    h->setOptionValue("iis_strategy", 6);
+    HighsIis iis;
+    HighsStatus s = h->getIis(iis);
+    iisReport(*h, "getIis", s, iis);
+    delete h;
+  }
+  {
+    printf("\n######## iis callback\n");
+    Highs* h = fresh();
+    h->setOptionValue("log_to_console", false);
+    h->readModel(instances + "/galenet.mps");
+    h->setOptionValue("iis_strategy", 6);
+    h->setCallback(countCallback, nullptr);
+    h->startCallback(kCallbackLogging);
+    h->startCallback(kCallbackMipImprovingSolution);
+    HighsIis iis;
+    HighsStatus s = h->getIis(iis);
+    iisReport(*h, "getIis", s, iis);
+    for (int i = 0; i < 10; i++) printf(" %d", g_log_calls[i]);
+    printf("\n");
+    delete h;
+  }
+  // Feasibility relaxation
+  for (const char* m : {"galenet", "woodinfe", "avgas", "infeasible-mip0",
+                        "klein1"}) {
+    for (int k = 0; k < 4; k++) {
+      printf("\n######## feasibilityRelaxation %s %d\n", m, k);
+      Highs* h = fresh();
+      h->setOptionValue("output_flag", k == 1);
+      h->readModel(instances + "/" + m + ".mps");
+      if (k == 3) h->setOptionValue("iis_strategy", 16);
+      const HighsLp& lp = h->getLp();
+      std::vector<double> lo(lp.num_col_), up(lp.num_col_), rhs(lp.num_row_);
+      for (HighsInt i = 0; i < lp.num_col_; i++) {
+        lo[i] = i % 3 == 0 ? -1 : 1 + i % 2;
+        up[i] = i % 4 == 0 ? -1 : 2;
+      }
+      for (HighsInt i = 0; i < lp.num_row_; i++) rhs[i] = i % 5 == 0 ? -1 : i % 3;
+      HighsStatus s =
+          k == 0   ? h->feasibilityRelaxation(1, 1, 1)
+          : k == 1 ? h->feasibilityRelaxation(-1, 1, 1)
+          : k == 2 ? h->feasibilityRelaxation(1, 1, 0, lo.data(), up.data(),
+                                              rhs.data())
+                   : h->feasibilityRelaxation(1, -1, 1, nullptr, nullptr,
+                                              rhs.data());
+      report(*h, "feasibilityRelaxation", s);
+      printf("objective %.17g\n", h->getInfo().objective_function_value);
+      HighsIis iis;
+      s = h->getIis(iis);
+      iisReport(*h, "getIis after", s, iis);
+      delete h;
+    }
   }
 }
 
@@ -932,5 +1050,6 @@ int main(int argc, char** argv) {
   standardForm(instances);
   drivers(instances);
   modelPassing(instances);
+  iisCases(instances);
   return 0;
 }

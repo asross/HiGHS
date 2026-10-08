@@ -11,6 +11,7 @@ pub mod drivers;
 pub mod basis;
 pub mod edit;
 pub mod hessian;
+pub mod iis;
 pub mod info;
 pub mod lp_utils;
 pub mod model;

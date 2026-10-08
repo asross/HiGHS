@@ -29,6 +29,8 @@ void HighsIis::clear() {
   this->info_.clear();
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsIisRust.cpp, rust/src/lp_data/iis.rs)
 void HighsIis::clearLogInfo() {
   this->info_.iis_last_disptime = -kHighsInf;
   this->info_.iis_num_disp_lines = 0;
@@ -1288,3 +1290,4 @@ bool HighsIis::lpOk(const HighsOptions& options) const {
   }
   return lpOkReturn(true);
 }
+#endif

@@ -2020,6 +2020,8 @@ HighsStatus Highs::getRangingInterface() {
   return getRangingData(this->ranging_, solver_object);
 }
 
+#ifndef HIGHS_RUST
+// Ported to Rust (HighsIisRust.cpp, rust/src/lp_data/iis.rs)
 HighsStatus Highs::getIisInterfaceReturn(
     const HighsStatus return_status, const HighsOptions& original_options,
     const std::vector<bool>& original_callback_active) {
@@ -3027,6 +3029,8 @@ HighsStatus Highs::elasticityFilter(const double global_lower_penalty,
       original_num_col, original_num_row, original_col_cost, original_col_lower,
       original_col_upper, original_integrality);
 }
+
+#endif
 
 HighsStatus Highs::extractIis(HighsInt& num_iis_col, HighsInt& num_iis_row,
                               HighsInt* iis_col_index, HighsInt* iis_row_index,

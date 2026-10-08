@@ -709,12 +709,28 @@ the counts, then slices the outputs to them (api_driver.cpp's getColsRows
 covers intervals, sets, masks, column- and row-wise matrices and absent
 outputs).
 
+The IIS is Rust (iis.rs, glue in HighsIisRust.cpp): getIisInterface
+with its return (the trivial and row value bound checks, the resolve, the
+elasticity filter, the deletion filter of HighsIis::compute on the LP of
+the infeasible rows, setLp, setStatus and the checks indexStatusOk,
+lpDataOk and lpOk with their solves) and elasticityFilter, which is also
+Highs::feasibilityRelaxation. Rust holds the HighsIis data for the whole
+call (loaded at its start, stored at its end), so C++'s copies and
+restores of `iis_` around the model edits that clear it are not needed;
+the IIS LP with its names is built by C++ from Rust's arrays and kept
+aside until the end. Each step on a `Highs` object (the incumbent, or one
+the IIS search creates for its LP solves) is one `Op`: options, callbacks,
+passModel, solves, bound and cost changes, adding and deleting the
+elastic columns and rows, the elastic solution's KKT failures. clang
+fuses the row activity bounds of rowValueBounds. Left out: the developer
+reports (kIisDevReport) and the dead sensitivity filter and dual ray
+options. getIis, writeIisModel and extractIis stay thin C++ wrappers.
+
 Still C++ in lp_data: Highs.cpp and HighsInterface.cpp outside the above
 (run()'s file handling, which is only calls of other Highs methods; the
 model passing; getStandardFormLp; completeSolutionFromDiscreteAssignment;
 callSolveMip's post-processing; getDualRay / getPrimalRay's re-solves;
-setBasis on an alien basis; the IIS and ill-conditioning solves),
-HighsIis.cpp, LP reporting (reportLp, reportMatrix; a draft port exists
+setBasis on an alien basis; the ill-conditioning solves), LP reporting (reportLp, reportMatrix; a draft port exists
 only as notes), the IPX glue (ipm/IpxWrapper.cpp) and callCrossover
 (presolve/ICrashX.cpp). The writers and readers (writers.rs, readers.rs,
 io/model_write.rs), options, info and command-line parsing (options.rs,
@@ -760,7 +776,7 @@ C++ simplex fallback (the product form update), the IPX and QP glue, the
 IIS and the utilities. highspy stays a C++ wrapper of `Highs`.
 
 Comparisons: `rust/bench/cli_compare.sh build build-rust build-static`
-runs the C++ app, the HIGHS_RUST app and crest on 131 command lines
+runs the C++ app, the HIGHS_RUST app and crest on 137 command lines
 (solution, basis, sparse and MIPLIB-style files to read are written first
 by the C++ app). Five use what the HIGHS_RUST build leaves out (--solver
 hipo, a HiPO options file, the dev.set of highs_debug_level = 1) and are
