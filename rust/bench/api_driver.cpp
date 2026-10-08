@@ -888,6 +888,9 @@ static void callbacks(const std::string& instances) {
       if (std::string(line).find("time") == std::string::npos) printf("%s", line);
     }
     fclose(f);
+  }
+}
+
 
 static void iisReport(Highs& h, const char* what, HighsStatus s,
                       const HighsIis& iis) {
@@ -1007,6 +1010,8 @@ static void iisCases(const std::string& instances) {
       delete h;
     }
   }
+}
+
 // QPs through the API (passModel with a Hessian, passHessian, hot start)
 // and the ill-conditioning analysis of an optimal basis
 static void qpAndIllConditioning(const std::string& instances) {

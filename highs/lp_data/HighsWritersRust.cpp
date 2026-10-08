@@ -27,17 +27,17 @@
 namespace {
 
 // A string as "%s" prints it
-struct RsStr {
+struct RsWStr {
   const char* ptr;
   size_t len;
 };
 
-RsStr rsStr(const std::string& s) { return {s.c_str(), strlen(s.c_str())}; }
+RsWStr rsWStr(const std::string& s) { return {s.c_str(), strlen(s.c_str())}; }
 
-std::vector<RsStr> rsStrs(const std::vector<std::string>& names) {
-  std::vector<RsStr> v;
+std::vector<RsWStr> rsWStrs(const std::vector<std::string>& names) {
+  std::vector<RsWStr> v;
   v.reserve(names.size());
-  for (const std::string& s : names) v.push_back(rsStr(s));
+  for (const std::string& s : names) v.push_back(rsWStr(s));
   return v;
 }
 
@@ -84,19 +84,19 @@ struct RsWriteModel {
   HighsInt q_dim;
   RsMut<HighsInt> q_start, q_index;
   RsMut<double> q_value;
-  RsMut<RsStr> col_names, row_names;
-  RsStr model_name, objective_name;
+  RsMut<RsWStr> col_names, row_names;
+  RsWStr model_name, objective_name;
   HighsInt cost_row_location;
 };
 
 // The names stay alive with the view
 struct WriteModel {
-  std::vector<RsStr> col_names, row_names;
+  std::vector<RsWStr> col_names, row_names;
   RsWriteModel v;
   // Without a, the matrix is not passed
   WriteModel(const HighsLp& lp, const HighsHessian* hessian,
              const HighsSparseMatrix* a, const std::string& objective_name)
-      : col_names(rsStrs(lp.col_names_)), row_names(rsStrs(lp.row_names_)) {
+      : col_names(rsWStrs(lp.col_names_)), row_names(rsWStrs(lp.row_names_)) {
     v.num_col = lp.num_col_;
     v.num_row = lp.num_row_;
     v.col_cost = rsMut(lp.col_cost_);
@@ -116,8 +116,8 @@ struct WriteModel {
     v.q_value = hessian ? rsMut(hessian->value_) : RsMut<double>{nullptr, 0};
     v.col_names = {col_names.data(), col_names.size()};
     v.row_names = {row_names.data(), row_names.size()};
-    v.model_name = rsStr(lp.model_name_);
-    v.objective_name = rsStr(objective_name);
+    v.model_name = rsWStr(lp.model_name_);
+    v.objective_name = rsWStr(objective_name);
     v.cost_row_location = lp.cost_row_location_;
   }
 };
@@ -127,7 +127,7 @@ struct RsSolutionFile {
   HighsInt style;
   const HighsInfoStruct* info;
   int model_status;
-  RsStr model_status_string;
+  RsWStr model_status_string;
   double objective;
   HighsInt num_nz;
   HighsInt glpsol_cost_row_location;
@@ -150,10 +150,10 @@ void highs_rs_write_glpsol_kkt(const RsOut* out,
                                HighsInt num_col, bool is_mip, bool have_dual);
 void highs_rs_write_model_bound_solution(
     const RsOut* out, bool columns, RsMut<double> lower, RsMut<double> upper,
-    RsMut<RsStr> names, const RsMut<double>* primal, const RsMut<double>* dual,
+    RsMut<RsWStr> names, const RsMut<double>* primal, const RsMut<double>* dual,
     const RsMut<uint8_t>* status, const RsMut<uint8_t>* integrality);
 void highs_rs_write_primal_solution(const RsOut* out, HighsInt num_col,
-                                    RsMut<RsStr> col_names,
+                                    RsMut<RsWStr> col_names,
                                     RsMut<double> primal, bool sparse);
 void highs_rs_write_objective_value(const RsOut* out, double v);
 void highs_rs_write_basis_file(const RsOut* out, const RsWriteModel* model,
@@ -225,7 +225,7 @@ static bool rsWriteSolution(FILE* file, const HighsLogOptions& log_options,
   const RsSolutionFile s = {style,
                             &info,
                             int(model_status),
-                            rsStr(status_string),
+                            rsWStr(status_string),
                             objective,
                             lp.a_matrix_.numNz(),
                             glpsol_cost_row_location};
@@ -289,7 +289,7 @@ void writeModelBoundSolution(
     const bool have_basis, const std::vector<HighsBasisStatus>& status,
     const HighsVarType* integrality) {
   assert(names.size() == static_cast<size_t>(dim));
-  std::vector<RsStr> rs_names = rsStrs(names);
+  std::vector<RsWStr> rs_names = rsWStrs(names);
   const RsMut<double> p = rsMut(primal), d = rsMut(dual);
   const RsMut<uint8_t> s = rsMut(status);
   const RsMut<uint8_t> t = {
@@ -315,7 +315,7 @@ void writePrimalSolution(FILE* file, const HighsLogOptions& log_options,
                          const bool sparse) {
   if (lp.col_names_.size() > 0)
     assert(lp.col_names_.size() == static_cast<size_t>(lp.num_col_));
-  std::vector<RsStr> names = rsStrs(lp.col_names_);
+  std::vector<RsWStr> names = rsWStrs(lp.col_names_);
   const RsOut out = rsOut(file, log_options);
   highs_rs_write_primal_solution(&out, lp.num_col_,
                                  {names.data(), names.size()},
@@ -372,7 +372,7 @@ HighsStatus writeMps(
     return HighsStatus::kError;
   }
   assert(objective_name != "");
-  std::vector<RsStr> cols = rsStrs(col_names), rows = rsStrs(row_names);
+  std::vector<RsWStr> cols = rsWStrs(col_names), rows = rsWStrs(row_names);
   RsWriteModel v;
   v.num_col = num_col;
   v.num_row = num_row;
@@ -393,8 +393,8 @@ HighsStatus writeMps(
   v.q_value = rsMut(q_value);
   v.col_names = {cols.data(), cols.size()};
   v.row_names = {rows.data(), rows.size()};
-  v.model_name = rsStr(model_name);
-  v.objective_name = rsStr(objective_name);
+  v.model_name = rsWStr(model_name);
+  v.objective_name = rsWStr(objective_name);
   v.cost_row_location = -1;
   const RsOut out = rsOut(file, log_options, false);
   highs_rs_write_mps(&out, &v);
