@@ -86,6 +86,39 @@ pub struct SubMipResult {
     pub has_solution: bool,
 }
 
+/// A sub-MIP to build and run (CMipFns::sub_mip): its bounds, start and
+/// the options that differ from the caller's
+#[repr(C)]
+pub struct SubMipSpec {
+    /// HighsLpRelaxation whose LP and basis are used, or null for the
+    /// model and the first root basis
+    pub lp: P,
+    pub col_lower: *const f64,
+    pub col_upper: *const f64,
+    /// num_col values and their num_row row activities, or null
+    pub start_cols: *const f64,
+    pub start_rows: *const f64,
+    pub num_start_rows: i32,
+    pub mip_max_leaves: i32,
+    pub mip_max_nodes: i32,
+    pub mip_max_stall_nodes: i32,
+    pub mip_pscost_minreliable: i32,
+    pub time_limit: f64,
+    pub objective_bound: f64,
+    /// both NaN to keep the caller's
+    pub mip_rel_gap: f64,
+    pub mip_abs_gap: f64,
+    pub mip_heuristic_effort: f64,
+    /// RINS, RENS and root reduced cost (bits 0-2), or -1 to keep the
+    /// caller's
+    pub heur_flags: i32,
+    pub presolve: bool,
+    pub output_flag: bool,
+    pub mip_detect_symmetry: bool,
+    /// the sub-MIP's lns_target_reached_
+    pub lns_target: *const super::concurrent::Pool,
+}
+
 /// The C++ operations, implemented in highs/mip/HighsMipRust.cpp
 #[repr(C)]
 pub struct CMipFns {
@@ -146,35 +179,15 @@ pub struct CMipFns {
     pub num_workers: unsafe extern "C" fn(P) -> i32,
     /// fills the worker's view
     pub worker_view: unsafe extern "C" fn(P, *mut WorkerData),
-    /// solveSubMip's run: the HighsMipSolver of the sub-MIP. `lp` is a
-    /// HighsLpRelaxation whose LP and basis are used, or null for the model
-    /// and the first root basis; `start` (num_col values) or null; abs_gap
-    /// NaN to keep the caller's gaps. The solution goes to `sol`.
-    pub sub_mip: unsafe extern "C" fn(
-        P,
-        P,
-        P,
-        *const f64,
-        *const f64,
-        i32,
-        i32,
-        i32,
-        *const f64,
-        f64,
-        f64,
-        *mut SubMipResult,
-        *mut f64,
-    ),
+    /// solveSubMip's run: the HighsMipSolver of the sub-MIP of the spec,
+    /// for the worker; the solution goes to `sol`
+    pub sub_mip: unsafe extern "C" fn(P, P, *const SubMipSpec, *mut SubMipResult, *mut f64),
     /// a scalar operation on the solver (mip_data.rs, mod op)
     pub op: unsafe extern "C" fn(P, i32, P, i64, f64) -> f64,
     /// the scratch solution of transformNewIntegerFeasibleSolution:
     /// col_value = sol (if not null), primal postsolve and row values; its
     /// vectors to the view
     pub scratch_solution: unsafe extern "C" fn(P, *const f64, i32, *mut ScratchView),
-    /// HighsMipSolverData vector `which` (mip_data::vec) = data
-    pub set_vec: unsafe extern "C" fn(P, i32, *const std::ffi::c_void, i32),
-    /// HighsMipSolverData's integer vector `which` (data, length)
-    pub int_vec: unsafe extern "C" fn(P, i32, *mut i32) -> *const i32,
     /// refills a MipData (after the model changed)
     pub refill: unsafe extern "C" fn(P, *mut MipData),
     /// the master worker (workers[0])
@@ -187,8 +200,14 @@ pub struct CMipFns {
     /// the model name (data, length) and max_submip_level
     pub model_name: unsafe extern "C" fn(P, *mut i32) -> *const u8,
     pub max_submip_level: unsafe extern "C" fn(P) -> i32,
-    pub sync_concurrent_lns: unsafe extern "C" fn(P),
-    pub crossover_with_main: unsafe extern "C" fn(P, P),
+    /// the concurrent helper's options, model and root basis (with the
+    /// time left) for helper_run
+    pub helper_new: unsafe extern "C" fn(P, f64) -> P,
+    /// runs the helper's HighsMipSolver on the data of helper_new (which
+    /// it frees) with the pool (concurrent.rs) in its own thread
+    pub helper_run: unsafe extern "C" fn(P, *const c_void),
+    /// getCutPool().addCut of a helper's root cut
+    pub add_root_cut: unsafe extern "C" fn(P, *const i32, *const f64, i32, f64, bool),
     /// the data and size of the solver's vector `which` (setup::vptr), or
     /// null
     pub vec_ptr: unsafe extern "C" fn(P, i32, *mut i32) -> *const c_void,
@@ -201,13 +220,14 @@ pub struct CMipFns {
     pub callback: unsafe extern "C" fn(P, i32, *const super::setup::CallbackOut, *const u8, i32) -> bool,
     /// the solver's worker k
     pub worker: unsafe extern "C" fn(P, i32) -> P,
-    /// the worker's buffered solution j (false if none)
-    pub worker_solution: unsafe extern "C" fn(P, i32, *mut super::workers::WorkerSol) -> bool,
-    /// a solution buffered by the worker
-    pub worker_push_solution: unsafe extern "C" fn(P, *const f64, i32, f64, i32),
     /// the worker's scratch solution: col_value = sol, primal postsolve
     /// (thread safe) and row values; its vectors to the view
     pub worker_scratch: unsafe extern "C" fn(P, P, *const f64, i32, *mut ScratchView),
+    /// the repair LP: the original model with these column bounds and no
+    /// integers, simplex with the time limit, primal feasibility tolerance
+    /// and presolve (choose, or off); the iterations to the last argument;
+    /// if primal feasible, its solution becomes the scratch solution
+    pub repair_lp: unsafe extern "C" fn(P, *const f64, *const f64, f64, f64, bool, *mut i64) -> bool,
 }
 
 static FNS: AtomicPtr<CMipFns> = AtomicPtr::new(std::ptr::null_mut());
@@ -294,6 +314,8 @@ pub struct MipScalars {
     pub lns_quick_improved: bool,
     pub crossover_start_logged: bool,
     pub root_cuts_imported: bool,
+    /// the main solver's concurrent helper (concurrent.rs), or null
+    pub concurrent_lns: *mut super::concurrent::Main,
 }
 
 /// The options the solver reads (a copy per call)
@@ -330,6 +352,7 @@ pub struct MipOptions {
     pub presolve_reduction_limit: i32,
     pub mip_detect_symmetry: bool,
     pub mip_improving_solution_save: bool,
+    pub mip_concurrent_crossover: bool,
 }
 
 /// The original model (for solutions in the original space)
@@ -408,6 +431,14 @@ pub struct MipData {
     pub solution: SolutionPtrs,
     pub orig: OrigModel,
     pub opts: MipOptions,
+    /// in a concurrent helper: the pool shared with its main solver
+    pub helper_pool: *const super::concurrent::Pool,
+    /// in a sub-MIP: the pool whose target reached ends the solve
+    pub lns_target: *const super::concurrent::Pool,
+    /// the solver's heuristics
+    pub heur: *const super::primal::Heur,
+    /// HighsMipSolverData's vectors
+    pub vecs: *mut super::mip_data::MipVecs,
 }
 
 macro_rules! vecs {
@@ -466,16 +497,11 @@ impl MipData {
         // SAFETY: as clique
         unsafe { &*self.redcost }
     }
-    pub fn sync_concurrent_lns(&self) {
-        c!(sync_concurrent_lns, self.mipsolver)
-    }
-    pub fn crossover_with_main(&self, w: &Worker) {
-        c!(crossover_with_main, self.mipsolver, w.p)
-    }
 }
 
 /// HighsMipWorker::HeurStatistics (same layout)
 #[repr(C)]
+#[derive(Default)]
 pub struct HeurStats {
     pub total_repair_lp: i64,
     pub total_repair_lp_feasible: i64,
@@ -499,6 +525,7 @@ pub struct WorkerData {
     pub lp: P,
     pub upper_bound: *mut f64,
     pub optimality_limit: *mut f64,
+    pub state: *mut super::workers::WorkerState,
 }
 
 /// A HighsMipWorker
@@ -517,6 +544,7 @@ impl Worker {
             lp: std::ptr::null_mut(),
             upper_bound: std::ptr::null_mut(),
             optimality_limit: std::ptr::null_mut(),
+            state: std::ptr::null_mut(),
         };
         c!(worker_view, p, &mut d);
         Worker { p, d }
@@ -524,6 +552,13 @@ impl Worker {
     pub fn upper_limit(&self) -> f64 {
         // SAFETY: the worker's field
         unsafe { *self.d.upper_limit }
+    }
+    /// The worker's state
+    #[allow(clippy::mut_from_ref)]
+    pub fn state(&self) -> &mut super::workers::WorkerState {
+        // SAFETY: the worker's Rust-owned state, used by its own thread;
+        // no other reference is live across a use
+        unsafe { &mut *self.d.state }
     }
     #[allow(clippy::mut_from_ref)]
     pub fn heur(&self) -> &mut HeurStats {
@@ -816,7 +851,9 @@ pub fn try_solution(m: &MipData, w: &Worker, sol: &[f64], source: i32) -> bool {
     m.try_solution_any(w, sol, source)
 }
 
-/// The sub-MIP run of solveSubMip (see CMipFns::sub_mip)
+/// The sub-MIP run of solveSubMip (see CMipFns::sub_mip): the options
+/// that differ from the caller's and the start's row activities; abs_gap
+/// NaN to keep the caller's gaps
 #[allow(clippy::too_many_arguments)]
 pub fn sub_mip(
     m: &MipData,
@@ -832,23 +869,45 @@ pub fn sub_mip(
     abs_gap: f64,
     sol: &mut [f64],
 ) -> SubMipResult {
+    // the start's row activities (calculateRowValuesQuad, which needs a
+    // column-wise model)
+    let mut rows = Vec::new();
+    if let (Some(start), true) = (start, m.colwise) {
+        rows = vec![0.0; m.num_row as usize];
+        crate::lp_data::edit::calculate_row_values_quad(m.a_start(), m.a_index(), m.a_value(), start, &mut rows);
+    }
+    let time_limit = m.opts.time_limit - m.timer_read();
+    let spec = SubMipSpec {
+        lp: lp.map_or(std::ptr::null_mut(), |l| l.p),
+        col_lower: lo.as_ptr(),
+        col_upper: up.as_ptr(),
+        start_cols: start.map_or(std::ptr::null(), |s| s.as_ptr()),
+        start_rows: rows.as_ptr(),
+        num_start_rows: rows.len() as i32,
+        mip_max_leaves: maxleaves,
+        mip_max_nodes: maxnodes,
+        mip_max_stall_nodes: stallnodes,
+        mip_pscost_minreliable: 0,
+        // std::min
+        time_limit: if time_cap < time_limit { time_cap } else { time_limit },
+        objective_bound: w.upper_limit(),
+        mip_rel_gap: if abs_gap.is_nan() { f64::NAN } else { 0.0 },
+        mip_abs_gap: abs_gap,
+        mip_heuristic_effort: 0.8,
+        // a concurrent helper runs without the heuristics that solve
+        // sub-MIPs; its crossover sub-MIP gets the main solver's settings
+        heur_flags: match (start, m.helper_lns()) {
+            (Some(_), Some(p)) => p.run_rins as i32 | (p.run_rens as i32) << 1 | (p.run_root_reduced_cost as i32) << 2,
+            _ => -1,
+        },
+        // with only root presolve allowed, none in the sub-MIP
+        presolve: !m.root_presolve_only,
+        output_flag: false,
+        mip_detect_symmetry: false,
+        lns_target: m.sub_mip_lns_target(),
+    };
     let mut r = SubMipResult::default();
-    c!(
-        sub_mip,
-        m.mipsolver,
-        w.p,
-        lp.map_or(std::ptr::null_mut(), |l| l.p),
-        lo.as_ptr(),
-        up.as_ptr(),
-        maxleaves,
-        maxnodes,
-        stallnodes,
-        start.map_or(std::ptr::null(), |s| s.as_ptr()),
-        time_cap,
-        abs_gap,
-        &mut r,
-        sol.as_mut_ptr()
-    );
+    c!(sub_mip, m.mipsolver, w.p, &spec, &mut r, sol.as_mut_ptr());
     r
 }
 
@@ -900,27 +959,32 @@ pub fn fresh(m: &MipData) -> MipData {
     }
 }
 
-/// Sets HighsMipSolverData's double vector `which`
-pub fn set_vec(m: &MipData, which: i32, v: &[f64]) {
-    c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
+/// The solver's vectors
+#[allow(clippy::mut_from_ref)]
+fn vecs(m: &MipData) -> &mut super::mip_data::MipVecs {
+    // SAFETY: the solver's MipVecs; no reference to a vector is held
+    // across a set
+    unsafe { &mut *m.vecs }
 }
 
-/// Sets HighsMipSolverData's byte vector `which`
-pub fn set_bytes(m: &MipData, which: i32, v: &[u8]) {
-    c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
+/// Sets HighsMipSolverData's double vector `which`
+pub fn set_vec(m: &MipData, which: i32, v: &[f64]) {
+    vecs(m).set_f64(which, v)
+}
+
+/// Sets HighsMipSolverData's byte vector `which` (rowintegral)
+pub fn set_bytes(m: &MipData, _which: i32, v: &[u8]) {
+    vecs(m).set_u8(v)
 }
 
 /// Sets HighsMipSolverData's integer vector `which`
 pub fn set_int_vec(m: &MipData, which: i32, v: &[i32]) {
-    c!(set_vec, m.mipsolver, which, v.as_ptr() as *const std::ffi::c_void, v.len() as i32)
+    vecs(m).set_i32(which, v)
 }
 
 /// HighsMipSolverData's integer vector `which`
 pub fn int_vec(m: &MipData, which: i32) -> &[i32] {
-    let mut n = 0;
-    let p = c!(int_vec, m.mipsolver, which, &mut n);
-    // SAFETY: the C++ vector, unchanged while the slice is used
-    unsafe { crate::ffi::sl(p, n) }
+    vecs(m).int(which).as_slice()
 }
 
 #[cfg(test)]
@@ -930,10 +994,39 @@ mod tests {
     #[test]
     fn layouts() {
         // HighsMipScalars (static_assert in HighsPrimalHeuristics.cpp)
-        assert_eq!(std::mem::size_of::<MipScalars>(), 368);
+        assert_eq!(std::mem::size_of::<MipScalars>(), 376);
         assert_eq!(std::mem::offset_of!(MipScalars, pdi), 320);
         assert_eq!(std::mem::size_of::<HeurStats>(), 72);
+        // HighsMipWorker::RsState (static_assert in HighsMipWorker.cpp)
+        use super::super::workers::WorkerState;
+        assert_eq!(std::mem::offset_of!(WorkerState, heur), 24);
+        assert_eq!(std::mem::offset_of!(WorkerState, randgen), 112);
+        assert_eq!(std::mem::offset_of!(WorkerState, heuristics_allowed), 120);
     }
+}
+
+/// The concurrent helper's data (CMipFns::helper_new)
+pub fn fns_call_helper_new(m: &MipData, time_left: f64) -> P {
+    c!(helper_new, m.mipsolver, time_left)
+}
+
+/// A helper's root cut into the cut pool (CMipFns::add_root_cut)
+pub fn add_root_cut(m: &MipData, index: &[i32], value: &[f64], rhs: f64, integral: bool) {
+    c!(add_root_cut, m.mipsolver, index.as_ptr(), value.as_ptr(), index.len() as i32, rhs, integral)
+}
+
+/// The repair LP (see CMipFns::repair_lp)
+#[allow(clippy::too_many_arguments)]
+pub fn repair_lp(
+    m: &MipData,
+    lower: &[f64],
+    upper: &[f64],
+    time_limit: f64,
+    feasibility_tolerance: f64,
+    presolve: bool,
+    iterations: &mut i64,
+) -> bool {
+    c!(repair_lp, m.mipsolver, lower.as_ptr(), upper.as_ptr(), time_limit, feasibility_tolerance, presolve, iterations)
 }
 
 /// The master worker

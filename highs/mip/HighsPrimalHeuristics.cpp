@@ -43,7 +43,7 @@ namespace mipglue {
 static_assert(sizeof(MipHeurStats) == HighsMipWorker::kHeurStatsSize,
               "HighsMipWorker::HeurStatistics layout");
 static_assert(sizeof(HighsModelStatus) == sizeof(int), "model status is int");
-static_assert(sizeof(HighsMipScalars) == 368, "HighsMipScalars layout");
+static_assert(sizeof(HighsMipScalars) == 376, "HighsMipScalars layout");
 static_assert(offsetof(HighsMipScalars, primal_dual_integral) == 320,
               "HighsMipScalars layout");
 
@@ -216,79 +216,60 @@ static void workerView(void* w, MipWorkerData* d) {
   d->lp = &worker.getLpRelaxation();
   d->upper_bound = &worker.upper_bound;
   d->optimality_limit = &worker.optimality_limit;
+  d->state = worker.rustState();
 }
 
-// HighsPrimalHeuristics::solveSubMip's run of the sub-MIP
-static void subMip(void* m, void* w, void* lp, const double* lo,
-                   const double* up, HighsInt maxleaves, HighsInt maxnodes,
-                   HighsInt stallnodes, const double* start, double timeCap,
-                   double absGap, MipSubMipResult* r, double* sol) {
+// HighsPrimalHeuristics::solveSubMip's run of the sub-MIP: the shell of
+// rust/src/mip/glue.rs sub_mip, which decides the options and the start
+static void subMip(void* m, void* w, const MipSubMipSpec* spec,
+                   MipSubMipResult* r, double* sol) {
   const HighsMipSolver& mipsolver = mip(m);
   HighsMipWorker& worker = wk(w);
-  const HighsLp& lpModel = lp ? lpr(lp).getLp() : *mipsolver.model_;
-  const HighsBasis& basis = lp ? lpr(lp).getLpSolver().getBasis()
-                               : mipsolver.mipdata_->firstrootbasis;
+  const HighsLp& lpModel =
+      spec->lp ? lpr(spec->lp).getLp() : *mipsolver.model_;
+  const HighsBasis& basis = spec->lp ? lpr(spec->lp).getLpSolver().getBasis()
+                                     : mipsolver.mipdata_->firstrootbasis;
   HighsOptions submipoptions = *mipsolver.options_mip_;
   HighsLp submip = lpModel;
 
-  // set bounds and restore integrality of the lp relaxation copy
-  submip.col_lower_.assign(lo, lo + lpModel.num_col_);
-  submip.col_upper_.assign(up, up + lpModel.num_col_);
+  // the bounds, and the integrality of the model (not of an LP relaxation)
+  submip.col_lower_.assign(spec->col_lower,
+                           spec->col_lower + lpModel.num_col_);
+  submip.col_upper_.assign(spec->col_upper,
+                           spec->col_upper + lpModel.num_col_);
   submip.integrality_ = mipsolver.model_->integrality_;
   submip.offset_ = 0;
 
-  // set limits
-  submipoptions.mip_max_leaves = maxleaves;
-  submipoptions.output_flag = false;
-
-  const bool allow_submip_log = true;
-  if (allow_submip_log && lpModel.num_col_ == -54 &&
-      lpModel.num_row_ == -172) {
-    submipoptions.output_flag = true;
-    if (mipsolver.profiling_->sub_solver_)
-      printf(
-          "HighsPrimalHeuristics::solveSubMip (%d, %d) with output_flag = %s\n",
-          int(lpModel.num_col_), int(lpModel.num_row_),
-          highsBoolToString(submipoptions.output_flag).c_str());
+  submipoptions.mip_max_leaves = spec->mip_max_leaves;
+  submipoptions.output_flag = spec->output_flag;
+  submipoptions.mip_max_nodes = spec->mip_max_nodes;
+  submipoptions.mip_max_stall_nodes = spec->mip_max_stall_nodes;
+  submipoptions.mip_pscost_minreliable = spec->mip_pscost_minreliable;
+  submipoptions.time_limit = spec->time_limit;
+  submipoptions.objective_bound = spec->objective_bound;
+  if (!std::isnan(spec->mip_abs_gap)) {
+    submipoptions.mip_rel_gap = spec->mip_rel_gap;
+    submipoptions.mip_abs_gap = spec->mip_abs_gap;
   }
-
-  submipoptions.mip_max_nodes = maxnodes;
-  submipoptions.mip_max_stall_nodes = stallnodes;
-  submipoptions.mip_pscost_minreliable = 0;
-  submipoptions.time_limit -= mipsolver.timer_.read();
-  submipoptions.time_limit = std::min(submipoptions.time_limit, timeCap);
-  submipoptions.objective_bound = worker.upper_limit;
-
-  // the gap target is the caller's (set in Rust), not the sub-MIP's
-  if (!std::isnan(absGap)) {
-    submipoptions.mip_rel_gap = 0.0;
-    submipoptions.mip_abs_gap = absGap;
-  }
-
-  // check if only root presolve is allowed
-  if (submipoptions.mip_root_presolve_only)
-    submipoptions.presolve = kHighsOffString;
-  else
-    submipoptions.presolve = kHighsOnString;
-  submipoptions.mip_detect_symmetry = false;
-  submipoptions.mip_heuristic_effort = 0.8;
-  // a concurrent LNS helper runs without the heuristics that solve
-  // sub-MIPs; its crossover sub-MIP gets the main solver's settings
-  if (start && mipsolver.concurrent_lns_) {
-    submipoptions.mip_heuristic_run_rins = mipsolver.concurrent_lns_->runRins;
-    submipoptions.mip_heuristic_run_rens = mipsolver.concurrent_lns_->runRens;
+  submipoptions.presolve = spec->presolve ? kHighsOnString : kHighsOffString;
+  submipoptions.mip_detect_symmetry = spec->mip_detect_symmetry;
+  submipoptions.mip_heuristic_effort = spec->mip_heuristic_effort;
+  if (spec->heur_flags >= 0) {
+    submipoptions.mip_heuristic_run_rins = spec->heur_flags & 1;
+    submipoptions.mip_heuristic_run_rens = (spec->heur_flags >> 1) & 1;
     submipoptions.mip_heuristic_run_root_reduced_cost =
-        mipsolver.concurrent_lns_->runRootReducedCost;
+        (spec->heur_flags >> 2) & 1;
   }
-  // setup solver and run it
 
   HighsSolution solution;
   solution.value_valid = false;
   solution.dual_valid = false;
-  if (start) {
-    solution.col_value.assign(start, start + mipsolver.numCol());
+  if (spec->start_cols) {
+    solution.col_value.assign(spec->start_cols,
+                              spec->start_cols + mipsolver.numCol());
+    solution.row_value.assign(spec->start_rows,
+                              spec->start_rows + spec->num_start_rows);
     solution.value_valid = true;
-    calculateRowValuesQuad(*mipsolver.model_, solution);
   }
   if (!mipsolver.submip && !mipsolver.mipdata_->parallelLockActive()) {
     mipsolver.profiling_->start(kMipClockSubMipSolve);
@@ -297,10 +278,7 @@ static void subMip(void* m, void* w, void* lp, const double* lo,
   HighsMipSolver submipsolver(*mipsolver.callback_, submipoptions, submip,
                               solution, true, mipsolver.submip_level + 1);
   submipsolver.initialiseTerminator(mipsolver);
-  submipsolver.lns_target_reached_ =
-      mipsolver.mipdata_->concurrent_lns
-          ? &mipsolver.mipdata_->concurrent_lns->targetReached
-          : mipsolver.lns_target_reached_;
+  submipsolver.lns_target_reached_ = spec->lns_target;
   submipsolver.rootbasis = &basis;
   HighsPseudocostInitialization pscostinit(worker.getPseudocost(), 1);
   submipsolver.pscostinit = &pscostinit;
@@ -484,7 +462,9 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       d.getLp().getLpSolver().setOptionValue("parallel", kHighsOffString);
       return 0;
     case 124:
-      d.firstlpsol = d.getLp().getSolution().col_value;
+      highs_rs_mip_vecs_set(d.rsv_.p, 1,
+                            d.getLp().getSolution().col_value.data(),
+                            d.getLp().getSolution().col_value.size());
       d.firstlpsolobj = d.getLp().getObjective();
       d.rootlpsolobj = d.firstlpsolobj;
       return 0;
@@ -560,26 +540,36 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       }
       return 0;
     }
-    case 129:
-      d.startConcurrentLns();
-      return 0;
-    case 130:
-      d.syncConcurrentLns();
-      return 0;
-    case 131:
-      d.crossoverWithMain(wk(w));
-      return 0;
-    case 132:
-      if (d.concurrent_lns && d.concurrent_lns->independent) {
-        d.syncConcurrentLns();
-        d.concurrent_lns->mainQuickDone = true;
+    case 133: {
+      HighsCutSet cutset;
+      d.getCutPool().separate(d.getLp().getSolution().col_value, d.getDomain(),
+                              cutset, d.feastol, d.cutpools);
+      if (cutset.empty()) return 0;
+      d.getLp().addCuts(cutset);
+      return 1;
+    }
+    case 135: {
+      // the LP's cut rows for the main solver
+      HighsLpRelaxation& lp = d.getLp();
+      std::vector<HighsInt> start{0}, index;
+      std::vector<double> value, rhs;
+      std::vector<uint8_t> integral;
+      for (HighsInt row = ms.numRow(); row < lp.numRows(); ++row) {
+        HighsInt len;
+        const HighsInt* inds;
+        const double* vals;
+        lp.getRow(row, len, inds, vals);
+        index.insert(index.end(), inds, inds + len);
+        value.insert(value.end(), vals, vals + len);
+        start.push_back(index.size());
+        rhs.push_back(lp.getLp().row_upper_[row]);
+        integral.push_back(lp.isRowIntegral(row));
       }
+      highs_rs_concurrent_lns_set_root_cuts(
+          ms.concurrent_lns_, start.data(), rhs.size(), index.data(),
+          value.data(), index.size(), rhs.data(), integral.data());
       return 0;
-    case 134:
-      return d.importRootCuts(wk(w));
-    case 135:
-      d.publishRootCuts();
-      return 0;
+    }
     case 137:
       d.nodequeue.emplaceNode(
           std::vector<HighsDomainChange>(), std::vector<HighsInt>(),
@@ -602,12 +592,12 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
       return ms.terminate();
     case 143:
       return d.getLp().getAvgSolveIters();
-    case 144:
-      return ms.concurrent_lns_ && ms.concurrent_lns_->independent;
     case 146:
       return d.getLp().getLpSolver().getBasis().valid;
     case 147:
-      d.rootlpsol = d.getLp().getLpSolver().getSolution().col_value;
+      highs_rs_mip_vecs_set(
+          d.rsv_.p, 2, d.getLp().getLpSolver().getSolution().col_value.data(),
+          d.getLp().getLpSolver().getSolution().col_value.size());
       return 0;
     case 148:
       return d.getDomain().getChangedCols().size();
@@ -628,18 +618,7 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
     case 0:
       return ms.timer_.read();
     case 1:
-      // the order of HighsMipSolverData::checkLimits
-      if (ms.concurrent_lns_ &&
-          ms.concurrent_lns_->stop.load(std::memory_order_relaxed))
-        return 1;
-      if (d.concurrent_lns &&
-          d.concurrent_lns->targetReached.load(std::memory_order_relaxed))
-        return 2;
-      if (ms.lns_target_reached_ &&
-          ms.lns_target_reached_->load(std::memory_order_relaxed))
-        return 4;
-      if (d.terminatorActive() && d.terminatorTerminated()) return 8;
-      return 0;
+      return d.terminatorActive() && d.terminatorTerminated();
     case 4:
       return d.getCutPool().getNumCuts();
     case 5:
@@ -650,13 +629,6 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
       return d.objectiveFunction.integralScale();
     case 8:
       return d.cliquetable.getSubstitutions().size();
-    case 12:
-      ms.concurrent_lns_->offer(d.incumbent, x);
-      return 0;
-    case 13:
-      if (ms.concurrent_lns_->mainLowerBound.load() > x)
-        ms.concurrent_lns_->targetReached = true;
-      return 0;
     case 14:
       for (HighsMipWorker& worker : d.workers) {
         if (i == 0) {
@@ -679,46 +651,6 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
     case 18:
       if (d.globalOrbits) d.globalOrbits->orbitalFixing(d.getDomain());
       return 0;
-    case 19: {
-      // transformNewIntegerFeasibleSolution's repair LP: the integers
-      // fixed at their rounded values
-      HighsSolution& solution = d.rsScratch_;
-      HighsLp fixedModel = *ms.orig_model_;
-      fixedModel.integrality_.clear();
-      for (HighsInt c = 0; c != ms.orig_model_->num_col_; ++c) {
-        if (ms.orig_model_->integrality_[c] == HighsVarType::kInteger) {
-          double solval = std::round(solution.col_value[c]);
-          fixedModel.col_lower_[c] = std::max(fixedModel.col_lower_[c], solval);
-          fixedModel.col_upper_[c] = std::min(fixedModel.col_upper_[c], solval);
-        }
-      }
-      d.total_repair_lp++;
-      double time_available =
-          std::max(ms.options_mip_->time_limit - ms.timer_.read(), 0.1);
-      Highs tmpSolver;
-      tmpSolver.setProfiling(ms.profiling_);
-      tmpSolver.setOptionValue("output_flag", false);
-      tmpSolver.setOptionValue("time_limit", time_available);
-      double mip_primal_feasibility_tolerance =
-          ms.options_mip_->mip_feasibility_tolerance;
-      tmpSolver.setOptionValue("primal_feasibility_tolerance",
-                               mip_primal_feasibility_tolerance);
-      const bool use_presolve = !ms.options_mip_->mip_root_presolve_only;
-      const std::string presolve =
-          use_presolve ? kHighsChooseString : kHighsOffString;
-      tmpSolver.setOptionValue("presolve", presolve);
-      tmpSolver.passModel(std::move(fixedModel));
-      tmpSolver.setOptionValue("solver", kSimplexString);
-      tmpSolver.optimizeLp();
-      d.total_repair_lp_iterations += tmpSolver.getInfo().simplex_iteration_count;
-      if (tmpSolver.getInfo().primal_solution_status ==
-          kSolutionStatusFeasible) {
-        d.total_repair_lp_feasible++;
-        solution = tmpSolver.getSolution();
-        return 1;
-      }
-      return 0;
-    }
     case 20:
       const_cast<HighsMipSolver&>(ms).solution_ =
           std::move(d.rsScratch_.col_value);
@@ -763,56 +695,89 @@ static void scratchSolution(void* m, const double* sol, HighsInt n,
   v->row = solution.row_value.data();
   v->nrow = solution.row_value.size();
 }
-static std::vector<HighsInt>& intVecRef(HighsMipSolverData& d, int which) {
-  switch (which) {
-    case 3:
-      return d.integral_cols;
-    case 4:
-      return d.integer_cols;
-    case 5:
-      return d.implint_cols;
-    case 6:
-      return d.continuous_cols;
-    case 7:
-      return d.ARstart_;
-    case 8:
-      return d.ARindex_;
-    case 9:
-      return d.uplocks;
-    default:
-      return d.downlocks;
-  }
-}
-// mip_data.rs mod vec: doubles 0-2 and 20-21, integers 3-10, bytes 30
-static void setVec(void* m, int which, const void* data, HighsInt n) {
-  HighsMipSolverData& d = *mip(m).mipdata_;
-  if (which <= 2 || which == 20 || which == 21) {
-    const double* x = static_cast<const double*>(data);
-    std::vector<double>& v = which == 0    ? d.incumbent
-                             : which == 1  ? d.firstlpsol
-                             : which == 2  ? d.rootlpsol
-                             : which == 20 ? d.ARvalue_
-                                           : d.maxAbsRowCoef;
-    v.assign(x, x + n);
-  } else if (which == 30) {
-    const uint8_t* x = static_cast<const uint8_t*>(data);
-    d.rowintegral.assign(x, x + n);
-  } else {
-    const HighsInt* x = static_cast<const HighsInt*>(data);
-    intVecRef(d, which).assign(x, x + n);
-  }
-}
-static const HighsInt* intVec(void* m, int which, HighsInt* n) {
-  std::vector<HighsInt>& v = intVecRef(*mip(m).mipdata_, which);
-  *n = v.size();
-  return v.data();
-}
 static void refill(void* m, MipData* out) { *out = mipData(mip(m)); }
-static void syncConcurrentLns(void* m) {
-  mip(m).mipdata_->syncConcurrentLns();
+
+// transformNewIntegerFeasibleSolution's repair LP (rust/src/mip/mip_data.rs
+// repair_lp): the original model with the given bounds, no integers
+static bool repairLp(void* m, const double* lower, const double* upper,
+                     double time_limit, double feasibility_tolerance,
+                     bool presolve, int64_t* iterations) {
+  const HighsMipSolver& ms = mip(m);
+  HighsLp fixedModel = *ms.orig_model_;
+  fixedModel.integrality_.clear();
+  fixedModel.col_lower_.assign(lower, lower + fixedModel.num_col_);
+  fixedModel.col_upper_.assign(upper, upper + fixedModel.num_col_);
+  Highs tmpSolver;
+  tmpSolver.setProfiling(ms.profiling_);
+  tmpSolver.setOptionValue("output_flag", false);
+  tmpSolver.setOptionValue("time_limit", time_limit);
+  tmpSolver.setOptionValue("primal_feasibility_tolerance",
+                           feasibility_tolerance);
+  tmpSolver.setOptionValue("presolve",
+                           presolve ? kHighsChooseString : kHighsOffString);
+  tmpSolver.passModel(std::move(fixedModel));
+  tmpSolver.setOptionValue("solver", kSimplexString);
+  tmpSolver.optimizeLp();
+  *iterations = tmpSolver.getInfo().simplex_iteration_count;
+  if (tmpSolver.getInfo().primal_solution_status != kSolutionStatusFeasible)
+    return false;
+  ms.mipdata_->rsScratch_ = tmpSolver.getSolution();
+  return true;
 }
-static void crossoverWithMain(void* m, void* w) {
-  mip(m).mipdata_->crossoverWithMain(wk(w));
+
+// The concurrent LNS helper (rust/src/mip/concurrent.rs): its options,
+// model and root basis, copied by the main solver
+struct HelperData {
+  HighsOptions options;
+  HighsLp model;
+  HighsBasis basis;
+  HighsCallback* callback;
+};
+static void* helperNew(void* m, double time_left) {
+  const HighsMipSolver& mipsolver = mip(m);
+  const HighsOptions& options = *mipsolver.options_mip_;
+  HelperData* data = new HelperData();
+  data->options = options;
+  data->options.presolve = kHighsOffString;
+  data->options.output_flag = false;
+  data->options.mip_improving_solution_save = false;
+  data->options.mip_detect_symmetry = false;
+  data->options.mip_heuristic_run_rens = false;
+  data->options.mip_heuristic_run_rins = false;
+  data->options.mip_heuristic_run_root_reduced_cost = false;
+  data->options.mip_heuristic_run_feasibility_jump = false;
+  data->options.mip_concurrent_helper = false;
+  data->options.random_seed = options.random_seed + 1;
+  data->options.time_limit = time_left;
+  data->model = *mipsolver.model_;
+  data->basis = mipsolver.mipdata_->firstrootbasis;
+  data->callback = mipsolver.callback_;
+  return data;
+}
+// in the helper's thread: its own (single thread) task scheduler and
+// profiling, and its solver
+static void helperRun(void* d, const ConcurrentPool* pool) {
+  std::unique_ptr<HelperData> data(static_cast<HelperData*>(d));
+  highs::parallel::initialize_scheduler(1);
+  HighsTimer timer;
+  HighsProfiling profiling;
+  profiling.multi_threaded = false;
+  profiling.initialize(timer, false, false);
+  HighsSolution solution;
+  solution.value_valid = false;
+  HighsMipSolver helper(*data->callback, data->options, data->model, solution,
+                        true, 1);
+  helper.concurrent_lns_ = pool;
+  helper.rootbasis = &data->basis;
+  helper.setProfiling(&profiling);
+  helper.run();
+}
+static void addRootCut(void* m, const HighsInt* inds, const double* vals,
+                       HighsInt len, double rhs, bool integral) {
+  const HighsMipSolver& ms = mip(m);
+  ms.mipdata_->getCutPool().addCut(ms, const_cast<HighsInt*>(inds),
+                                   const_cast<double*>(vals), len, rhs,
+                                   integral, true, false);
 }
 
 static const MipFns fns = {
@@ -860,23 +825,21 @@ static const MipFns fns = {
     subMip,
     op,
     scratchSolution,
-    setVec,
-    intVec,
     refill,
     mipMasterWorker,
     mipRunProcessNodes,
     mipSetCleanupResult,
     mipModelName,
     mipMaxSubmipLevel,
-    syncConcurrentLns,
-    crossoverWithMain,
+    helperNew,
+    helperRun,
+    addRootCut,
     mipVecPtr,
     mipSetBasis,
     mipCallback,
     mipWorker,
-    mipWorkerSolution,
-    mipWorkerPushSolution,
     mipWorkerScratch,
+    repairLp,
 };
 }  // namespace mipglue
 
@@ -896,6 +859,10 @@ MipData mipData(const HighsMipSolver& mipsolver) {
   m.orig_maximize = mipsolver.orig_model_->sense_ == ObjSense::kMaximize;
   m.submip = mipsolver.submip;
   m.concurrent_helper = mipsolver.concurrent_lns_ != nullptr;
+  m.helper_pool = mipsolver.concurrent_lns_;
+  m.lns_target = mipsolver.lns_target_reached_;
+  m.heur = d.heuristics.rust();
+  m.vecs = d.rsv_.p;
   m.root_presolve_only = mipsolver.options_mip_->mip_root_presolve_only;
   m.a_start = &model.a_matrix_.start_;
   m.a_index = &model.a_matrix_.index_;
@@ -966,6 +933,7 @@ MipData mipData(const HighsMipSolver& mipsolver) {
   m.opts.presolve_reduction_limit = o.presolve_reduction_limit;
   m.opts.mip_detect_symmetry = o.mip_detect_symmetry;
   m.opts.mip_improving_solution_save = o.mip_improving_solution_save;
+  m.opts.mip_concurrent_crossover = o.mip_concurrent_crossover;
   return m;
 }
 }  // namespace highs_rs

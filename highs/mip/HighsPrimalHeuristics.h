@@ -35,6 +35,7 @@ class HighsPrimalHeuristics {
  public:
   HighsPrimalHeuristics(HighsMipSolver& mipsolver);
   ~HighsPrimalHeuristics();
+  const highs_rs::Heuristics* rust() const { return rs_; }
   HighsPrimalHeuristics(const HighsPrimalHeuristics&) = delete;
   HighsPrimalHeuristics& operator=(const HighsPrimalHeuristics&) = delete;
 

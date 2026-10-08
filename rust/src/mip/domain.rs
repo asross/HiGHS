@@ -6,8 +6,15 @@
 //!
 //! # The view
 //!
-//! HighsDomain keeps owning its data (external code reads col_lower_,
-//! col_upper_, the domain change stack, ... everywhere).
+//! HighsDomain's own vectors (bounds, positions, the domain change stack
+//! with its reasons and previous bounds, the changed columns, the row
+//! activities, flags and thresholds, the scratch of propagate()) are
+//! Rust's: a [`DomainVecs`] owned by the C++ HighsDomain, whose members
+//! refer to its fields in place (HighsRsArray: the begin/end/capacity
+//! layout of [`StdVec`], read by C++ and grown only by Rust), and so are
+//! the pools' propagation data ([`CutPropState`], [`ConfPropState`], whose
+//! cutAdded / conflictAdded hooks run here) and the objective
+//! propagation's ([`super::objprop::ObjPropState`]).
 //! `highs_rs::DomainAccess` (highs/mip/HighsDomainRust.h) fills a
 //! `#[repr(C)]` [`CDomain`] with pointer+length pairs of the model matrices
 //! (column-wise from the model, row-wise from mipdata), of the domain's
@@ -17,11 +24,10 @@
 //! ([`objprop::CObjProp`]). The vectors that grow during propagation (the
 //! domain change stack, its reasons and previous bounds, the branching
 //! positions, the changed columns, the lists of rows/cuts/conflicts to
-//! propagate) are passed as pointers to the std::vector objects
-//! ([`StdVec`], the begin/end/capacity layout of libc++ and libstdc++,
-//! checked on the C++ side): Rust reads their live size and appends in
-//! place, calling a C++ `reserve` when full. Activities are HighsCDouble
-//! arrays, laid out as [`CDouble`] {hi, lo}.
+//! propagate) are passed as pointers to the vector objects ([`StdVec`]):
+//! Rust reads their live size and appends in place, growing them with the
+//! Rust allocator.
+//! Activities are HighsCDouble arrays, laid out as [`CDouble`] {hi, lo}.
 //!
 //! HighsDomain caches the view (rsView_) and drops it wherever a vector
 //! with a cached length may move or resize: copy, assignment,
@@ -320,6 +326,229 @@ impl<T: Copy> std::ops::Index<usize> for StdVec<T> {
     }
 }
 
+impl<T: Copy> StdVec<T> {
+    /// A Rust-owned StdVec holding the Vec's buffer
+    pub fn from_vec(v: Vec<T>) -> Self {
+        let mut v = std::mem::ManuallyDrop::new(v);
+        let (p, len, cap) = (v.as_mut_ptr(), v.len(), v.capacity());
+        // SAFETY: within (or one past) the Vec's allocation
+        unsafe { StdVec { begin: p, end: p.add(len), cap: p.add(cap) } }
+    }
+
+    /// The Vec of a Rust-owned StdVec, which is left empty
+    ///
+    /// # Safety
+    /// `self` from from_vec (or grown by rs_reserve)
+    pub unsafe fn take_vec(&mut self) -> Vec<T> {
+        let len = self.len();
+        let cap = self.cap.offset_from(self.begin) as usize;
+        let v = Vec::from_raw_parts(self.begin, len, cap);
+        *self = StdVec::from_vec(Vec::new());
+        v
+    }
+
+    /// A Rust-owned copy
+    pub fn to_owned_vec(&self) -> StdVec<T> {
+        StdVec::from_vec(self.as_slice().to_vec())
+    }
+
+}
+
+/// The ReserveFn of a Rust-owned StdVec: capacity at least n and at least
+/// twice the old
+///
+/// # Safety
+/// `v` a Rust-owned StdVec<T>
+pub unsafe extern "C" fn rs_reserve<T: Copy>(v: *mut c_void, n: usize) {
+    let sv = &mut *(v as *mut StdVec<T>);
+    let mut x = sv.take_vec();
+    let want = n.max(2 * x.capacity());
+    x.reserve_exact(want - x.len());
+    *sv = StdVec::from_vec(x);
+}
+
+/// HighsDomain's own vectors (see the module comment); the layout of
+/// highs_rs::DomainVecs in highs/mip/HighsDomainRustView.h
+#[repr(C)]
+pub struct DomainVecs {
+    pub col_lower: StdVec<f64>,
+    pub col_upper: StdVec<f64>,
+    pub col_lower_pos: StdVec<i32>,
+    pub col_upper_pos: StdVec<i32>,
+    pub branch_pos: StdVec<i32>,
+    pub changedcolsflags: StdVec<u8>,
+    pub changedcols: StdVec<i32>,
+    pub domchgstack: StdVec<DomChg>,
+    pub domchgreason: StdVec<Reason>,
+    pub prevboundval: StdVec<PrevBound>,
+    pub activitymin: StdVec<CDouble>,
+    pub activitymax: StdVec<CDouble>,
+    pub activitymininf: StdVec<i32>,
+    pub activitymaxinf: StdVec<i32>,
+    pub capacity_threshold: StdVec<f64>,
+    pub propagateflags: StdVec<u8>,
+    pub propagateinds: StdVec<i32>,
+    pub scratch_counts: StdVec<[i32; 2]>,
+    pub scratch_inds: StdVec<i32>,
+    pub scratch_bounds: StdVec<DomChg>,
+}
+
+macro_rules! domain_vecs {
+    ($m:ident) => {
+        $m!(col_lower, col_upper, col_lower_pos, col_upper_pos, branch_pos, changedcolsflags, changedcols,
+            domchgstack, domchgreason, prevboundval, activitymin, activitymax, activitymininf,
+            activitymaxinf, capacity_threshold, propagateflags, propagateinds, scratch_counts,
+            scratch_inds, scratch_bounds)
+    };
+}
+
+impl Clone for DomainVecs {
+    /// A copy of each vector (std::vector's copy)
+    fn clone(&self) -> Self {
+        macro_rules! cl {
+            ($($f:ident),*) => { DomainVecs { $($f: self.$f.to_owned_vec()),* } };
+        }
+        domain_vecs!(cl)
+    }
+}
+
+impl Drop for DomainVecs {
+    fn drop(&mut self) {
+        macro_rules! dr {
+            ($($f:ident),*) => {
+                // SAFETY: every vector is Rust-owned
+                unsafe { $(drop(self.$f.take_vec());)* }
+            };
+        }
+        domain_vecs!(dr)
+    }
+}
+
+/// std::vector::resize of a Rust-owned StdVec (new elements `fill`)
+fn resize<T: Copy>(v: &mut StdVec<T>, n: usize, fill: T) {
+    // SAFETY: Rust-owned
+    let mut x = unsafe { v.take_vec() };
+    x.resize(n, fill);
+    *v = StdVec::from_vec(x);
+}
+
+/// HighsDomain(mipsolver): the model's bounds, no bound changed
+///
+/// # Safety
+/// `lower`, `upper` valid for `ncol` reads
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_new(ncol: i32, lower: *const f64, upper: *const f64) -> *mut DomainVecs {
+    let n = ncol as usize;
+    fn e<T: Copy>() -> StdVec<T> {
+        StdVec::from_vec(Vec::new())
+    }
+    Box::into_raw(Box::new(DomainVecs {
+        col_lower: StdVec::from_vec(sl(lower, ncol).to_vec()),
+        col_upper: StdVec::from_vec(sl(upper, ncol).to_vec()),
+        col_lower_pos: StdVec::from_vec(vec![-1; n]),
+        col_upper_pos: StdVec::from_vec(vec![-1; n]),
+        branch_pos: e(),
+        changedcolsflags: StdVec::from_vec(vec![0; n]),
+        changedcols: StdVec::from_vec(Vec::with_capacity(n)),
+        domchgstack: e(),
+        domchgreason: e(),
+        prevboundval: e(),
+        activitymin: e(),
+        activitymax: e(),
+        activitymininf: e(),
+        activitymaxinf: e(),
+        capacity_threshold: e(),
+        propagateflags: e(),
+        propagateinds: e(),
+        scratch_counts: e(),
+        scratch_inds: e(),
+        scratch_bounds: e(),
+    }))
+}
+
+/// HighsDomain's copy
+///
+/// # Safety
+/// `v` live
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_clone(v: *const DomainVecs) -> *mut DomainVecs {
+    Box::into_raw(Box::new((*v).clone()))
+}
+
+/// HighsDomain's assignment (the scratch vectors are kept)
+///
+/// # Safety
+/// `dst`, `src` live
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_assign(dst: *mut DomainVecs, src: *const DomainVecs) {
+    if std::ptr::eq(dst, src) {
+        return;
+    }
+    let (d, s) = (&mut *dst, &*src);
+    macro_rules! asg {
+        ($($f:ident),*) => {$(
+            let mut x = d.$f.take_vec();
+            x.clear();
+            x.extend_from_slice(s.$f.as_slice());
+            d.$f = StdVec::from_vec(x);
+        )*};
+    }
+    asg!(col_lower, col_upper, col_lower_pos, col_upper_pos, branch_pos, changedcolsflags, changedcols,
+         domchgstack, domchgreason, prevboundval, activitymin, activitymax, activitymininf,
+         activitymaxinf, capacity_threshold, propagateflags, propagateinds);
+}
+
+/// ~HighsDomain
+///
+/// # Safety
+/// `v` from highs_rs_domain_vecs_new/clone, or null
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_free(v: *mut DomainVecs) {
+    if !v.is_null() {
+        drop(Box::from_raw(v));
+    }
+}
+
+/// computeRowActivities' sizes: the row arrays resized to `nrow`, room for
+/// `nrow` rows to propagate
+///
+/// # Safety
+/// `v` live
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_domain_vecs_size_rows(v: *mut DomainVecs, nrow: i32) {
+    let d = &mut *v;
+    let n = nrow as usize;
+    resize(&mut d.activitymin, n, CDouble::default());
+    resize(&mut d.activitymininf, n, 0);
+    resize(&mut d.activitymax, n, CDouble::default());
+    resize(&mut d.activitymaxinf, n, 0);
+    resize(&mut d.capacity_threshold, n, 0.0);
+    resize(&mut d.propagateflags, n, 0);
+    d.propagateinds.reserve(n, rs_reserve::<i32>);
+}
+
+/// The ReserveFns of the Rust-owned vectors, for the view
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_i32(v: *mut c_void, n: usize) {
+    rs_reserve::<i32>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_domchg(v: *mut c_void, n: usize) {
+    rs_reserve::<DomChg>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_reason(v: *mut c_void, n: usize) {
+    rs_reserve::<Reason>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_prev(v: *mut c_void, n: usize) {
+    rs_reserve::<PrevBound>(v, n)
+}
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_reserve_pair(v: *mut c_void, n: usize) {
+    rs_reserve::<[i32; 2]>(v, n)
+}
+
 /// A CutpoolPropagation and its cut pool's matrix, mirrored by
 /// highs_rs::CutProp in highs/mip/HighsDomainRustView.h
 #[repr(C)]
@@ -607,6 +836,12 @@ pub(crate) fn bound_range(upper: f64, lower: f64, tolerance: f64, continuous: bo
 }
 
 impl<'a> Bounds<'a> {
+    /// The column is continuous
+    #[inline(always)]
+    pub(crate) fn continuous(&self, col: usize) -> bool {
+        self.is_continuous(col)
+    }
+
     #[inline(always)]
     fn is_continuous(&self, col: usize) -> bool {
         self.integrality[col] == 0
@@ -1057,8 +1292,11 @@ impl<'a> Dom<'a> {
     pub(crate) fn cut<'x>(&self, pool: usize, cut: usize) -> (&'x [i32], &'x [f64], f64) {
         let cp = self.cutpool(pool);
         let [s, e] = cp.ar_range[cut];
+        // a cut deleted since it was a reason has the range [-1, -1]: no
+        // entries, as the C++ loop from getRowStart to getRowEnd
+        let (s, e) = if s < 0 { (0, 0) } else { (s as usize, e as usize) };
         // SAFETY: the pool's matrix, not changed during conflict analysis
-        unsafe { (&cp.ar_index.get()[s as usize..e as usize], &cp.ar_value.get()[s as usize..e as usize], cp.rhs[cut]) }
+        unsafe { (&cp.ar_index.get()[s..e], &cp.ar_value.get()[s..e], cp.rhs[cut]) }
     }
 
     /// The HighsCutPool of a cut pool
@@ -2176,6 +2414,385 @@ impl Ctx {
     }
 }
 
+/// A CutpoolPropagation's vectors (Rust-owned; the C++ shell refers to
+/// them in place), mirrored by highs_rs::CutPropState
+#[repr(C)]
+pub struct CutPropState {
+    pub activitycuts: StdVec<CDouble>,
+    pub activitycutsinf: StdVec<i32>,
+    pub propagatecutflags: StdVec<u8>,
+    pub propagatecutinds: StdVec<i32>,
+    pub capacity_threshold: StdVec<f64>,
+}
+
+/// A ConflictPoolPropagation's vectors, mirrored by
+/// highs_rs::ConfPropState
+#[repr(C)]
+pub struct ConfPropState {
+    pub col_lower_watched: StdVec<i32>,
+    pub col_upper_watched: StdVec<i32>,
+    pub conflict_flag: StdVec<u8>,
+    pub propagate_conflict_inds: StdVec<i32>,
+    pub watched: StdVec<WatchedLiteral>,
+}
+
+macro_rules! owned_state {
+    ($t:ident, $($f:ident),*) => {
+        impl Clone for $t {
+            fn clone(&self) -> Self {
+                $t { $($f: self.$f.to_owned_vec()),* }
+            }
+        }
+        impl Drop for $t {
+            fn drop(&mut self) {
+                // SAFETY: Rust-owned vectors
+                unsafe { $(drop(self.$f.take_vec());)* }
+            }
+        }
+        impl $t {
+            /// std::vector assignment of each vector
+            fn assign_from(&mut self, o: &$t) {
+                $(
+                    // SAFETY: Rust-owned
+                    let mut x = unsafe { self.$f.take_vec() };
+                    x.clear();
+                    x.extend_from_slice(o.$f.as_slice());
+                    self.$f = StdVec::from_vec(x);
+                )*
+            }
+        }
+    };
+}
+owned_state!(CutPropState, activitycuts, activitycutsinf, propagatecutflags, propagatecutinds, capacity_threshold);
+owned_state!(ConfPropState, col_lower_watched, col_upper_watched, conflict_flag, propagate_conflict_inds, watched);
+
+/// ConflictPoolPropagation::linkWatchedLiteral (links a literal only into
+/// a nonempty list, as the C++)
+fn link_watched(watched: &mut [WatchedLiteral], lower: &mut [i32], upper: &mut [i32], pos: usize) {
+    let w = watched[pos].domchg;
+    let col = w.column as usize;
+    let head = if w.boundtype == LOWER { lower[col] } else { upper[col] };
+    watched[pos].prev = -1;
+    watched[pos].next = head;
+    if head != -1 {
+        watched[head as usize].prev = pos as i32;
+        if w.boundtype == LOWER {
+            lower[col] = pos as i32;
+        } else {
+            upper[col] = pos as i32;
+        }
+    }
+}
+
+/// ConflictPoolPropagation::unlinkWatchedLiteral
+fn unlink_watched(watched: &mut [WatchedLiteral], lower: &mut [i32], upper: &mut [i32], pos: usize) {
+    let w = watched[pos].domchg;
+    if w.column == -1 {
+        return;
+    }
+    let col = w.column as usize;
+    watched[pos].domchg.column = -1;
+    let (prev, next) = (watched[pos].prev, watched[pos].next);
+    if prev != -1 {
+        watched[prev as usize].next = next;
+    } else if w.boundtype == LOWER {
+        lower[col] = next;
+    } else {
+        upper[col] = next;
+    }
+    if next != -1 {
+        watched[next as usize].prev = prev;
+    }
+}
+
+impl CutPropState {
+    fn new() -> Self {
+        CutPropState {
+            activitycuts: StdVec::from_vec(Vec::new()),
+            activitycutsinf: StdVec::from_vec(Vec::new()),
+            propagatecutflags: StdVec::from_vec(Vec::new()),
+            propagatecutinds: StdVec::from_vec(Vec::new()),
+            capacity_threshold: StdVec::from_vec(Vec::new()),
+        }
+    }
+
+    /// CutpoolPropagation::cutAdded on a domain with bounds `b`
+    /// (`global`: the solver's global domain)
+    fn cut_added(&mut self, pool: &super::cutpool::CutPool, cut: usize, b: &Bounds, propagate: bool, global: bool) {
+        if !propagate && !global {
+            return;
+        }
+        let (s, e) = pool.matrix.row_range(cut as i32);
+        let (index, value) = (&pool.matrix.ar_index[s..e], &pool.matrix.ar_value[s..e]);
+        if self.activitycuts.len() <= cut {
+            resize(&mut self.activitycuts, cut + 1, CDouble::default());
+            resize(&mut self.activitycutsinf, cut + 1, 0);
+            resize(&mut self.propagatecutflags, cut + 1, 2);
+            resize(&mut self.capacity_threshold, cut + 1, 0.0);
+        }
+        self.propagatecutflags.as_mut_slice()[cut] &= !2u8;
+        let (ninf, act) = b.compute_activity(index, value, false);
+        self.activitycutsinf.as_mut_slice()[cut] = ninf;
+        self.activitycuts.as_mut_slice()[cut] = act;
+        if propagate {
+            self.capacity_threshold.as_mut_slice()[cut] = b.capacity_threshold_of(index, value);
+            // markPropagateCut
+            if self.propagatecutflags[cut] == 0
+                && (self.activitycutsinf[cut] == 1
+                    || pool.rhs[cut] - self.activitycuts[cut].to_f64() <= self.capacity_threshold[cut])
+            {
+                self.propagatecutinds.push(cut as i32, rs_reserve::<i32>);
+                self.propagatecutflags.as_mut_slice()[cut] |= 1;
+            }
+        }
+    }
+}
+
+impl ConfPropState {
+    fn new(ncol: usize) -> Self {
+        ConfPropState {
+            col_lower_watched: StdVec::from_vec(vec![-1; ncol]),
+            col_upper_watched: StdVec::from_vec(vec![-1; ncol]),
+            conflict_flag: StdVec::from_vec(Vec::new()),
+            propagate_conflict_inds: StdVec::from_vec(Vec::new()),
+            watched: StdVec::from_vec(Vec::new()),
+        }
+    }
+
+    fn link(&mut self, pos: usize) {
+        link_watched(
+            self.watched.as_mut_slice(),
+            self.col_lower_watched.as_mut_slice(),
+            self.col_upper_watched.as_mut_slice(),
+            pos,
+        )
+    }
+
+    fn unlink(&mut self, pos: usize) {
+        unlink_watched(
+            self.watched.as_mut_slice(),
+            self.col_lower_watched.as_mut_slice(),
+            self.col_upper_watched.as_mut_slice(),
+            pos,
+        )
+    }
+
+    /// ConflictPoolPropagation::conflictDeleted
+    fn conflict_deleted(&mut self, conflict: usize) {
+        self.conflict_flag.as_mut_slice()[conflict] |= 8;
+        self.unlink(2 * conflict);
+        self.unlink(2 * conflict + 1);
+    }
+
+    /// ConflictPoolPropagation::conflictAdded on a domain with bounds `b`
+    fn conflict_added(&mut self, pool: &ConflictPool, conflict: usize, b: &Bounds) {
+        let [start, end] = pool.ranges[conflict];
+        let entries = &pool.entries;
+        if self.conflict_flag.len() <= conflict {
+            let unwatched = WatchedLiteral { domchg: DomChg { boundval: 0.0, column: -1, boundtype: LOWER }, prev: -1, next: -1 };
+            resize(&mut self.watched, 2 * conflict + 2, unwatched);
+            resize(&mut self.conflict_flag, conflict + 1, 0);
+        }
+        let is_active = |d: &DomChg| {
+            let c = d.column as usize;
+            if d.boundtype == LOWER {
+                d.boundval <= b.col_lower[c]
+            } else {
+                d.boundval >= b.col_upper[c]
+            }
+        };
+        let pos_of = |d: &DomChg| {
+            let c = d.column as usize;
+            if d.boundtype == LOWER {
+                b.col_lower_pos[c]
+            } else {
+                b.col_upper_pos[c]
+            }
+        };
+        let mut num_watched = 0usize;
+        for i in start..end {
+            let e = entries[i as usize];
+            if is_active(&e) {
+                continue;
+            }
+            let watch_pos = 2 * conflict + num_watched;
+            self.watched.as_mut_slice()[watch_pos].domchg = e;
+            self.link(watch_pos);
+            num_watched += 1;
+            if num_watched == 2 {
+                break;
+            }
+        }
+        match num_watched {
+            0 => {
+                // the two latest active entries (stack position, entry)
+                let mut latest = [(0i32, 0i32); 2];
+                let mut num_active = 0;
+                for i in start..end {
+                    let pos = pos_of(&entries[i as usize]);
+                    match num_active {
+                        0 => {
+                            latest[0] = (pos, i);
+                            num_active = 1;
+                        }
+                        1 => {
+                            latest[1] = (pos, i);
+                            num_active = 2;
+                            if latest[0].0 < latest[1].0 {
+                                latest.swap(0, 1);
+                            }
+                        }
+                        _ => {
+                            if pos > latest[1].0 {
+                                latest[1] = (pos, i);
+                                if latest[0].0 < latest[1].0 {
+                                    latest.swap(0, 1);
+                                }
+                            }
+                        }
+                    }
+                }
+                for (k, &(_, i)) in latest.iter().enumerate().take(num_active) {
+                    let watch_pos = 2 * conflict + k;
+                    self.watched.as_mut_slice()[watch_pos].domchg = entries[i as usize];
+                    self.link(watch_pos);
+                }
+            }
+            1 => {
+                let (mut latest_active, mut latest_pos) = (-1i32, -1i32);
+                for i in start..end {
+                    let pos = pos_of(&entries[i as usize]);
+                    if pos > latest_pos {
+                        latest_active = i;
+                        latest_pos = pos;
+                    }
+                }
+                if latest_active != -1 {
+                    let watch_pos = 2 * conflict + 1;
+                    self.watched.as_mut_slice()[watch_pos].domchg = entries[latest_active as usize];
+                    self.link(watch_pos);
+                }
+            }
+            _ => {}
+        }
+        let f = &mut self.conflict_flag.as_mut_slice()[conflict];
+        *f = num_watched as u8 | (*f & 4);
+        // markPropagateConflict
+        if self.conflict_flag[conflict] < 2 {
+            self.propagate_conflict_inds.push(conflict as i32, rs_reserve::<i32>);
+            self.conflict_flag.as_mut_slice()[conflict] |= 4;
+        }
+    }
+}
+
+pub mod poolprop_ffi {
+    //! The C++ CutpoolPropagation / ConflictPoolPropagation shells' calls
+    use super::*;
+
+    #[no_mangle]
+    pub extern "C" fn highs_rs_cutprop_new() -> *mut CutPropState {
+        Box::into_raw(Box::new(CutPropState::new()))
+    }
+    /// # Safety
+    /// `s` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_cutprop_clone(s: *const CutPropState) -> *mut CutPropState {
+        Box::into_raw(Box::new((*s).clone()))
+    }
+    /// # Safety
+    /// `d`, `s` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_cutprop_assign(d: *mut CutPropState, s: *const CutPropState) {
+        if !std::ptr::eq(d, s) {
+            (*d).assign_from(&*s)
+        }
+    }
+    /// # Safety
+    /// `s` from new/clone, or null
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_cutprop_free(s: *mut CutPropState) {
+        if !s.is_null() {
+            drop(Box::from_raw(s));
+        }
+    }
+    /// cutAdded
+    ///
+    /// # Safety
+    /// `s`, `pool`, `b` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_cutprop_cut_added(
+        s: *mut CutPropState,
+        pool: *const super::super::cutpool::CutPool,
+        cut: i32,
+        b: *const CBounds,
+        propagate: bool,
+        global: bool,
+    ) {
+        (*s).cut_added(&*pool, cut as usize, &(*b).view(), propagate, global)
+    }
+    /// cutDeleted (`global` and only for propagation: kept)
+    ///
+    /// # Safety
+    /// `s` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_cutprop_cut_deleted(s: *mut CutPropState, cut: i32, keep: bool) {
+        let s = &mut *s;
+        if !keep && (cut as usize) < s.propagatecutflags.len() {
+            s.propagatecutflags.as_mut_slice()[cut as usize] |= 2;
+        }
+    }
+
+    /// # Safety
+    /// none
+    #[no_mangle]
+    pub extern "C" fn highs_rs_confprop_new(ncol: i32) -> *mut ConfPropState {
+        Box::into_raw(Box::new(ConfPropState::new(ncol as usize)))
+    }
+    /// # Safety
+    /// `s` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_confprop_clone(s: *const ConfPropState) -> *mut ConfPropState {
+        Box::into_raw(Box::new((*s).clone()))
+    }
+    /// # Safety
+    /// `d`, `s` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_confprop_assign(d: *mut ConfPropState, s: *const ConfPropState) {
+        if !std::ptr::eq(d, s) {
+            (*d).assign_from(&*s)
+        }
+    }
+    /// # Safety
+    /// `s` from new/clone, or null
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_confprop_free(s: *mut ConfPropState) {
+        if !s.is_null() {
+            drop(Box::from_raw(s));
+        }
+    }
+    /// conflictAdded
+    ///
+    /// # Safety
+    /// `s`, `pool`, `b` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_confprop_conflict_added(
+        s: *mut ConfPropState,
+        pool: *const ConflictPool,
+        conflict: i32,
+        b: *const CBounds,
+    ) {
+        (*s).conflict_added(&*pool, conflict as usize, &(*b).view())
+    }
+    /// conflictDeleted
+    ///
+    /// # Safety
+    /// `s` live
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_confprop_conflict_deleted(s: *mut ConfPropState, conflict: i32) {
+        (*s).conflict_deleted(conflict as usize)
+    }
+}
+
 pub mod ffi {
     //! The `extern "C"` entry points called by HighsDomain (under HIGHS_RUST)
     use super::*;
@@ -2292,5 +2909,32 @@ mod tests {
         assert_eq!(b.propagate_row(&index, &value, 4.0, act, ninf, false, &mut chg), 2);
         assert_eq!(chg[0], DomChg { boundval: 4.0, column: 0, boundtype: UPPER });
         assert_eq!(chg[1], DomChg { boundval: 2.0, column: 1, boundtype: UPPER });
+    }
+
+    #[test]
+    fn domain_vecs_own_their_buffers() {
+        unsafe {
+            let (lo, up) = ([0.0, 1.0], [5.0, 6.0]);
+            let v = highs_rs_domain_vecs_new(2, lo.as_ptr(), up.as_ptr());
+            let d = &mut *v;
+            assert_eq!(d.col_upper.as_slice(), &[5.0, 6.0]);
+            assert_eq!(d.col_lower_pos.as_slice(), &[-1, -1]);
+            for i in 0..100 {
+                d.domchgstack.push(DomChg { boundval: i as f64, column: 0, boundtype: LOWER }, highs_rs_reserve_domchg);
+            }
+            highs_rs_domain_vecs_size_rows(v, 3);
+            assert_eq!(d.activitymin.len(), 3);
+            let c = highs_rs_domain_vecs_clone(v);
+            assert_eq!((*c).domchgstack.len(), 100);
+            (*c).domchgstack.truncate(1);
+            highs_rs_domain_vecs_assign(c, v);
+            assert_eq!((&(*c).domchgstack)[99].boundval, 99.0);
+            let mut s = StdVec::from_vec(vec![7, 8]);
+            s.push(9, highs_rs_reserve_i32);
+            assert_eq!(s.as_slice(), &[7, 8, 9]);
+            drop(s.take_vec());
+            highs_rs_domain_vecs_free(c);
+            highs_rs_domain_vecs_free(v);
+        }
     }
 }

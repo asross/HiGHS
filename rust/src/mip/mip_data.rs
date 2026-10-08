@@ -8,6 +8,7 @@
 //! reads; Rust works on it through [`MipData`] and calls C++ for the C++
 //! objects ([`CMipFns::op`] and the named functions of glue.rs).
 
+use super::domain::StdVec;
 use super::glue::{self, fns, lp_status, Dom, Lp, MipData, Worker};
 use crate::lp_data::LogType;
 use crate::util::cdouble::CDouble;
@@ -48,9 +49,7 @@ pub mod src {
 pub mod op {
     /// timer_.read()
     pub const TIMER_READ: i32 = 0;
-    /// bit 0: the concurrent helper is to stop, 1: its main solver's target
-    /// is reached, 2: lns_target_reached_, 3: the terminator stopped this
-    /// instance
+    /// the terminator stopped this instance
     pub const LIMIT_FLAGS: i32 = 1;
     /// getCutPool().getNumCuts()
     pub const NUM_CUTS: i32 = 4;
@@ -62,10 +61,6 @@ pub mod op {
     pub const OBJ_INT_SCALE: i32 = 7;
     /// cliquetable.getSubstitutions().size()
     pub const NUM_SUBSTITUTIONS: i32 = 8;
-    /// the concurrent helper pool: offer the incumbent with objective x
-    pub const CONCURRENT_OFFER: i32 = 12;
-    /// the helper's main solver's lower bound is above x: target reached
-    pub const CONCURRENT_TARGET: i32 = 13;
     /// workers' upper_bound = x (i 0), upper_limit and optimality_limit
     /// (i 1)
     pub const SYNC_WORKERS: i32 = 14;
@@ -77,8 +72,6 @@ pub mod op {
     pub const EXTRACT_OBJ_CLIQUES: i32 = 17;
     /// globalOrbits->orbitalFixing(getDomain()) if there are global orbits
     pub const ORBITAL_FIXING: i32 = 18;
-    /// the repair LP of the scratch solution (returns 1 if feasible)
-    pub const REPAIR: i32 = 19;
     /// store the scratch solution as the solver's (with the violations in
     /// MipData's solution fields)
     pub const STORE_SOLUTION: i32 = 20;
@@ -94,8 +87,8 @@ pub mod op {
     pub const SOLUTION_EMPTY: i32 = 25;
 }
 
-/// HighsMipSolverData's vectors that Rust sets (CMipFns::set_vec): doubles
-/// (0-2, 20-), integers (3-10), bytes (30)
+/// HighsMipSolverData's vectors ([`MipVecs`]): doubles (0-2, 20-22),
+/// integers (3-10), bytes (30)
 pub mod vec {
     pub const INCUMBENT: i32 = 0;
     pub const FIRSTLPSOL: i32 = 1;
@@ -111,8 +104,150 @@ pub mod vec {
     /// doubles
     pub const AR_VALUE: i32 = 20;
     pub const MAX_ABS_ROW_COEF: i32 = 21;
+    pub const ANALYTIC_CENTER: i32 = 22;
     /// bytes
     pub const ROW_INTEGRAL: i32 = 30;
+}
+
+/// HighsMipSolverData's vectors, owned by Rust; the C++ HighsMipSolverData
+/// owns the struct (highs_rs::MipVecsOwner) and its old members refer to
+/// the fields in place (HighsRsArray, the layout of StdVec). Set with
+/// [`MipVecs::set`] (C++: highs_rs_mip_vecs_set)
+#[repr(C)]
+pub struct MipVecs {
+    pub incumbent: StdVec<f64>,
+    pub firstlpsol: StdVec<f64>,
+    pub rootlpsol: StdVec<f64>,
+    pub analytic_center: StdVec<f64>,
+    pub ar_start: StdVec<i32>,
+    pub ar_index: StdVec<i32>,
+    pub ar_value: StdVec<f64>,
+    pub max_abs_row_coef: StdVec<f64>,
+    pub row_integral: StdVec<u8>,
+    pub uplocks: StdVec<i32>,
+    pub downlocks: StdVec<i32>,
+    pub integer_cols: StdVec<i32>,
+    pub implint_cols: StdVec<i32>,
+    pub integral_cols: StdVec<i32>,
+    pub continuous_cols: StdVec<i32>,
+}
+
+/// v = data (std::vector::assign)
+fn assign<T: Copy>(v: &mut StdVec<T>, data: &[T]) {
+    // SAFETY: a Rust-owned vector
+    let mut x = unsafe { v.take_vec() };
+    x.clear();
+    x.extend_from_slice(data);
+    *v = StdVec::from_vec(x);
+}
+
+impl MipVecs {
+    fn new() -> Self {
+        fn e<T: Copy>() -> StdVec<T> {
+            StdVec::from_vec(Vec::new())
+        }
+        MipVecs {
+            incumbent: e(),
+            firstlpsol: e(),
+            rootlpsol: e(),
+            analytic_center: e(),
+            ar_start: e(),
+            ar_index: e(),
+            ar_value: e(),
+            max_abs_row_coef: e(),
+            row_integral: e(),
+            uplocks: e(),
+            downlocks: e(),
+            integer_cols: e(),
+            implint_cols: e(),
+            integral_cols: e(),
+            continuous_cols: e(),
+        }
+    }
+    fn dbl(&mut self, which: i32) -> &mut StdVec<f64> {
+        match which {
+            vec::INCUMBENT => &mut self.incumbent,
+            vec::FIRSTLPSOL => &mut self.firstlpsol,
+            vec::ROOTLPSOL => &mut self.rootlpsol,
+            vec::AR_VALUE => &mut self.ar_value,
+            vec::MAX_ABS_ROW_COEF => &mut self.max_abs_row_coef,
+            _ => &mut self.analytic_center,
+        }
+    }
+    pub fn int(&mut self, which: i32) -> &mut StdVec<i32> {
+        match which {
+            vec::INTEGRAL_COLS => &mut self.integral_cols,
+            vec::INTEGER_COLS => &mut self.integer_cols,
+            vec::IMPLINT_COLS => &mut self.implint_cols,
+            vec::CONTINUOUS_COLS => &mut self.continuous_cols,
+            vec::AR_START => &mut self.ar_start,
+            vec::AR_INDEX => &mut self.ar_index,
+            vec::UPLOCKS => &mut self.uplocks,
+            _ => &mut self.downlocks,
+        }
+    }
+    pub fn set_f64(&mut self, which: i32, data: &[f64]) {
+        assign(self.dbl(which), data)
+    }
+    pub fn set_i32(&mut self, which: i32, data: &[i32]) {
+        assign(self.int(which), data)
+    }
+    pub fn set_u8(&mut self, data: &[u8]) {
+        assign(&mut self.row_integral, data)
+    }
+}
+
+impl Drop for MipVecs {
+    fn drop(&mut self) {
+        // SAFETY: every vector is Rust-owned
+        unsafe {
+            drop(self.incumbent.take_vec());
+            drop(self.firstlpsol.take_vec());
+            drop(self.rootlpsol.take_vec());
+            drop(self.analytic_center.take_vec());
+            drop(self.ar_start.take_vec());
+            drop(self.ar_index.take_vec());
+            drop(self.ar_value.take_vec());
+            drop(self.max_abs_row_coef.take_vec());
+            drop(self.row_integral.take_vec());
+            drop(self.uplocks.take_vec());
+            drop(self.downlocks.take_vec());
+            drop(self.integer_cols.take_vec());
+            drop(self.implint_cols.take_vec());
+            drop(self.integral_cols.take_vec());
+            drop(self.continuous_cols.take_vec());
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn highs_rs_mip_vecs_new() -> *mut MipVecs {
+    Box::into_raw(Box::new(MipVecs::new()))
+}
+
+/// # Safety
+/// `v` from highs_rs_mip_vecs_new, or null
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_mip_vecs_free(v: *mut MipVecs) {
+    if !v.is_null() {
+        drop(Box::from_raw(v));
+    }
+}
+
+/// Vector `which` (mod vec) = the `n` elements of `data`
+///
+/// # Safety
+/// `v` live; `data` valid for `n` elements of the vector's type
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_mip_vecs_set(v: *mut MipVecs, which: i32, data: *const std::ffi::c_void, n: i32) {
+    let v = &mut *v;
+    if which == vec::ROW_INTEGRAL {
+        v.set_u8(crate::ffi::sl(data as *const u8, n));
+    } else if which <= 2 || which >= 20 {
+        v.set_f64(which, crate::ffi::sl(data as *const f64, n));
+    } else {
+        v.set_i32(which, crate::ffi::sl(data as *const i32, n));
+    }
 }
 
 /// std::min / std::max
@@ -348,8 +483,7 @@ impl MipData {
 
     /// checkLimits
     pub fn check_limits_rs(&self, node_offset: i64) -> bool {
-        let flags = self.op(op::LIMIT_FLAGS, None, 0, 0.0) as i64;
-        if flags != 0 {
+        if self.concurrent_limit() || self.op(op::LIMIT_FLAGS, None, 0, 0.0) != 0.0 {
             return true;
         }
         // possible user interrupt
@@ -824,6 +958,43 @@ impl MipData {
         (feasible, bound_violation, row_violation, integrality_violation, obj)
     }
 
+    /// transformNewIntegerFeasibleSolution's repair LP: the original model
+    /// with the integers fixed at their rounded values in `col` (the
+    /// scratch solution), solved by simplex in C++ (CMipFns::repair_lp);
+    /// if primal feasible, its solution replaces the scratch solution
+    fn repair_lp(&self, col: &[f64]) -> bool {
+        let o = &self.orig;
+        // SAFETY: the original model's vectors, unchanged during the call
+        let (intg, lo, up) = unsafe { ((*o.integrality).as_slice(), (*o.col_lower).as_slice(), (*o.col_upper).as_slice()) };
+        let mut lower = lo.to_vec();
+        let mut upper = up.to_vec();
+        for c in 0..o.num_col as usize {
+            if intg[c] == 1 {
+                let solval = col[c].round();
+                lower[c] = cmax(lower[c], solval);
+                upper[c] = cmin(upper[c], solval);
+            }
+        }
+        self.sc().total_repair_lp += 1;
+        let time_available = cmax(self.opts.time_limit - self.timer_read(), 0.1);
+        let mut iterations = 0;
+        let feasible = glue::repair_lp(
+            self,
+            &lower,
+            &upper,
+            time_available,
+            self.opts.mip_feasibility_tolerance,
+            !self.root_presolve_only,
+            &mut iterations,
+        );
+        let sc = self.sc();
+        sc.total_repair_lp_iterations += iterations;
+        if feasible {
+            sc.total_repair_lp_feasible += 1;
+        }
+        feasible
+    }
+
     /// transformNewIntegerFeasibleSolution: the objective in the
     /// transformed space (infinity if not to be used for bounding)
     pub fn transform_new_integer_feasible_solution(&self, sol: &[f64], possibly_store_as_new_incumbent: bool) -> f64 {
@@ -835,7 +1006,7 @@ impl MipData {
             if !r.0 && allow_try_again {
                 // repair: an LP with the integers fixed at their rounded
                 // values
-                if self.op(op::REPAIR, None, 0, 0.0) != 0.0 {
+                if self.repair_lp(scratch.col()) {
                     allow_try_again = false;
                     scratch = glue::scratch_solution(self, None);
                     continue;
@@ -914,9 +1085,7 @@ impl MipData {
                 self.update_primal_dual_integral(lb, lb, prev_upper_bound, sc.upper_bound, true, true);
             }
             glue::set_vec(self, vec::INCUMBENT, sol);
-            if self.concurrent_helper {
-                self.op(op::CONCURRENT_OFFER, None, 0, sc.upper_bound);
-            }
+            self.concurrent_offer(sc.upper_bound);
             let new_upper_limit = self.compute_new_upper_limit(solobj, 0.0, 0.0);
             if !is_user_solution && !self.submip {
                 self.save_report_mip_solution(new_upper_limit);
@@ -929,9 +1098,7 @@ impl MipData {
                 self.nodequeue().set_optimality_limit(sc.optimality_limit);
                 // a helper's solution within the target gap of its main
                 // solver's bound finishes the main solve
-                if self.concurrent_helper {
-                    self.op(op::CONCURRENT_TARGET, None, 0, sc.optimality_limit);
-                }
+                self.concurrent_target(sc.optimality_limit);
                 self.op(op::SYNC_WORKERS, None, 1, 0.0);
                 self.op(op::DEBUG_NEW_INCUMBENT, None, 0, 0.0);
                 let gd = self.domain();

@@ -470,20 +470,6 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
       d.heuristics.graphLNS(d.workers[0], d.rootlpsol, true, int64_t(x));
       d.heuristics.flushStatistics(ms, d.workers[0]);
       return 0;
-    case 253:
-      // take the helper's best solution even if no crossover took place;
-      // the helper's root bound is valid for the whole solve
-      if (d.concurrent_lns) d.concurrent_lns->independent = false;
-      d.syncConcurrentLns();
-      return d.concurrent_lns ? d.concurrent_lns->helperLowerBound.load()
-                              : -kHighsInf;
-    case 254:
-      d.stopConcurrentLns();
-      for (HighsMipWorker& worker : d.workers) {
-        assert(worker.solutions_.empty());
-        (void)worker;
-      }
-      return 0;
     case 255:
       if (i == 0) return d.terminatorActive();
       if (i == 1) return d.terminatorTerminated();

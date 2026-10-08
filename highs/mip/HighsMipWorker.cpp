@@ -11,6 +11,35 @@
 #include "mip/HighsMipSolverData.h"
 #include "mip/MipTimer.h"
 
+#ifdef HIGHS_RUST
+HighsMipWorker::HighsMipWorker(const HighsMipSolver& mipsolver,
+                               HighsLpRelaxation* lp, HighsDomain* domain,
+                               HighsCutPool* cutpool,
+                               HighsConflictPool* conflictpool,
+                               HighsPseudocost* pseudocost)
+    : mipsolver_(mipsolver),
+      mipdata_(*mipsolver_.mipdata_),
+      lp_(lp),
+      globaldom_(domain),
+      cutpool_(cutpool),
+      conflictpool_(conflictpool),
+      pseudocost_(pseudocost),
+      rs_(highs_rs::highs_rs_worker_state_new(
+          mipsolver.options_mip_->random_seed, mipdata_.upper_bound,
+          mipdata_.upper_limit, mipdata_.optimality_limit)),
+      st_(*reinterpret_cast<RsState*>(rs_)),
+      heuristics_allowed(st_.heuristics_allowed),
+      heur_stats(st_.heur_stats),
+      sepa_stats(st_.sepa_stats),
+      upper_bound(st_.upper_bound),
+      upper_limit(st_.upper_limit),
+      optimality_limit(st_.optimality_limit),
+      randgen(st_.randgen) {
+  static_assert(offsetof(RsState, heur_stats) == 24 &&
+                    offsetof(RsState, randgen) == 112 &&
+                    offsetof(RsState, heuristics_allowed) == 120,
+                "rust/src/mip/workers.rs WorkerState layout");
+#else
 HighsMipWorker::HighsMipWorker(const HighsMipSolver& mipsolver,
                                HighsLpRelaxation* lp, HighsDomain* domain,
                                HighsCutPool* cutpool,
@@ -28,6 +57,7 @@ HighsMipWorker::HighsMipWorker(const HighsMipSolver& mipsolver,
   upper_limit = mipdata_.upper_limit;
   optimality_limit = mipdata_.optimality_limit;
   heuristics_allowed = true;
+#endif
   search_ptr_ =
       std::unique_ptr<HighsSearch>(new HighsSearch(*this, getPseudocost()));
   sepa_ptr_ = std::unique_ptr<HighsSeparation>(new HighsSeparation(*this));
@@ -61,7 +91,7 @@ bool HighsMipWorker::addIncumbent(const std::vector<double>& sol, double solobj,
                                               sol.data(), sol.size(), solobj,
                                               solution_source, false);
   }
-#endif
+#else
   if (solobj < upper_bound) {
     // Get the transformed objective and solution if required
     const std::pair<bool, double> transformed_solobj =
@@ -81,6 +111,7 @@ bool HighsMipWorker::addIncumbent(const std::vector<double>& sol, double solobj,
     solutions_.emplace_back(sol, solobj, solution_source);
   }
   return true;
+#endif
 }
 
 std::pair<bool, double> HighsMipWorker::transformNewIntegerFeasibleSolution(
@@ -128,7 +159,7 @@ bool HighsMipWorker::trySolution(const std::vector<double>& solution,
                                               solution.data(), solution.size(),
                                               0, solution_source, true);
   }
-#endif
+#else
   if (static_cast<int>(solution.size()) != mipsolver_.model_->num_col_)
     return false;
 
@@ -160,6 +191,7 @@ bool HighsMipWorker::trySolution(const std::vector<double>& solution,
   }
 
   return addIncumbent(solution, static_cast<double>(obj), solution_source);
+#endif  // HIGHS_RUST
 }
 
 void HighsMipWorker::resetSepaStats() {

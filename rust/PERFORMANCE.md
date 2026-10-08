@@ -58,6 +58,18 @@ Geomeans crest / C++: MIP 0.884, LP dual 0.809, LP primal 0.929, IPX
 0.963, PDLP 0.944, read 0.376; all 0.796. Also: cli_compare.sh and
 api_compare.sh identical on the gcc 14 pair (gcc_builds.sh).
 
+## 2026-10-08, MIP state owned by Rust (helper, sub-MIPs, workers, domains)
+
+The concurrent LNS helper (concurrent.rs), the sub-MIP decisions, the
+workers' state, HighsDomain's vectors with the pools' propagation domains
+and the objective propagation, HighsMipSolverData's vectors and the repair
+LP's setup moved to Rust ownership (see PORTING.md). No change in work:
+`cyc.py` per step (5 MIPs, 300 nodes, same paths) 0.999 (domain vectors),
+0.995 (MIP vectors and pool propagation). `perf.py --reps 2` after merging
+rust-port (crest), every case same path: clang pair MIP 0.869 (air05
+0.898, neos17 0.897, nu25-pr12 0.754, neos-911970 0.941), all 0.802; gcc
+pair (libstdcxx, no_fma) MIP 0.778, all 0.754. Unit tests: 166/166.
+
 ## 2026-10-07, MIP setup, workers' solutions and the task scheduler in Rust
 
 setup.rs (init, presolve call, runSetup, performRestart, callbacks),

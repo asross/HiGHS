@@ -1960,6 +1960,7 @@ double HighsSearch::getOptimalityLimit() const {
   }
 }
 
+#ifndef HIGHS_RUST
 const std::vector<double>& HighsSearch::getRootLpSol() const {
   return mipsolver.mipdata_->rootlpsol;
 }
@@ -1967,6 +1968,7 @@ const std::vector<double>& HighsSearch::getRootLpSol() const {
 const std::vector<HighsInt>& HighsSearch::getIntegralCols() const {
   return mipsolver.mipdata_->integral_cols;
 }
+#endif  // HIGHS_RUST
 
 HighsDomain& HighsSearch::getDomain() const {
   return mipworker.getGlobalDomain();

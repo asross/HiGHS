@@ -67,6 +67,85 @@ static inline double boundRange(double upper_bound, double lower_bound,
                       : tolerance);
 }
 
+#ifdef HIGHS_RUST
+HighsDomain::HighsDomain(HighsMipSolver& mipsolver)
+    : rsv_(highs_rs::highs_rs_domain_vecs_new(
+          mipsolver.numCol(), mipsolver.model_->col_lower_.data(),
+          mipsolver.model_->col_upper_.data())),
+      changedcolsflags_(rsv_->changedcolsflags),
+      changedcols_(rsv_->changedcols),
+      domchgstack_(rsv_->domchgstack),
+      domchgreason_(rsv_->domchgreason),
+      prevboundval_(rsv_->prevboundval),
+      activitymin_(rsv_->activitymin),
+      activitymax_(rsv_->activitymax),
+      activitymininf_(rsv_->activitymininf),
+      activitymaxinf_(rsv_->activitymaxinf),
+      capacityThreshold_(rsv_->capacity_threshold),
+      propagateflags_(rsv_->propagateflags),
+      propagateinds_(rsv_->propagateinds),
+      mipsolver(&mipsolver),
+      colLowerPos_(rsv_->col_lower_pos),
+      colUpperPos_(rsv_->col_upper_pos),
+      branchPos_(rsv_->branch_pos),
+      col_lower_(rsv_->col_lower),
+      col_upper_(rsv_->col_upper) {
+  infeasible_reason = Reason::unspecified();
+  infeasible_ = false;
+}
+
+HighsDomain::HighsDomain(const HighsDomain& other)
+    : rsv_(highs_rs::highs_rs_domain_vecs_clone(other.rsv_)),
+      changedcolsflags_(rsv_->changedcolsflags),
+      changedcols_(rsv_->changedcols),
+      domchgstack_(rsv_->domchgstack),
+      domchgreason_(rsv_->domchgreason),
+      prevboundval_(rsv_->prevboundval),
+      activitymin_(rsv_->activitymin),
+      activitymax_(rsv_->activitymax),
+      activitymininf_(rsv_->activitymininf),
+      activitymaxinf_(rsv_->activitymaxinf),
+      capacityThreshold_(rsv_->capacity_threshold),
+      propagateflags_(rsv_->propagateflags),
+      propagateinds_(rsv_->propagateinds),
+      objProp_(other.objProp_),
+      mipsolver(other.mipsolver),
+      cutpoolpropagation(other.cutpoolpropagation),
+      conflictPoolPropagation(other.conflictPoolPropagation),
+      infeasible_(other.infeasible_),
+      infeasible_reason(other.infeasible_reason),
+      infeasible_pos(other.infeasible_pos),
+      colLowerPos_(rsv_->col_lower_pos),
+      colUpperPos_(rsv_->col_upper_pos),
+      branchPos_(rsv_->branch_pos),
+      col_lower_(rsv_->col_lower),
+      col_upper_(rsv_->col_upper) {
+  for (CutpoolPropagation& cutpoolprop : cutpoolpropagation)
+    cutpoolprop.domain = this;
+  for (ConflictPoolPropagation& conflictprop : conflictPoolPropagation)
+    conflictprop.domain = this;
+  if (objProp_.domain) objProp_.domain = this;
+}
+
+HighsDomain& HighsDomain::operator=(const HighsDomain& other) {
+  highs_rs::highs_rs_domain_vecs_assign(rsv_, other.rsv_);
+  objProp_ = other.objProp_;
+  mipsolver = other.mipsolver;
+  cutpoolpropagation = other.cutpoolpropagation;
+  conflictPoolPropagation = other.conflictPoolPropagation;
+  infeasible_ = other.infeasible_;
+  infeasible_reason = other.infeasible_reason;
+  invalidateRustView();
+  for (CutpoolPropagation& cutpoolprop : cutpoolpropagation)
+    cutpoolprop.domain = this;
+  for (ConflictPoolPropagation& conflictprop : conflictPoolPropagation)
+    conflictprop.domain = this;
+  if (objProp_.domain) objProp_.domain = this;
+  return *this;
+}
+
+HighsDomain::~HighsDomain() { highs_rs::highs_rs_domain_vecs_free(rsv_); }
+#else
 HighsDomain::HighsDomain(HighsMipSolver& mipsolver) : mipsolver(&mipsolver) {
   col_lower_ = mipsolver.model_->col_lower_;
   col_upper_ = mipsolver.model_->col_upper_;
@@ -77,6 +156,7 @@ HighsDomain::HighsDomain(HighsMipSolver& mipsolver) : mipsolver(&mipsolver) {
   infeasible_reason = Reason::unspecified();
   infeasible_ = false;
 }
+#endif
 
 void HighsDomain::addCutpool(HighsCutPool& cutpool) {
   invalidateRustView();
@@ -90,6 +170,146 @@ void HighsDomain::addConflictPool(HighsConflictPool& conflictPool) {
   conflictPoolPropagation.emplace_back(conflictPoolIndex, this, conflictPool);
 }
 
+#ifdef HIGHS_RUST
+// The pools' propagation domains: their vectors and the cutAdded /
+// conflictAdded hooks are Rust's (rust/src/mip/domain.rs CutPropState,
+// ConfPropState); these shells own the state and register with the pool
+HighsDomain::ConflictPoolPropagation::ConflictPoolPropagation(
+    HighsInt conflictpoolindex, HighsDomain* domain,
+    HighsConflictPool& conflictpool_)
+    : conflictpoolindex(conflictpoolindex),
+      domain(domain),
+      conflictpool_(&conflictpool_),
+      rs_(highs_rs::highs_rs_confprop_new(domain->mipsolver->numCol())),
+      colLowerWatched_(rs_->col_lower_watched),
+      colUpperWatched_(rs_->col_upper_watched),
+      conflictFlag_(rs_->conflict_flag),
+      propagateConflictInds_(rs_->propagate_conflict_inds),
+      watchedLiterals_(rs_->watched) {
+  conflictpool_.addPropagationDomain(this);
+}
+
+HighsDomain::ConflictPoolPropagation::ConflictPoolPropagation(
+    const ConflictPoolPropagation& other)
+    : conflictpoolindex(other.conflictpoolindex),
+      domain(other.domain),
+      conflictpool_(other.conflictpool_),
+      rs_(highs_rs::highs_rs_confprop_clone(other.rs_)),
+      colLowerWatched_(rs_->col_lower_watched),
+      colUpperWatched_(rs_->col_upper_watched),
+      conflictFlag_(rs_->conflict_flag),
+      propagateConflictInds_(rs_->propagate_conflict_inds),
+      watchedLiterals_(rs_->watched) {
+  if (!domain->mipsolver->mipdata_->parallelLockActive() ||
+      conflictpool_ != &domain->mipsolver->mipdata_->getConflictPool())
+    conflictpool_->addPropagationDomain(this);
+}
+
+HighsDomain::ConflictPoolPropagation&
+HighsDomain::ConflictPoolPropagation::operator=(
+    const ConflictPoolPropagation& other) {
+  if (this == &other) return *this;
+  if (conflictpool_) conflictpool_->removePropagationDomain(this);
+  conflictpoolindex = other.conflictpoolindex;
+  domain = other.domain;
+  conflictpool_ = other.conflictpool_;
+  highs_rs::highs_rs_confprop_assign(rs_, other.rs_);
+  assert(!domain->mipsolver->mipdata_->parallelLockActive());
+  if (conflictpool_) conflictpool_->addPropagationDomain(this);
+  return *this;
+}
+
+HighsDomain::ConflictPoolPropagation::~ConflictPoolPropagation() {
+  conflictpool_->removePropagationDomain(this);
+  highs_rs::highs_rs_confprop_free(rs_);
+}
+
+void HighsDomain::ConflictPoolPropagation::conflictDeleted(HighsInt conflict) {
+  highs_rs::highs_rs_confprop_conflict_deleted(rs_, conflict);
+}
+
+void HighsDomain::ConflictPoolPropagation::conflictAdded(HighsInt conflict) {
+  const highs_rs::Bounds b = highs_rs::DomainAccess::bounds(*domain);
+  highs_rs::highs_rs_confprop_conflict_added(rs_, conflictpool_->rust(),
+                                             conflict, &b);
+  // the arrays may have moved: update them in the view
+  highs_rs::DomainAccess::conflictPoolChanged(*domain, conflictpoolindex);
+}
+
+HighsDomain::CutpoolPropagation::CutpoolPropagation(HighsInt cutpoolindex,
+                                                    HighsDomain* domain,
+                                                    HighsCutPool& cutpool_)
+    : cutpoolindex(cutpoolindex),
+      domain(domain),
+      cutpool(&cutpool_),
+      rs_(highs_rs::highs_rs_cutprop_new()),
+      activitycuts_(rs_->activitycuts),
+      activitycutsinf_(rs_->activitycutsinf),
+      propagatecutflags_(rs_->propagatecutflags),
+      propagatecutinds_(rs_->propagatecutinds),
+      capacityThreshold_(rs_->capacity_threshold) {
+  cutpool->addPropagationDomain(this);
+}
+
+HighsDomain::CutpoolPropagation::CutpoolPropagation(
+    const CutpoolPropagation& other)
+    : cutpoolindex(other.cutpoolindex),
+      domain(other.domain),
+      cutpool(other.cutpool),
+      rs_(highs_rs::highs_rs_cutprop_clone(other.rs_)),
+      activitycuts_(rs_->activitycuts),
+      activitycutsinf_(rs_->activitycutsinf),
+      propagatecutflags_(rs_->propagatecutflags),
+      propagatecutinds_(rs_->propagatecutinds),
+      capacityThreshold_(rs_->capacity_threshold) {
+  if (!domain->mipsolver->mipdata_->parallelLockActive() ||
+      cutpool != &domain->mipsolver->mipdata_->getCutPool())
+    cutpool->addPropagationDomain(this);
+}
+
+// Warning: When a domain is copy-assigned, e.g., in `resetLocalDomain`,
+// with the line `localdom = getDomain()`, then it is going to notify
+// all cut / conflict pools that the original was propagating.
+// This would be non-deterministic in the order in which the global
+// pool gets notified. Currently, such code is only run in serial.
+HighsDomain::CutpoolPropagation& HighsDomain::CutpoolPropagation::operator=(
+    const CutpoolPropagation& other) {
+  if (this == &other) return *this;
+  if (cutpool) cutpool->removePropagationDomain(this);
+  cutpoolindex = other.cutpoolindex;
+  domain = other.domain;
+  cutpool = other.cutpool;
+  highs_rs::highs_rs_cutprop_assign(rs_, other.rs_);
+  assert(!domain->mipsolver->mipdata_->parallelLockActive());
+  if (cutpool) cutpool->addPropagationDomain(this);
+  return *this;
+}
+
+HighsDomain::CutpoolPropagation::~CutpoolPropagation() {
+  cutpool->removePropagationDomain(this);
+  highs_rs::highs_rs_cutprop_free(rs_);
+}
+
+void HighsDomain::CutpoolPropagation::cutAdded(HighsInt cut, bool propagate) {
+  const bool global = domain == &domain->mipsolver->mipdata_->getDomain();
+  if (propagate || global) {
+    const highs_rs::Bounds b = highs_rs::DomainAccess::bounds(*domain);
+    highs_rs::highs_rs_cutprop_cut_added(rs_, cutpool->rust(), cut, &b,
+                                         propagate, global);
+  }
+  // the arrays may have moved, and the cut pool's matrix (also for a domain
+  // that does not take the cut): update them in the view
+  highs_rs::DomainAccess::cutPoolChanged(*domain, cutpoolindex);
+}
+
+void HighsDomain::CutpoolPropagation::cutDeleted(
+    HighsInt cut, bool deletedOnlyForPropagation) {
+  const bool keep = deletedOnlyForPropagation &&
+                    domain == &domain->mipsolver->mipdata_->getDomain();
+  assert(!keep || domain->branchPos_.empty());
+  highs_rs::highs_rs_cutprop_cut_deleted(rs_, cut, keep);
+}
+#else
 void HighsDomain::ConflictPoolPropagation::linkWatchedLiteral(
     HighsInt linkPos) {
   assert(watchedLiterals_[linkPos].domchg.column != -1);
@@ -276,6 +496,7 @@ void HighsDomain::ConflictPoolPropagation::markPropagateConflict(
   }
 }
 
+#ifndef HIGHS_RUST
 void HighsDomain::ConflictPoolPropagation::updateActivityLbChange(
     HighsInt col, double oldbound, double newbound) {
   assert(!domain->infeasible_);
@@ -383,6 +604,7 @@ void HighsDomain::ConflictPoolPropagation::propagateConflict(
     }
   }
 }
+#endif  // HIGHS_RUST
 
 HighsDomain::CutpoolPropagation::CutpoolPropagation(HighsInt cutpoolindex,
                                                     HighsDomain* domain,
@@ -524,6 +746,7 @@ void HighsDomain::CutpoolPropagation::markPropagateCut(HighsInt cut) {
   }
 }
 
+#ifndef HIGHS_RUST
 void HighsDomain::CutpoolPropagation::updateActivityLbChange(
     HighsInt col, double oldbound, double newbound, bool threshold,
     bool activity, bool infeasdomain) {
@@ -654,7 +877,62 @@ void HighsDomain::CutpoolPropagation::updateActivityUbChange(
         });
   }
 }
+#endif  // HIGHS_RUST
+#endif  // HIGHS_RUST
 
+#ifdef HIGHS_RUST
+// The objective propagation's state is Rust's (rust/src/mip/objprop.rs
+// ObjPropState): built there on the domain's bounds, owned by this shell
+HighsDomain::ObjectivePropagation::ObjectivePropagation(HighsDomain* domain)
+    : domain(domain),
+      objFunc(&domain->mipsolver->mipdata_->objectiveFunction),
+      cost(domain->mipsolver->model_->col_cost_.data()) {
+  const highs_rs::Bounds b = highs_rs::DomainAccess::bounds(*domain);
+  const auto& nz = objFunc->getObjectiveNonzeros();
+  const auto& starts = objFunc->getCliquePartitionStarts();
+  const auto& packed = objFunc->getObjectiveValuesPacked();
+  rs_ = highs_rs::highs_rs_objprop_new(
+      &b, cost, domain->mipsolver->numCol(), nz.data(), nz.size(),
+      starts.data(), objFunc->getNumCliquePartitions() + 1, packed.data(),
+      packed.size());
+}
+
+HighsDomain::ObjectivePropagation::ObjectivePropagation(
+    const ObjectivePropagation& other)
+    : domain(other.domain),
+      objFunc(other.objFunc),
+      cost(other.cost),
+      rs_(other.rs_ ? highs_rs::highs_rs_objprop_clone(other.rs_) : nullptr) {
+}
+
+HighsDomain::ObjectivePropagation& HighsDomain::ObjectivePropagation::operator=(
+    const ObjectivePropagation& other) {
+  if (this == &other) return *this;
+  highs_rs::highs_rs_objprop_free(rs_);
+  domain = other.domain;
+  objFunc = other.objFunc;
+  cost = other.cost;
+  rs_ = other.rs_ ? highs_rs::highs_rs_objprop_clone(other.rs_) : nullptr;
+  return *this;
+}
+
+HighsDomain::ObjectivePropagation::~ObjectivePropagation() {
+  highs_rs::highs_rs_objprop_free(rs_);
+}
+
+double HighsDomain::ObjectivePropagation::objectiveLowerBound() const {
+  return rs_->num_inf_obj_lower == 0 ? double(rs_->objective_lower)
+                                     : -kHighsInf;
+}
+
+void HighsDomain::ObjectivePropagation::getPropagationConstraint(
+    HighsInt domchgStackSize, const double*& vals, const HighsInt*& inds,
+    HighsInt& len, double& rhs, HighsInt domchgCol) {
+  highs_rs::highs_rs_domain_obj_propagation_constraint(
+      highs_rs::DomainAccess::view(*domain), domchgStackSize, domchgCol, &vals,
+      &inds, &len, &rhs);
+}
+#else
 namespace highs {
 template <>
 struct RbTreeTraits<
@@ -840,7 +1118,9 @@ void HighsDomain::ObjectivePropagation::recomputeCapacityThreshold() {
                        domain->feastol(), domain->variableType(col)));
   }
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsDomain::ObjectivePropagation::updateActivityLbChange(
     HighsInt col, double oldbound, double newbound) {
   if (cost[col] <= 0.0) {
@@ -1091,7 +1371,9 @@ bool HighsDomain::ObjectivePropagation::shouldBePropagated() const {
 
   return true;
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsDomain::ObjectivePropagation::debugCheckObjectiveLower() const {
 #ifndef NDEBUG
   if (domain->infeasible_) return;
@@ -1138,7 +1420,9 @@ void HighsDomain::ObjectivePropagation::debugCheckObjectiveLower() const {
   assert(numInf == numInfObjLower);
 #endif
 }
+#endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsDomain::ObjectivePropagation::propagate() {
   if (!shouldBePropagated()) return;
 
@@ -1274,6 +1558,7 @@ void HighsDomain::ObjectivePropagation::propagate() {
   recomputeCapacityThreshold();
   isPropagated = true;
 }
+#endif  // HIGHS_RUST
 
 void HighsDomain::computeMinActivity(HighsInt start, HighsInt end,
                                      const HighsInt* ARindex,
@@ -1287,7 +1572,7 @@ void HighsDomain::computeMinActivity(HighsInt start, HighsInt end,
                                                false, &ninfmin, &activitymin);
     return;
   }
-#endif
+#else
   if (infeasible_) {
     activitymin = 0.0;
     ninfmin = 0;
@@ -1327,6 +1612,7 @@ void HighsDomain::computeMinActivity(HighsInt start, HighsInt end,
     }
   }
   activitymin.renormalize();
+#endif  // HIGHS_RUST
 }
 
 void HighsDomain::computeMaxActivity(HighsInt start, HighsInt end,
@@ -1341,7 +1627,7 @@ void HighsDomain::computeMaxActivity(HighsInt start, HighsInt end,
                                                true, &ninfmax, &activitymax);
     return;
   }
-#endif
+#else
   if (infeasible_) {
     activitymax = 0.0;
     ninfmax = 0;
@@ -1380,8 +1666,10 @@ void HighsDomain::computeMaxActivity(HighsInt start, HighsInt end,
     }
   }
   activitymax.renormalize();
+#endif  // HIGHS_RUST
 }
 
+#ifndef HIGHS_RUST
 double HighsDomain::adjustedUb(HighsInt col, HighsCDouble boundVal,
                                bool& accept) const {
   double bound;
@@ -1445,6 +1733,7 @@ double HighsDomain::adjustedLb(HighsInt col, HighsCDouble boundVal,
 
   return bound;
 }
+#endif  // HIGHS_RUST
 
 HighsInt HighsDomain::propagateRowUpper(const HighsInt* Rindex,
                                         const double* Rvalue, HighsInt Rlen,
@@ -1459,7 +1748,7 @@ HighsInt HighsDomain::propagateRowUpper(const HighsInt* Rindex,
                                                    Rupper, &minactivity,
                                                    ninfmin, false, boundchgs);
   }
-#endif
+#else
   assert(std::isfinite(double(minactivity)));
   if (ninfmin > 1) return 0;
   HighsInt numchgs = 0;
@@ -1508,6 +1797,7 @@ HighsInt HighsDomain::propagateRowUpper(const HighsInt* Rindex,
   }
 
   return numchgs;
+#endif  // HIGHS_RUST
 }
 
 HighsInt HighsDomain::propagateRowLower(const HighsInt* Rindex,
@@ -1523,7 +1813,7 @@ HighsInt HighsDomain::propagateRowLower(const HighsInt* Rindex,
                                                    Rlower, &maxactivity,
                                                    ninfmax, true, boundchgs);
   }
-#endif
+#else
   assert(std::isfinite(double(maxactivity)));
   if (ninfmax > 1) return 0;
   HighsInt numchgs = 0;
@@ -1568,8 +1858,10 @@ HighsInt HighsDomain::propagateRowLower(const HighsInt* Rindex,
   }
 
   return numchgs;
+#endif  // HIGHS_RUST
 }
 
+#ifndef HIGHS_RUST
 void HighsDomain::updateThresholdLbChange(HighsInt col, double newbound,
                                           double val, double& threshold) const {
   if (newbound != col_upper_[col]) {
@@ -1970,6 +2262,7 @@ void HighsDomain::updateRedundantRows(HighsInt row) {
   // row is redundant
   redundantRows_.insert(row);
 }
+#endif  // HIGHS_RUST
 
 double HighsDomain::getRedundantRowValue(HighsInt row) const {
   if (mipsolver->rowLower(row) != -kHighsInf) {
@@ -1981,6 +2274,7 @@ double HighsDomain::getRedundantRowValue(HighsInt row) const {
   }
 }
 
+#ifndef HIGHS_RUST
 bool HighsDomain::isRedundantRow(HighsInt row) const {
   return (getMinActivity(row) >= mipsolver->rowLower(row) - feastol() &&
           getMaxActivity(row) <= mipsolver->rowUpper(row) + feastol());
@@ -2031,9 +2325,13 @@ void HighsDomain::markPropagate(HighsInt row) {
     }
   }
 }
+#endif  // HIGHS_RUST
 
 void HighsDomain::computeRowActivities() {
   invalidateRustView();
+#ifdef HIGHS_RUST
+  highs_rs::highs_rs_domain_vecs_size_rows(rsv_, mipsolver->numRow());
+#else
   activitymin_.resize(mipsolver->numRow());
   activitymininf_.resize(mipsolver->numRow());
   activitymax_.resize(mipsolver->numRow());
@@ -2041,6 +2339,7 @@ void HighsDomain::computeRowActivities() {
   capacityThreshold_.resize(mipsolver->numRow());
   propagateflags_.resize(mipsolver->numRow());
   propagateinds_.reserve(mipsolver->numRow());
+#endif
 
 #ifdef HIGHS_RUST
   {
@@ -2048,7 +2347,7 @@ void HighsDomain::computeRowActivities() {
     highs_rs::highs_rs_domain_compute_row_activities(v);
     return;
   }
-#endif
+#else
 
   for (HighsInt i = 0; i != mipsolver->numRow(); ++i) {
     HighsInt start = mipsolver->mipdata_->ARstart_[i];
@@ -2070,8 +2369,10 @@ void HighsDomain::computeRowActivities() {
       // propagateinds_.push_back(i);
     }
   }
+#endif  // HIGHS_RUST
 }
 
+#ifndef HIGHS_RUST
 double HighsDomain::doChangeBound(const HighsDomainChange& boundchg) {
   double oldbound;
 
@@ -2103,13 +2404,14 @@ double HighsDomain::doChangeBound(const HighsDomainChange& boundchg) {
 
   return oldbound;
 }
+#endif  // HIGHS_RUST
 
 void HighsDomain::changeBound(HighsDomainChange boundchg, Reason reason) {
 #ifdef HIGHS_RUST
   highs_rs::highs_rs_domain_change_bound(highs_rs::DomainAccess::view(*this),
                                          boundchg, reason);
   return;
-#endif
+#else
   assert(boundchg.column >= 0);
   assert(boundchg.column < (HighsInt)col_upper_.size());
   // assert(infeasible_ == 0);
@@ -2191,8 +2493,10 @@ void HighsDomain::changeBound(HighsDomainChange boundchg, Reason reason) {
           *this, boundchg.column, col_lower_[boundchg.column] > 0.5);
     }
   }
+#endif  // HIGHS_RUST
 }
 
+#ifndef HIGHS_RUST
 bool HighsDomain::checkChangeBound(HighsBoundType boundtype, HighsInt col,
                                    HighsCDouble boundval, Reason reason) {
   if (std::abs(static_cast<double>(boundval * kHighsTiny)) > feastol())
@@ -2205,6 +2509,7 @@ bool HighsDomain::checkChangeBound(HighsBoundType boundtype, HighsInt col,
   changeBound(boundtype, col, bound, reason);
   return true;
 }
+#endif  // HIGHS_RUST
 
 void HighsDomain::setDomainChangeStack(
     const std::vector<HighsDomainChange>& domchgstack) {
@@ -2213,7 +2518,7 @@ void HighsDomain::setDomainChangeStack(
       highs_rs::DomainAccess::view(*this), domchgstack.data(),
       domchgstack.size(), nullptr, 0);
   return;
-#endif
+#else
   infeasible_ = false;
   mipsolver->mipdata_->debugSolution.resetDomain(*this);
 
@@ -2243,6 +2548,7 @@ void HighsDomain::setDomainChangeStack(
 
     if (infeasible_) break;
   }
+#endif  // HIGHS_RUST
 }
 
 void HighsDomain::setDomainChangeStack(
@@ -2254,7 +2560,7 @@ void HighsDomain::setDomainChangeStack(
       domchgstack.size(), highs_rs::nonNull(branchingPositions.data()),
       branchingPositions.size());
   return;
-#endif
+#else
   infeasible_ = false;
   mipsolver->mipdata_->debugSolution.resetDomain(*this);
 
@@ -2331,6 +2637,7 @@ void HighsDomain::setDomainChangeStack(
     if (!infeasible_) propagate();
     if (infeasible_) break;
   }
+#endif  // HIGHS_RUST
 }
 
 void HighsDomain::backtrackToGlobal() {
@@ -2338,7 +2645,7 @@ void HighsDomain::backtrackToGlobal() {
   highs_rs::highs_rs_domain_backtrack(highs_rs::DomainAccess::view(*this),
                                       true);
   return;
-#endif
+#else
   HighsInt k = HighsInt(domchgstack_.size()) - 1;
   bool old_infeasible = infeasible_;
   Reason old_reason = infeasible_reason;
@@ -2396,13 +2703,14 @@ void HighsDomain::backtrackToGlobal() {
   prevboundval_.clear();
   domchgreason_.clear();
   branchPos_.clear();
+#endif  // HIGHS_RUST
 }
 
 HighsDomainChange HighsDomain::backtrack() {
 #ifdef HIGHS_RUST
   return highs_rs::highs_rs_domain_backtrack(
       highs_rs::DomainAccess::view(*this), false);
-#endif
+#else
   HighsInt k = HighsInt(domchgstack_.size()) - 1;
   bool old_infeasible = infeasible_;
   Reason old_reason = infeasible_reason;
@@ -2472,13 +2780,14 @@ HighsDomainChange HighsDomain::backtrack() {
   prevboundval_.resize(k);
 
   return backtrackboundchg;
+#endif  // HIGHS_RUST
 }
 
 bool HighsDomain::propagate() {
 #ifdef HIGHS_RUST
   return highs_rs::highs_rs_domain_propagate(
       highs_rs::DomainAccess::view(*this));
-#endif
+#else
   std::vector<HighsInt> propagateinds;
 
   auto havePropagationRows = [&]() {
@@ -2673,6 +2982,7 @@ bool HighsDomain::propagate() {
   }
 
   return true;
+#endif  // HIGHS_RUST
 }
 
 double HighsDomain::getColLowerPos(HighsInt col, HighsInt stackpos,
@@ -2714,10 +3024,11 @@ void HighsDomain::conflictAnalysis(HighsConflictPool& conflictPool,
     highs_rs::highs_rs_conflict_analysis(&c);
     return;
   }
-#endif
+#else
   ConflictSet conflictSet(*this, globaldom);
 
   conflictSet.conflictAnalysis(conflictPool, pseudocost);
+#endif  // HIGHS_RUST
 }
 
 void HighsDomain::conflictAnalysis(const HighsInt* proofinds,
@@ -2741,10 +3052,11 @@ void HighsDomain::conflictAnalysis(const HighsInt* proofinds,
                                                prooflen, proofrhs);
     return;
   }
-#endif
+#else
   ConflictSet conflictSet(*this, globaldom);
   conflictSet.conflictAnalysis(proofinds, proofvals, prooflen, proofrhs,
                                conflictPool, pseudocost);
+#endif  // HIGHS_RUST
 }
 
 void HighsDomain::conflictAnalyzeReconvergence(
@@ -2767,7 +3079,7 @@ void HighsDomain::conflictAnalyzeReconvergence(
                                               prooflen, proofrhs);
     return;
   }
-#endif
+#else
   ConflictSet conflictSet(*this, globaldom);
 
   HighsInt ninfmin;
@@ -2804,6 +3116,7 @@ void HighsDomain::conflictAnalyzeReconvergence(
                            pseudocost);
   conflictPool.addReconvergenceCut(*this, conflictSet.reconvergenceFrontier,
                                    domchg);
+#endif  // HIGHS_RUST
 }
 
 void HighsDomain::tightenCoefficients(HighsInt* inds, double* vals,
@@ -2814,7 +3127,7 @@ void HighsDomain::tightenCoefficients(HighsInt* inds, double* vals,
     highs_rs::highs_rs_domain_tighten_coefficients(&b, inds, vals, len, &rhs);
     return;
   }
-#endif
+#else
   HighsCDouble maxactivity = 0;
 
   for (HighsInt i = 0; i != len; ++i) {
@@ -2855,6 +3168,7 @@ void HighsDomain::tightenCoefficients(HighsInt* inds, double* vals,
       rhs = double(upper);
     }
   }
+#endif  // HIGHS_RUST
 }
 
 double HighsDomain::getMinCutActivity(const HighsCutPool& cutpool,
@@ -2915,6 +3229,7 @@ static inline double computePrio(double val, double bound, double globalbound,
                    static_cast<double>(1 + numnodes));
 }
 
+#ifndef HIGHS_RUST
 bool HighsDomain::ConflictSet::explainBoundChangeGeq(
     const std::set<LocalDomChg>& currentFrontier, const LocalDomChg& domchg,
     const HighsInt* inds, const double* vals, HighsInt len, double rhs,
@@ -4112,3 +4427,4 @@ void HighsDomain::ConflictSet::conflictAnalysis(const HighsInt* proofinds,
   if (currDepth == lastDepth)
     conflictPool.addConflictCut(localdom, reasonSideFrontier);
 }
+#endif  // HIGHS_RUST

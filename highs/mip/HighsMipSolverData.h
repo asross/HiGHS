@@ -28,6 +28,7 @@
 #include "mip/HighsPrimalHeuristics.h"
 #include "mip/HighsPseudocost.h"
 #include "mip/HighsRedcostFixing.h"
+#include "mip/HighsRsSpan.h"
 #include "mip/HighsSearch.h"
 #include "mip/HighsSeparation.h"
 #include "parallel/HighsParallel.h"
@@ -35,6 +36,45 @@
 #include "presolve/HighsSymmetry.h"
 #include "util/HighsTimer.h"
 
+#ifdef HIGHS_RUST
+namespace highs_rs {
+struct ConcurrentMain;
+// rust/src/mip/concurrent.rs: stops and frees the main solver's helper
+extern "C" void highs_rs_concurrent_lns_stop(ConcurrentMain** main);
+// rust/src/mip/mip_data.rs MipVecs: HighsMipSolverData's vectors
+struct MipVecs {
+  HighsRsArray<double> incumbent;
+  HighsRsArray<double> firstlpsol;
+  HighsRsArray<double> rootlpsol;
+  HighsRsArray<double> analytic_center;
+  HighsRsArray<HighsInt> ar_start;
+  HighsRsArray<HighsInt> ar_index;
+  HighsRsArray<double> ar_value;
+  HighsRsArray<double> max_abs_row_coef;
+  HighsRsArray<uint8_t> row_integral;
+  HighsRsArray<HighsInt> uplocks;
+  HighsRsArray<HighsInt> downlocks;
+  HighsRsArray<HighsInt> integer_cols;
+  HighsRsArray<HighsInt> implint_cols;
+  HighsRsArray<HighsInt> integral_cols;
+  HighsRsArray<HighsInt> continuous_cols;
+};
+extern "C" {
+MipVecs* highs_rs_mip_vecs_new();
+void highs_rs_mip_vecs_free(MipVecs* v);
+// vector `which` (mip_data.rs mod vec) = the n elements of data
+void highs_rs_mip_vecs_set(MipVecs* v, int which, const void* data,
+                           HighsInt n);
+}
+// owns the vectors; declared first in HighsMipSolverData, freed last
+struct MipVecsOwner {
+  MipVecs* p = highs_rs_mip_vecs_new();
+  MipVecsOwner() = default;
+  MipVecsOwner(const MipVecsOwner&) = delete;
+  ~MipVecsOwner() { highs_rs_mip_vecs_free(p); }
+};
+}  // namespace highs_rs
+#else
 // Incumbents exchanged between the MIP solver and a concurrent LNS
 // helper: a second MIP solver instance on a copy of the presolved model,
 // run in its own thread, that only does the root LP, cuts and graph LNS
@@ -105,6 +145,7 @@ struct HighsConcurrentLns {
     return true;
   }
 };
+#endif  // HIGHS_RUST
 
 struct HighsPrimaDualIntegral {
   double value;
@@ -170,6 +211,10 @@ struct HighsMipScalars {
   bool lns_quick_improved = false;
   bool crossoverStartLogged = false;
   bool rootCutsImported = false;
+#ifdef HIGHS_RUST
+  // the main solver's concurrent LNS helper (rust/src/mip/concurrent.rs)
+  highs_rs::ConcurrentMain* concurrent_lns = nullptr;
+#endif
 };
 
 enum MipSolutionSource : int {
@@ -201,6 +246,9 @@ enum MipSolutionSource : int {
 };
 
 struct HighsMipSolverData {
+#ifdef HIGHS_RUST
+  highs_rs::MipVecsOwner rsv_;
+#endif
   HighsMipSolver& mipsolver;
   HighsMipScalars sc_;
 
@@ -233,6 +281,20 @@ struct HighsMipSolverData {
   HighsInt& numCliqueEntriesAfterPresolve;
   HighsInt& numCliqueEntriesAfterFirstPresolve;
 
+#ifdef HIGHS_RUST
+  // Rust's (MipVecs), in place
+  HighsRsArray<HighsInt>& ARstart_;
+  HighsRsArray<HighsInt>& ARindex_;
+  HighsRsArray<double>& ARvalue_;
+  HighsRsArray<double>& maxAbsRowCoef;
+  HighsRsArray<uint8_t>& rowintegral;
+  HighsRsArray<HighsInt>& uplocks;
+  HighsRsArray<HighsInt>& downlocks;
+  HighsRsArray<HighsInt>& integer_cols;
+  HighsRsArray<HighsInt>& implint_cols;
+  HighsRsArray<HighsInt>& integral_cols;
+  HighsRsArray<HighsInt>& continuous_cols;
+#else
   std::vector<HighsInt> ARstart_;
   std::vector<HighsInt> ARindex_;
   std::vector<double> ARvalue_;
@@ -244,6 +306,7 @@ struct HighsMipSolverData {
   std::vector<HighsInt> implint_cols;
   std::vector<HighsInt> integral_cols;
   std::vector<HighsInt> continuous_cols;
+#endif
 
   HighsSymmetries symmetries;
   std::shared_ptr<const StabilizerOrbits> globalOrbits;
@@ -252,9 +315,15 @@ struct HighsMipSolverData {
   double& epsilon;
   double& heuristic_effort;
   int64_t& dispfreq;
+#ifdef HIGHS_RUST
+  HighsRsArray<double>& analyticCenter;
+  HighsRsArray<double>& firstlpsol;
+  HighsRsArray<double>& rootlpsol;
+#else
   std::vector<double> analyticCenter;
   std::vector<double> firstlpsol;
   std::vector<double> rootlpsol;
+#endif
   double& firstlpsolobj;
   HighsBasis firstrootbasis;
   double& rootlpsolobj;
@@ -288,7 +357,11 @@ struct HighsMipSolverData {
   double& upper_bound;
   double& upper_limit;
   double& optimality_limit;
+#ifdef HIGHS_RUST
+  HighsRsArray<double>& incumbent;
+#else
   std::vector<double> incumbent;
+#endif
 
   HighsNodeQueue nodequeue;
 
@@ -301,7 +374,13 @@ struct HighsMipSolverData {
 #endif
 
   HighsMipSolverData(HighsMipSolver& mipsolver);
+#ifdef HIGHS_RUST
+  ~HighsMipSolverData() {
+    highs_rs::highs_rs_concurrent_lns_stop(&sc_.concurrent_lns);
+  }
+#else
   ~HighsMipSolverData() { stopConcurrentLns(); }
+#endif
 
   // The main solver owns its concurrent LNS helper; the helper reaches the
   // same pool through mipsolver.concurrent_lns_
@@ -316,10 +395,11 @@ struct HighsMipSolverData {
   // the LP iterations of the quick graph-LNS search
   int64_t& lns_quick_lp_iterations;
 
-  std::unique_ptr<HighsConcurrentLns> concurrent_lns;
   int64_t& concurrent_lns_seen;
   bool& crossoverStartLogged;
   bool useConcurrentHelper() const;
+#ifndef HIGHS_RUST
+  std::unique_ptr<HighsConcurrentLns> concurrent_lns;
   void startConcurrentLns();
   // in a concurrent LNS helper: cross its incumbent with the main solver's
   void crossoverWithMain(HighsMipWorker& worker);
@@ -327,6 +407,7 @@ struct HighsMipSolverData {
   void stopConcurrentLns();
   void publishRootCuts();
   bool importRootCuts(HighsMipWorker& worker);
+#endif
   bool& rootCutsImported;
 
   bool solutionRowFeasible(const std::vector<double>& solution) const;
@@ -416,7 +497,9 @@ struct HighsMipSolverData {
                     const bool print_display_line = true,
                     const bool is_user_solution = false);
 
+#ifndef HIGHS_RUST
   const std::vector<double>& getSolution() const;
+#endif
 
   std::string solutionSourceToString(const int solution_source,
                                      const bool code = true) const;

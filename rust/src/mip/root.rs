@@ -54,13 +54,10 @@ pub mod op {
     pub const LP_REMOVE_OBSOLETE_ROWS: i32 = 127;
     /// a heuristic on the root (i: see heur below)
     pub const HEUR: i32 = 128;
-    pub const START_CONCURRENT_LNS: i32 = 129;
-    pub const SYNC_CONCURRENT_LNS: i32 = 130;
-    pub const CROSSOVER_WITH_MAIN: i32 = 131;
-    /// if the helper and the main solver search independently: sync, and
-    /// the main solver's quick search is done
-    pub const MAIN_QUICK_DONE: i32 = 132;
-    pub const IMPORT_ROOT_CUTS: i32 = 134;
+    /// the cut pool's cuts violated by the LP solution into the LP
+    /// (returns 1 if there were any)
+    pub const SEPARATE_POOL_INTO_LP: i32 = 133;
+    /// the LP's cut rows to the helper's pool (setRootCuts)
     pub const PUBLISH_ROOT_CUTS: i32 = 135;
     /// the root node on the node queue
     pub const NODEQUEUE_ROOT: i32 = 137;
@@ -74,8 +71,6 @@ pub mod op {
     pub const TERMINATE: i32 = 142;
     /// getLp().getAvgSolveIters()
     pub const LP_AVG_SOLVE_ITERS: i32 = 143;
-    /// whether the helper and the main solver search independently
-    pub const CONCURRENT_INDEPENDENT: i32 = 144;
     /// the LP solver basis is valid and the LP has only model rows
     pub const LP_BASIS_VALID: i32 = 145;
     /// getLp().getLpSolver().getBasis().valid
@@ -331,8 +326,8 @@ impl MipData {
             // graph LNS is for a loose target gap
             let run_graph_lns = o.run_graph_lns && o.mip_rel_gap >= 1e-3;
             if run_graph_lns {
-                self.o(op::START_CONCURRENT_LNS);
-                if self.sc().num_restarts == 0 && (!self.concurrent_helper || self.ob(op::CONCURRENT_INDEPENDENT)) {
+                self.start_concurrent_lns();
+                if self.sc().num_restarts == 0 && self.helper_lns().is_none_or(|p| p.independent()) {
                     let before = self.sc().upper_bound;
                     let quick_iters = -(self.op(op::WORKER_HEUR_LP_ITERATIONS, Some(w), 0, 0.0) as i64);
                     self.heur(w, heur::GRAPH_LNS_QUICK_FIRST);
@@ -344,8 +339,8 @@ impl MipData {
                         && sc.upper_bound - sc.lower_bound <= 3.0 * (sc.upper_bound - sc.optimality_limit);
                     self.oi(op::SET_SKIP_ANALYTIC_CENTER, skip as i64);
                 }
-                self.o(op::MAIN_QUICK_DONE);
-                self.op(op::CROSSOVER_WITH_MAIN, Some(w), 0, 0.0);
+                self.concurrent_main_quick_done();
+                self.crossover_with_main(w);
             }
             self.heur(w, heur::FLUSH);
             status = self.eval_root_lp_timed(w);
@@ -408,9 +403,9 @@ impl MipData {
                     }
                 }
                 nseparounds += 1;
-                self.o(op::SYNC_CONCURRENT_LNS);
-                self.op(op::CROSSOVER_WITH_MAIN, Some(w), 0, 0.0);
-                if self.op(op::IMPORT_ROOT_CUTS, Some(w), 0, 0.0) != 0.0 {
+                self.sync_concurrent_lns();
+                self.crossover_with_main(w);
+                if self.import_root_cuts(w) {
                     self.stop(clk::ROOT_SEPARATION);
                     return self.clock_off_done();
                 }
@@ -555,9 +550,7 @@ impl MipData {
             }
             // a deeper graph-LNS search on the LP with the root cuts (see
             // HighsMipSolverData.cpp); a helper's root cuts are done
-            if self.concurrent_helper {
-                self.o(op::PUBLISH_ROOT_CUTS);
-            }
+            self.publish_root_cuts();
             {
                 let sc = self.sc();
                 if run_graph_lns
@@ -581,8 +574,8 @@ impl MipData {
                     if self.concurrent_helper {
                         let mut round = 0;
                         while round < 50 && !self.check_limits_rs(0) {
-                            self.o(op::SYNC_CONCURRENT_LNS);
-                            self.op(op::CROSSOVER_WITH_MAIN, Some(w), 0, 0.0);
+                            self.sync_concurrent_lns();
+                            self.crossover_with_main(w);
                             self.heur(w, heur::GRAPH_LNS_DEEP_ROOT);
                             self.heur(w, heur::FLUSH);
                             round += 1;

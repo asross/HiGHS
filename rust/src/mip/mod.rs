@@ -7,6 +7,7 @@
 //! (redcost.rs).
 
 pub mod clique;
+pub mod concurrent;
 mod clique_ffi;
 pub mod conflict;
 pub mod cuts;

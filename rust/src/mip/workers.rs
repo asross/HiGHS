@@ -3,17 +3,66 @@
 //! uses under the parallel lock: its bounds are updated and the solution
 //! buffered for the main solver) and the synchronization of the workers'
 //! solutions and global domains with the solver's (HighsMipSolver::run's
-//! syncSolutions, syncGlobalDomain and resetGlobalDomain). The workers are
-//! C++ objects reached through CMipFns (`worker`, `worker_view`, the
-//! solution buffer and scratch solution) and op codes from 400 below.
+//! syncSolutions, syncGlobalDomain and resetGlobalDomain). A worker's
+//! state (bounds, statistics, generator, solution buffer) is Rust's
+//! ([`WorkerState`]); the C++ HighsMipWorker owns it and keeps its
+//! pointers to the C++ objects it works on (LP relaxation, domains, pools,
+//! pseudocosts, search), reached through CMipFns (`worker`,
+//! `worker_view`, the scratch solution) and op codes from 400 below.
 
 use super::domain::{DomChg, Reason, LOWER, UPPER};
-use super::glue::{fns, Dom, MipData, ScratchView, Worker, P};
+use super::glue::{fns, Dom, HeurStats, MipData, ScratchView, Worker, P};
+use crate::util::random::HighsRandom;
+
+/// HighsMipWorker's state; the fields up to `heuristics_allowed` have the
+/// layout of HighsMipWorker::RsState (C++ reads and writes them in place)
+#[repr(C)]
+pub struct WorkerState {
+    pub upper_bound: f64,
+    pub upper_limit: f64,
+    pub optimality_limit: f64,
+    pub heur: HeurStats,
+    pub num_neighbourhood_queries: i64,
+    pub sepa_lp_iterations: i64,
+    pub randgen: HighsRandom,
+    pub heuristics_allowed: bool,
+    /// the buffered solutions (solution, objective, source)
+    pub solutions: Vec<(Vec<f64>, f64, i32)>,
+}
+
+/// A worker's state with the solver's bounds and the seeded generator
+/// (freed by highs_rs_worker_state_free)
+#[no_mangle]
+pub extern "C" fn highs_rs_worker_state_new(
+    seed: i32,
+    upper_bound: f64,
+    upper_limit: f64,
+    optimality_limit: f64,
+) -> *mut WorkerState {
+    Box::into_raw(Box::new(WorkerState {
+        upper_bound,
+        upper_limit,
+        optimality_limit,
+        heur: HeurStats::default(),
+        num_neighbourhood_queries: 0,
+        sepa_lp_iterations: 0,
+        randgen: HighsRandom::new(seed as u32),
+        heuristics_allowed: true,
+        solutions: Vec::new(),
+    }))
+}
+
+/// # Safety
+/// `s` from highs_rs_worker_state_new, or null
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_worker_state_free(s: *mut WorkerState) {
+    if !s.is_null() {
+        drop(Box::from_raw(s));
+    }
+}
 
 /// The operations on the workers (CMipFns::op codes from 400)
 pub mod op {
-    /// worker i's solution buffer cleared
-    pub const CLEAR_SOLUTIONS: i32 = 400;
     /// cliquetable.cleanupFixed(getDomain())
     pub const CLEANUP_FIXED: i32 = 401;
     /// worker i's global domain: empty domain change stack, the search's
@@ -21,15 +70,6 @@ pub mod op {
     pub const RESET_WORKER_DOMAIN_END: i32 = 402;
     /// setParallelLock(i != 0)
     pub const SET_PARALLEL_LOCK: i32 = 403;
-}
-
-/// A buffered solution of a worker (CMipFns::worker_solution)
-#[repr(C)]
-pub struct WorkerSol {
-    pub x: *const f64,
-    pub n: i32,
-    pub obj: f64,
-    pub source: i32,
 }
 
 /// The worker `k` of the solver
@@ -52,23 +92,20 @@ impl MipData {
 
     /// HighsMipWorker::addIncumbent
     pub fn worker_add_incumbent(&self, w: &Worker, sol: &[f64], solobj: f64, source: i32) -> bool {
-        let d = &w.d;
-        // SAFETY: the worker's fields, used by its own thread only
-        unsafe {
-            if solobj < *d.upper_bound {
-                let (feasible, transformed) = self.worker_transform(w, sol);
-                if feasible && transformed < *d.upper_bound {
-                    *d.upper_bound = transformed;
-                    let new_upper_limit = self.compute_new_upper_limit(transformed, 0.0, 0.0);
-                    if new_upper_limit < *d.upper_limit {
-                        *d.upper_limit = new_upper_limit;
-                        *d.optimality_limit =
-                            self.compute_new_upper_limit(transformed, self.opts.mip_abs_gap, self.opts.mip_rel_gap);
-                    }
+        if solobj < w.state().upper_bound {
+            let (feasible, transformed) = self.worker_transform(w, sol);
+            let s = w.state();
+            if feasible && transformed < s.upper_bound {
+                s.upper_bound = transformed;
+                let new_upper_limit = self.compute_new_upper_limit(transformed, 0.0, 0.0);
+                if new_upper_limit < s.upper_limit {
+                    s.upper_limit = new_upper_limit;
+                    s.optimality_limit =
+                        self.compute_new_upper_limit(transformed, self.opts.mip_abs_gap, self.opts.mip_rel_gap);
                 }
-                // infeasible ones too: they cannot be repaired locally
-                (fns().worker_push_solution)(w.p, sol.as_ptr(), sol.len() as i32, solobj, source);
             }
+            // infeasible ones too: they cannot be repaired locally
+            s.solutions.push((sol.to_vec(), solobj, source));
         }
         true
     }
@@ -104,20 +141,11 @@ impl MipData {
     pub fn sync_solutions(&self) {
         for k in 0..self.num_workers() {
             let w = worker(self, k);
-            let mut j = 0;
-            loop {
-                let mut s = WorkerSol { x: std::ptr::null(), n: 0, obj: 0.0, source: 0 };
-                // SAFETY: the C++ operation on the live worker
-                if !unsafe { (fns().worker_solution)(w.p, j, &mut s) } {
-                    break;
-                }
-                // SAFETY: the buffered vector, copied before the solver
-                // changes anything
-                let x = unsafe { crate::ffi::sl(s.x, s.n) }.to_vec();
-                self.add_incumbent_rs(&x, s.obj, s.source, true, false);
-                j += 1;
+            // taken first: adding an incumbent does not use the buffer
+            let sols = std::mem::take(&mut w.state().solutions);
+            for (x, obj, source) in sols {
+                self.add_incumbent_rs(&x, obj, source, true, false);
             }
-            self.op(op::CLEAR_SOLUTIONS, None, k as i64, 0.0);
         }
     }
 

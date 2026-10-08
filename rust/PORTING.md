@@ -234,15 +234,36 @@ INVERT of putIterate/getIterate are held by the Rust factor.
 
 ## The MIP domain (HighsDomain)
 
-HighsDomain keeps its C++ class and data (external code reads col_lower_,
-col_upper_ and the stack everywhere); under HIGHS_RUST it runs in Rust
+HighsDomain's own vectors are Rust's: a `DomainVecs` (mip/domain.rs) of
+the bounds, bound positions, branching positions, changed columns, the
+domain change stack with its reasons and previous bounds, the row
+activities, infinity counts, thresholds and propagation flags, and the
+scratch of propagate(). The C++ HighsDomain owns it (made, copied,
+assigned, sized for the rows and freed by Rust calls) and its old members
+(col_lower_, domchgstack_, ...) are references to the fields in place:
+`HighsRsArray` (HighsRsSpan.h), the begin/end/capacity layout of Rust's
+StdVec, which C++ reads, writes and shrinks and only Rust grows. The
+getters return these arrays. The pools' propagation domains are Rust's
+too: CutpoolPropagation and ConflictPoolPropagation are shells that own a
+`CutPropState` / `ConfPropState` (activities, flags, thresholds, rows to
+propagate; watched literals with their column lists), refer to its
+vectors in place and register with their pool as before (copies under
+the parallel lock only with a pool that is not the global one); the
+pools' cutAdded / cutDeleted / conflictAdded / conflictDeleted hooks run in
+Rust on the domain's bounds (`Bounds`) and the Rust pool, and the C++
+shell refreshes the view afterwards (also when the cut is not taken: the
+pool's matrix may have moved). So is the objective propagation's state
+(`ObjPropState`, objprop.rs: the contributions with their red-black trees,
+the partition cliques, the lower bound and threshold), built in Rust on
+the domain's bounds and owned by the C++ ObjectivePropagation shell, whose
+getPropagationConstraint forwards to Rust. The
+C++ bodies of the ported domain code are not compiled under HIGHS_RUST. The domain runs in Rust
 (mip/domain.rs, objprop.rs, conflict.rs) on a view of that data: changeBound
 with the domain change stack, its reasons and previous bounds,
 backtrack/backtrackToGlobal, setDomainChangeStack, the whole propagate()
 loop (model rows, cuts, conflicts, objective), the activity updates with
 infinity counts and capacity thresholds, ObjectivePropagation with its
-red-black trees (HighsRbTree ported exactly: the trees are built by the C++
-constructor and updated in Rust), conflict analysis (ConflictSet: the
+red-black trees (HighsRbTree ported exactly), conflict analysis (ConflictSet: the
 frontiers are BTreeMaps by stack position) and tightenCoefficients. Still
 C++: the clique table's and implications' fixings of a fixed binary (called
 back through one function, which re-enters changeBound), adding a
@@ -255,9 +276,8 @@ HighsDomain::rsView_ and refilled where a vector it holds by data() and
 size() may move: copy, assignment, computeRowActivities,
 setupObjectivePropagation, adding or clearing pools; cutAdded and
 conflictAdded update their pool's part in place. The vectors that grow
-during propagation are passed as the std::vector objects (StdVec, the
-begin/end/capacity layout, checked at runtime) and appended to in place,
-with a C++ reserve when full. Rust's Dom derefs to the view and indexes its
+during propagation are passed as the vector objects (StdVec) and appended
+to in place with the Rust allocator (`rs_reserve`). Rust's Dom derefs to the view and indexes its
 pointer+length pairs with bounds checks; the hot loops copy the pairs they
 use into locals. Only Ctx::change_bound calls back into C++ code that
 re-enters Rust; Dom views are borrowed from the Ctx, so none is alive
@@ -487,17 +507,22 @@ mutations).
 The scalars of HighsMipSolverData are one struct (HighsMipScalars, same
 layout as glue.rs `MipScalars`, size checked on both sides); the old
 fields are references into it, so the rest of the solver reads them
-unchanged. Rust gets them in place with pointers to the solver's vectors
-and model (`MipData`, filled per call by `mipData()`, refetched after a
-restart or presolve since the model changes).
+unchanged. Its vectors (incumbent, first and root LP solutions, analytic
+centre, the row-wise matrix, row maxima and integrality, locks, column
+classes) are Rust's: a `MipVecs` (mip_data.rs) that HighsMipSolverData
+owns (MipVecsOwner, declared first, freed last) and refers to in place
+(`HighsRsArray`), set by Rust (C++ through highs_rs_mip_vecs_set). Rust
+gets them, the scalars and the model in place (`MipData`, filled per
+call by `mipData()`, refetched after a restart or presolve since the
+model changes).
 
 In Rust (mip/mip_data.rs, root.rs, driver.rs): limitsToGap,
 computeNewUpperLimit, limitsToBounds, updateLowerBound, the primal-dual
 integral, checkLimits, moreHeuristicsAllowed, percentageInactiveIntegers,
 removeFixedIndices, printDisplayLine with its key and number formats,
 checkSolution, trySolution, solutionRowFeasible, the trivial heuristics,
-addIncumbent, transformNewIntegerFeasibleSolution (the repair LP and the
-postsolve stay C++ on a scratch HighsSolution), evaluateRootLp,
+addIncumbent, transformNewIntegerFeasibleSolution (the repair LP's
+solve and the postsolve stay C++ on a scratch HighsSolution), evaluateRootLp,
 rootSeparationRound, evaluateRootNode (with its restarts: one pass per
 model), HighsMipSolver::run (the presolve and setup calls, the pre-root
 heuristics, the root, the branch-and-bound loop: node selection, plunging,
@@ -505,8 +530,8 @@ the dives and their heuristics, the restart votes, the ramp-up of the
 workers, the tree graph-LNS rounds) and cleanupSolve with the solving
 report (model status strings, getGapString, highsDoubleToString).
 processNode runs as a task of the C++ HighsMipSolver::runTask
-(`run_process_nodes`), so the parallel search and the concurrent LNS
-helper (a std::thread started in C++) keep their threading model. clang
+(`run_process_nodes`), so the parallel search keeps its threading
+model. clang
 fuses `scale * ub - 0.5`, `rel * |ub + offset| * scale - eps`,
 `abs * scale - eps`, `ub - rel * |ub + offset|`, `pdi += dt * gap`,
 `total * effort + 10000`, `lb * scale - feastol` (the integral dual
@@ -540,11 +565,66 @@ domains, pools, the sub-MIP's HighsMipSolver with its options and model),
 the pools' and pseudocosts' sync calls, the per-worker search steps (each
 a call into the Rust search, with the profiling clocks around it), the
 start of the analytic centre task (a `Highs` IPM solve) and of the
-symmetry detection, the repair LP of transformNewIntegerFeasibleSolution,
-the concurrent LNS helper (HighsConcurrentLns: start, sync, crossover with
-the main solver, root cut exchange; its thread is a std::thread that runs
-a C++ HighsMipSolver), the profiling clocks (HighsProfiling, shared with
-Highs) and HighsDebugSol (not supported).
+symmetry detection, the `Highs` solve of transformNewIntegerFeasibleSolution's
+repair LP (Rust fixes the integers, sets the time limit and keeps the
+counts), the profiling
+clocks (HighsProfiling, shared with Highs) and HighsDebugSol (not
+supported).
+
+The concurrent LNS helper is Rust (mip/concurrent.rs): its pool
+(HighsConcurrentLns: the best solution with its version, each search's
+own best until the crossover, the bounds, the stop and target flags, the
+root cuts in a OnceLock, the crossover's log state) and its thread, a
+Rust std::thread (8 MB stack, a Linux std::thread's) owned with the pool
+by the main solver (HighsMipScalars::concurrent_lns, an `Arc` shared with
+the thread; joined on stop and in ~HighsMipSolverData), and start, sync,
+crossoverWithMain, the root cut publish and import, the limit checks and
+the offers of addIncumbent. The atomics keep the C++'s orderings. C++
+keeps the object shells: the helper's options, model and root basis
+(`helper_new`), its HighsMipSolver with its single-thread scheduler,
+timer and profiling (`helper_run`, run on the Rust thread), the LP's cut
+rows (op 135) and the cut pool's addCut and separate into the LP. The
+helper's HighsMipSolver::concurrent_lns_ and a sub-MIP's
+lns_target_reached_ point to the Rust pool. Single-thread solves never
+start a helper (useConcurrentHelper, still C++ for
+std::thread::hardware_concurrency).
+
+A sub-MIP (solveSubMip's run: RENS, RINS, crossover) is decided in Rust
+(glue.rs `sub_mip`): a `SubMipSpec` of the bounds, the start with its row
+activities, and every option that differs from the caller's (limits, time
+limit with the cap, objective bound, gaps, presolve, symmetry, effort,
+the helper's heuristic settings, lns_target_reached_). The C++ subMip is
+the shell: it copies the options and model, applies the spec, constructs
+and runs the HighsMipSolver between the profiling clocks and returns the
+result.
+
+A worker's state is Rust's (workers.rs `WorkerState`: bounds, heuristic
+and separation statistics, generator, the heuristics flag, the buffered
+solutions); HighsMipWorker owns it, refers to its fields in place
+(RsState) and keeps the pointers to the C++ objects it works on.
+
+What remains C++ before a pure-Rust MIP solve (each an object shell or a
+step on one, reached through `CMipFns`/`CLpFns`/`CSearchFns`/`CSepaFns`
+callbacks; about 240 op codes):
+- The LP solver of HighsLpRelaxation, a `Highs` object (passModel,
+  addRows/deleteRows, changeColsBounds/Cost, setBasis/getBasis, run with
+  the IPX race, getSolution/getInfo, getDualRay, getBasisInverseRow,
+  putIterate/getIterate, options), and the same for the analytic centre
+  (IPM) and the repair LP. The LP algorithms are Rust, but HEkk's data and
+  the Highs LP API stay C++ (HEkkRustSolve.cpp views); a Rust-owned LP
+  relaxation needs a Rust-owned HEkk with the incremental model updates
+  and status bookkeeping of HEkk.cpp and Highs' modification methods,
+  shared with the top-level port (lp_data).
+- The object shells: HighsMipSolver (options, models, callback, timer,
+  terminator), HighsMipSolverData's containers (deques of LP relaxations,
+  domains, pool and pseudocost handles, workers), HighsSearch (local
+  domain shell, conflict scratch), HighsSeparation and the separators'
+  objects (HighsTransformedLp, HighsCutGeneration for conflicts,
+  HighsCutSet), HighsObjectiveFunction, HighsDomain's scalars and
+  redundant rows, the presolve (HPresolve shell, the postsolve stack's
+  storage, the restart's model rebuilds), HighsSymmetries' handle,
+  HighsProfiling/HighsTimer.
+- Highs::callSolveMip and its post-processing (lp_data).
 
 ## The task scheduler (highs/parallel)
 

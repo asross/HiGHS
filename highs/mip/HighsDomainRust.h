@@ -109,12 +109,6 @@ struct DomainAccess {
                     sizeof(highs::RbTreeLinks<HighsInt>) == 12,
                 "ObjectiveContribution is Contribution");
 
-  template <typename T>
-  static void reserve(void* v, size_t n) {
-    std::vector<T>& x = *static_cast<std::vector<T>*>(v);
-    x.reserve(std::max(n, 2 * x.capacity()));
-  }
-
   // whether std::vector is {begin, end, capacity end}, as Rust's StdVec
   static bool stdVecLayout() {
     std::vector<HighsInt> v;
@@ -222,9 +216,9 @@ struct DomainAccess {
     d.domchgstack = &dom.domchgstack_;
     d.domchgreason = &dom.domchgreason_;
     d.prevboundval = &dom.prevboundval_;
-    d.scratch_inds = &dom.rsScratchInds_;
-    d.scratch_bounds = &dom.rsScratchBounds_;
-    d.scratch_counts = &dom.propRowNumChangedBounds_;
+    d.scratch_inds = &dom.rsv_->scratch_inds;
+    d.scratch_bounds = &dom.rsv_->scratch_bounds;
+    d.scratch_counts = &dom.rsv_->scratch_counts;
     d.infeasible = &dom.infeasible_;
     d.infeasible_reason = &dom.infeasible_reason;
     d.infeasible_pos = &dom.infeasible_pos;
@@ -249,28 +243,30 @@ struct DomainAccess {
       o.partition_starts = dslice(f.getCliquePartitionStarts());
       o.col_to_partition = dslice(f.getColToPartition());
       o.num_binaries = f.getNumBinariesInObjective();
-      o.contributions = {nonNull(op.objectiveLowerContributions.data()),
-                         (int)op.objectiveLowerContributions.size()};
-      o.partition_sets = dslice(op.contributionPartitionSets);
-      o.objective_lower = &op.objectiveLower;
-      o.num_inf_obj_lower = &op.numInfObjLower;
-      o.capacity_threshold = &op.capacityThreshold;
-      o.is_propagated = &op.isPropagated;
+      ObjPropState& st = *op.rs_;
+      o.contributions = {nonNull(st.contributions.data()),
+                         (int)st.contributions.size()};
+      o.partition_sets = dslice(st.partition_sets);
+      o.objective_lower = &st.objective_lower;
+      o.num_inf_obj_lower = &st.num_inf_obj_lower;
+      o.capacity_threshold = &st.capacity_threshold;
+      o.is_propagated = &st.is_propagated;
       o.obj_vals = dslice(f.getObjectiveValuesPacked());
-      o.clique_data = {nonNull(op.partitionCliqueData.data()),
-                       (int)op.partitionCliqueData.size()};
-      o.cons_buffer = dslice(op.propagationConsBuffer);
+      o.clique_data = {nonNull(st.clique_data.data()),
+                       (int)st.clique_data.size()};
+      o.cons_buffer = dslice(st.cons_buffer);
     }
     d.dom = &dom;
     d.implications = implications;
     d.redundant_row = redundantRow;
     d.cut_reset_age = cutResetAge;
     d.conflict_reset_age = conflictResetAge;
-    d.reserve_i32 = reserve<HighsInt>;
-    d.reserve_domchg = reserve<HighsDomainChange>;
-    d.reserve_reason = reserve<HighsDomain::Reason>;
-    d.reserve_prev = reserve<std::pair<double, HighsInt>>;
-    d.reserve_pair = reserve<std::pair<HighsInt, HighsInt>>;
+    // the vectors are Rust's
+    d.reserve_i32 = highs_rs_reserve_i32;
+    d.reserve_domchg = highs_rs_reserve_domchg;
+    d.reserve_reason = highs_rs_reserve_reason;
+    d.reserve_prev = highs_rs_reserve_prev;
+    d.reserve_pair = highs_rs_reserve_pair;
   }
 
   template <typename T>

@@ -24,6 +24,7 @@
 #include "mip/HighsDomainChange.h"
 #include "mip/HighsDomain.h"
 #include "mip/HighsLpRelaxation.h"
+#include "mip/HighsRsSpan.h"
 
 class HighsMipSolver;
 class HighsMipWorker;
@@ -34,6 +35,8 @@ struct NodeQueue;
 struct Heuristics;
 struct CliqueTable;
 struct RedcostFixing;
+struct ConcurrentPool;
+struct MipVecs;
 
 // glue.rs SearchParts
 struct MipSearchParts {
@@ -42,6 +45,30 @@ struct MipSearchParts {
   void* ps;
   const NodeQueue* nq;
   void* localdom;
+};
+
+// glue.rs SubMipSpec
+struct MipSubMipSpec {
+  void* lp;
+  const double* col_lower;
+  const double* col_upper;
+  const double* start_cols;
+  const double* start_rows;
+  HighsInt num_start_rows;
+  HighsInt mip_max_leaves;
+  HighsInt mip_max_nodes;
+  HighsInt mip_max_stall_nodes;
+  HighsInt mip_pscost_minreliable;
+  double time_limit;
+  double objective_bound;
+  double mip_rel_gap;
+  double mip_abs_gap;
+  double mip_heuristic_effort;
+  int heur_flags;
+  bool presolve;
+  bool output_flag;
+  bool mip_detect_symmetry;
+  const ConcurrentPool* lns_target;
 };
 
 // glue.rs SubMipResult
@@ -80,14 +107,7 @@ struct MipWorkerData {
   void* lp;
   double* upper_bound;
   double* optimality_limit;
-};
-
-// workers.rs WorkerSol
-struct MipWorkerSol {
-  const double* x;
-  HighsInt n;
-  double obj;
-  int source;
+  void* state;
 };
 
 // glue.rs MipOptions
@@ -122,6 +142,7 @@ struct MipOptions {
   HighsInt presolve_reduction_limit;
   bool mip_detect_symmetry;
   bool mip_improving_solution_save;
+  bool mip_concurrent_crossover;
 };
 
 // glue.rs OrigModel
@@ -194,18 +215,18 @@ struct MipData {
   const std::vector<double>* row_lower;
   const std::vector<double>* row_upper;
   const std::vector<HighsVarType>* integrality;
-  const std::vector<HighsInt>* ar_start;
-  const std::vector<HighsInt>* ar_index;
-  const std::vector<double>* ar_value;
-  const std::vector<HighsInt>* uplocks;
-  const std::vector<HighsInt>* downlocks;
-  const std::vector<HighsInt>* integer_cols;
-  const std::vector<HighsInt>* integral_cols;
-  const std::vector<HighsInt>* continuous_cols;
-  const std::vector<double>* rootlpsol;
-  const std::vector<double>* firstlpsol;
-  const std::vector<double>* analytic_center;
-  const std::vector<double>* incumbent;
+  const HighsRsArray<HighsInt>* ar_start;
+  const HighsRsArray<HighsInt>* ar_index;
+  const HighsRsArray<double>* ar_value;
+  const HighsRsArray<HighsInt>* uplocks;
+  const HighsRsArray<HighsInt>* downlocks;
+  const HighsRsArray<HighsInt>* integer_cols;
+  const HighsRsArray<HighsInt>* integral_cols;
+  const HighsRsArray<HighsInt>* continuous_cols;
+  const HighsRsArray<double>* rootlpsol;
+  const HighsRsArray<double>* firstlpsol;
+  const HighsRsArray<double>* analytic_center;
+  const HighsRsArray<double>* incumbent;
   void* scalars;  // HighsMipScalars
   const CliqueTable* clique;
   const RedcostFixing* redcost;
@@ -216,6 +237,10 @@ struct MipData {
   MipSolutionPtrs solution;
   MipOrigModel orig;
   MipOptions opts;
+  const ConcurrentPool* helper_pool;
+  const ConcurrentPool* lns_target;
+  const Heuristics* heur;
+  MipVecs* vecs;
 };
 
 // glue.rs CMipFns
@@ -261,30 +286,29 @@ struct MipFns {
   bool (*parallel_lock_active)(void*);
   HighsInt (*num_workers)(void*);
   void (*worker_view)(void*, MipWorkerData*);
-  void (*sub_mip)(void*, void*, void*, const double*, const double*, HighsInt,
-                  HighsInt, HighsInt, const double*, double, double,
-                  MipSubMipResult*, double*);
+  void (*sub_mip)(void*, void*, const MipSubMipSpec*, MipSubMipResult*,
+                  double*);
   double (*op)(void*, int, void*, int64_t, double);
   void (*scratch_solution)(void*, const double*, HighsInt, MipScratchView*);
-  void (*set_vec)(void*, int, const void*, HighsInt);
-  const HighsInt* (*int_vec)(void*, int, HighsInt*);
   void (*refill)(void*, MipData*);
   void* (*master_worker)(void*);
   void (*run_process_nodes)(void*, const HighsInt*, HighsInt, const void*);
   void (*set_cleanup_result)(void*, const void*);
   const char* (*model_name)(void*, HighsInt*);
   HighsInt (*max_submip_level)(void*);
-  void (*sync_concurrent_lns)(void*);
-  void (*crossover_with_main)(void*, void*);
+  void* (*helper_new)(void*, double);
+  void (*helper_run)(void*, const ConcurrentPool*);
+  void (*add_root_cut)(void*, const HighsInt*, const double*, HighsInt, double,
+                       bool);
   const void* (*vec_ptr)(void*, int, HighsInt*);
   void (*set_basis)(void*, int, const uint8_t*, HighsInt, const uint8_t*,
                     HighsInt, bool, bool, bool);
   bool (*callback)(void*, int, const MipCallbackOut*, const char*, HighsInt);
   void* (*worker)(void*, HighsInt);
-  bool (*worker_solution)(void*, HighsInt, MipWorkerSol*);
-  void (*worker_push_solution)(void*, const double*, HighsInt, double, int);
   void (*worker_scratch)(void*, void*, const double*, HighsInt,
                          MipScratchView*);
+  bool (*repair_lp)(void*, const double*, const double*, double, double, bool,
+                    int64_t*);
 };
 
 // The functions (HighsPrimalHeuristics.cpp) and the solver's data
@@ -307,13 +331,17 @@ void mipSetBasis(void* m, int which, const uint8_t* col, HighsInt ncol,
 bool mipCallback(void* m, int type, const MipCallbackOut* out,
                  const char* message, HighsInt len);
 void* mipWorker(void* m, HighsInt k);
-bool mipWorkerSolution(void* w, HighsInt j, MipWorkerSol* s);
-void mipWorkerPushSolution(void* w, const double* x, HighsInt n, double obj,
-                           int source);
 void mipWorkerScratch(void* m, void* w, const double* x, HighsInt n,
                       MipScratchView* v);
 
 extern "C" {
+void highs_rs_concurrent_lns_set_root_cuts(const ConcurrentPool* pool,
+                                           const HighsInt* start,
+                                           HighsInt num_cuts,
+                                           const HighsInt* index,
+                                           const double* value, HighsInt nnz,
+                                           const double* rhs,
+                                           const uint8_t* integral);
 Heuristics* highs_rs_heur_new(HighsInt seed);
 void highs_rs_heur_free(Heuristics* h);
 void highs_rs_heur_run(Heuristics* h, const MipFns* f, const MipData* m,
