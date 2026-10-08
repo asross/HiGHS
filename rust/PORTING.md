@@ -1050,15 +1050,11 @@ was 60977 lines in 160 files.
 | highs/presolve/HighsSymmetry.cpp | 1431 | 168 | part ported | presolve glue / C++ owner of the postsolve stack |
 | highs/presolve/ICrashX.cpp | 142 | 142 | C++ | live: callCrossover (Highs::crossover) |
 | highs/presolve/PresolveComponent.cpp | 28 | 28 | C++ | presolve glue / C++ owner of the postsolve stack |
-| highs/qpsolver/a_asm.cpp | 123 | 105 | part ported | QP glue: phase 1 and instance building |
-| highs/qpsolver/a_quass.cpp | 155 | 274 | C++ | QP glue: phase 1 and instance building |
-| highs/simplex/HEkk.cpp | 3618 | 1841 | part ported | live: HEkk data owner (basis, LP moves, dualize, edits, getSolution, proofs, condition) |
-| highs/simplex/HEkkControl.cpp | 112 | 29 | part ported | live: HEkk data owner, NLA wrapper, setup |
 | highs/qpsolver/QpRust.cpp | 1 | 163 | glue |  |
 | highs/qpsolver/a_asm.cpp | 124 | 1 | part ported | empty: the QP glue is Rust (qp/glue.rs) |
 | highs/qpsolver/a_quass.cpp | 156 | 1 | part ported | empty: the QP glue is Rust (qp/glue.rs) |
-| highs/simplex/HEkk.cpp | 3618 | 3702 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
-| highs/simplex/HEkkControl.cpp | 112 | 112 | C++ | live: HEkk data owner, NLA wrapper, setup, reports |
+| highs/simplex/HEkk.cpp | 3618 | 1841 | part ported | live: HEkk data owner (basis, LP moves, dualize, edits, getSolution, proofs, condition) |
+| highs/simplex/HEkkControl.cpp | 112 | 29 | part ported | live: HEkk data owner, NLA wrapper, setup |
 | highs/simplex/HEkkDebug.cpp | 1552 | 92 | stubs | no-op stubs (debugging is left out) |
 | highs/simplex/HEkkRust.cpp | 1 | 131 | glue |  |
 | highs/simplex/HEkkRustSolve.cpp | 3 | 340 | glue |  |
@@ -1084,5 +1080,4 @@ was 60977 lines in 160 files.
 | highs/util/HighsUtils.cpp | 1132 | 537 | part ported | live: index collections, value analysis logs, user data checks |
 | highs/util/stringutil.cpp | 54 | 54 | C++ | live: utilities |
 | app/RunHighs.cpp | 95 | 3 | part ported | main: calls the Rust app (rust/src/lp_data/app.rs) |
-| **total** (106 files) | 68766 | 34731 | | |
-| **total** (121 files) | 74609 | 38421 | | |
+| **total** (110 files) | 68777 | 29708 | | |
