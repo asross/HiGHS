@@ -144,9 +144,9 @@ double qpGlueOp(void* ctx, int code, void* out) {
 extern "C" int highs_rs_call_solve_qp(const RsQpHost* host);
 
 HighsStatus Highs::callSolveQp() {
-  HighsLp& lp = model_.lp_;
+  HighsLp& lp = model_w().lp_;
   assert(lp.a_matrix_.isColwise());
-  const HighsHessian& hessian = model_.hessian_;
+  const HighsHessian& hessian = model_w().hessian_;
   assert(hessian.format_ == HessianFormat::kTriangular);
   QpGlueCtx ctx{this->profiling_, timer_, lp, solution_, basis_};
   RsQpHost h;
@@ -181,8 +181,8 @@ HighsStatus Highs::callSolveQp() {
   const HighsStatus return_status = HighsStatus(highs_rs_call_solve_qp(&h));
   if (return_status == HighsStatus::kError) return return_status;
   // Get the objective and any KKT failures
-  info_.objective_function_value = model_.objectiveValue(solution_.col_value);
-  getKktFailures(options_, model_, solution_, basis_, info_);
+  info_.objective_function_value = model_w().objectiveValue(solution_.col_value);
+  getKktFailures(options_, model_w(), solution_, basis_, info_);
   info_.valid = true;
   if (model_status_ == HighsModelStatus::kOptimal) return checkOptimality("QP");
   return return_status;

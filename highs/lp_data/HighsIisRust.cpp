@@ -162,14 +162,14 @@ struct HighsIisRust {
 
   static void lpView(void* ctx, RsLp* out, size_t* num_col_names,
                      size_t* num_row_names) {
-    const HighsLp& lp = static_cast<HighsIisRust*>(ctx)->h.model_.lp_;
+    const HighsLp& lp = static_cast<HighsIisRust*>(ctx)->h.model_w().lp_;
     *out = rsLp(lp);
     *num_col_names = lp.col_names_.size();
     *num_row_names = lp.row_names_.size();
   }
 
   static RsIisStr name(void* ctx, bool is_col, HighsInt i) {
-    const HighsLp& lp = static_cast<HighsIisRust*>(ctx)->h.model_.lp_;
+    const HighsLp& lp = static_cast<HighsIisRust*>(ctx)->h.model_w().lp_;
     const std::string& s = i < 0      ? lp.model_name_
                            : is_col ? lp.col_names_[i]
                                     : lp.row_names_[i];
@@ -191,7 +191,7 @@ struct HighsIisRust {
   // An LP from Rust's arrays, with the incumbent's names of its columns
   // and rows
   void buildLp(const RsIisLp& a, HighsLp& lp) const {
-    const HighsLp& from = h.model_.lp_;
+    const HighsLp& from = h.model_w().lp_;
     lp.clear();
     lp.num_col_ = a.num_col;
     lp.num_row_ = a.num_row;
@@ -337,7 +337,7 @@ struct HighsIisRust {
         h.options_ = *saved_options;
         return 0;
       case IisOp::kEnsureColwise:
-        h.model_.lp_.a_matrix_.ensureColwise();
+        h.model_w().lp_.a_matrix_.ensureColwise();
         return 0;
       case IisOp::kGetOption:
         switch (a.i) {
@@ -389,11 +389,11 @@ struct HighsIisRust {
       case IisOp::kElasticSolution:
         // Deleting rows and columns invalidates the solution, but the
         // primal values are right: recompute the row activities
-        h.model_.lp_.a_matrix_.productQuad(h.solution_.row_value,
+        h.model_w().lp_.a_matrix_.productQuad(h.solution_.row_value,
                                            h.solution_.col_value);
         h.solution_.value_valid = true;
         h.info_.objective_function_value = a.x;
-        getKktFailures(options, h.model_, h.solution_, h.basis_, h.info_);
+        getKktFailures(options, h.model_w(), h.solution_, h.basis_, h.info_);
         h.info_.valid = true;
         return 0;
       case IisOp::kSetModelStatus:

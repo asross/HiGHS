@@ -254,6 +254,86 @@ impl Lp {
         self.model_name.extend_from_slice(model_name);
     }
 
+    /// The LP data into a C++ LP (the inverse of import; its is_moved_
+    /// and what Lp does not hold are kept)
+    pub fn export(&self, c: &mut CppLp) {
+        fn set<T: Copy + Default, B: Buf<T>>(v: &mut B, s: &[T]) {
+            v.resize(s.len());
+            v.sl_mut().copy_from_slice(s);
+        }
+        let r = &self.g;
+        c.num_col = r.num_col;
+        c.num_row = r.num_row;
+        set(&mut c.col_cost, &r.col_cost);
+        set(&mut c.col_lower, &r.col_lower);
+        set(&mut c.col_upper, &r.col_upper);
+        set(&mut c.row_lower, &r.row_lower);
+        set(&mut c.row_upper, &r.row_upper);
+        let (a, ca) = (&r.a, &mut c.a);
+        ca.format = a.format;
+        ca.num_col = a.num_col;
+        ca.num_row = a.num_row;
+        set(&mut ca.start, &a.start);
+        set(&mut ca.p_end, &a.p_end);
+        set(&mut ca.index, &a.index);
+        set(&mut ca.value, &a.value);
+        c.sense = r.sense;
+        c.offset = r.offset;
+        set(&mut c.integrality, &r.integrality);
+        let (s, cs) = (&r.scale, &mut c.scale);
+        cs.strategy = s.strategy;
+        cs.has_scaling = s.has_scaling;
+        cs.num_col = s.num_col;
+        cs.num_row = s.num_row;
+        cs.cost = s.cost;
+        set(&mut cs.col, &s.col);
+        set(&mut cs.row, &s.row);
+        c.is_scaled = r.is_scaled;
+        c.has_infinite_cost = r.has_infinite_cost;
+    }
+
+    /// Which of the LP data differ from a C++ LP's (none: empty)
+    ///
+    /// # Safety
+    /// The view's arrays must be valid
+    pub unsafe fn differences(&self, v: &CLp, model_name: &[u8]) -> String {
+        let mut t = Lp::default();
+        t.import(v, model_name);
+        let (a, b) = (&self.g, &t.g);
+        let mut d = Vec::new();
+        macro_rules! cmp {
+            ($($f:ident).+) => {
+                if a.$($f).+ != b.$($f).+ {
+                    d.push(stringify!($($f).+));
+                }
+            };
+        }
+        cmp!(num_col);
+        cmp!(num_row);
+        cmp!(col_cost);
+        cmp!(col_lower);
+        cmp!(col_upper);
+        cmp!(row_lower);
+        cmp!(row_upper);
+        cmp!(a.format);
+        cmp!(a.num_col);
+        cmp!(a.num_row);
+        cmp!(a.start);
+        cmp!(a.p_end);
+        cmp!(a.index);
+        cmp!(a.value);
+        cmp!(sense);
+        cmp!(offset);
+        cmp!(integrality);
+        cmp!(scale);
+        cmp!(is_scaled);
+        cmp!(has_infinite_cost);
+        if self.model_name != t.model_name {
+            d.push("model_name");
+        }
+        d.join(" ")
+    }
+
     /// The scale of a C++ LP
     ///
     /// # Safety

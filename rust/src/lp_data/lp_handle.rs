@@ -2787,6 +2787,38 @@ pub mod ffi {
         h.model_matrix_back = false;
     }
 
+    /// The model's LP data into a C++ LP (Highs::syncLpFromRust), and
+    /// the model name's bytes
+    ///
+    /// # Safety
+    /// `lp` a C++ LP's views, the outputs writable
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_export_model(
+        p: *mut LpHandle,
+        lp: *mut crate::lp_data::lp::CppLp,
+        name: *mut *const u8,
+        len: *mut usize,
+    ) {
+        let m = &h(p).model;
+        m.export(&mut *lp);
+        *name = m.model_name.as_ptr();
+        *len = m.model_name.len();
+    }
+
+    /// Whether the model's LP data are a C++ LP's (the sync check:
+    /// otherwise the differences are printed to stderr)
+    ///
+    /// # Safety
+    /// As highs_rs_lph_import_model
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_model_matches(p: *mut LpHandle, lp: *const CLp, name: *const u8, len: usize) -> bool {
+        let d = h(p).model.differences(&*lp, sl(name, len as i32));
+        if !d.is_empty() {
+            eprintln!("HIGHS_RS_CHECK_SYNC: the engine's model differs from the C++ model in: {d}");
+        }
+        d.is_empty()
+    }
+
     /// Whether the run rebuilt the model's matrix (an undualized LP's),
     /// which the Highs object takes back with the scale factors
     #[no_mangle]

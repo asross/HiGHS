@@ -52,6 +52,8 @@ class Highs {
 #ifdef HIGHS_RUST
   // What the simplex engine calls in C++ (lp_data/HighsRunRust.cpp)
   friend highs_rs::LphHost rsEngineHost(Highs* highs);
+  friend HighsStatus rsFormBasis(Highs& h, HighsBasis& basis,
+                                 const bool only_from_known_basis);
 #endif
 
  public:
@@ -553,12 +555,12 @@ class Highs {
   /**
    * @brief Return a const reference to the incumbent LP
    */
-  const HighsLp& getLp() const { return model_.lp_; }
+  const HighsLp& getLp() const { return model_r().lp_; }
 
   /**
    * @brief Return a const reference to the incumbent model
    */
-  const HighsModel& getModel() const { return model_; }
+  const HighsModel& getModel() const { return model_r(); }
 
   /**
    * @brief Return a const reference to the internal HighsSolution
@@ -767,23 +769,23 @@ class Highs {
   /**
    * @brief Get the number of columns in the incumbent model
    */
-  HighsInt getNumCol() const { return model_.lp_.num_col_; }
+  HighsInt getNumCol() const { return model_r().lp_.num_col_; }
 
   /**
    * @brief Get the number of rows in the incumbent model
    */
-  HighsInt getNumRow() const { return model_.lp_.num_row_; }
+  HighsInt getNumRow() const { return model_r().lp_.num_row_; }
 
   /**
    * @brief Get the number of (constraint matrix) nonzeros in the incumbent
    * model
    */
-  HighsInt getNumNz() const { return model_.lp_.a_matrix_.numNz(); }
+  HighsInt getNumNz() const { return model_r().lp_.a_matrix_.numNz(); }
 
   /**
    * @brief Get the number of Hessian matrix nonzeros in the incumbent model
    */
-  HighsInt getHessianNumNz() const { return model_.hessian_.numNz(); }
+  HighsInt getHessianNumNz() const { return model_r().hessian_.numNz(); }
 
   /**
    * @brief Get the objective sense of the incumbent model
@@ -1010,7 +1012,7 @@ class Highs {
    * @brief Clear the integrality of all columns
    */
   HighsStatus clearIntegrality() {
-    this->model_.lp_.integrality_.clear();
+    this->model_w().lp_.integrality_.clear();
     return HighsStatus::kOk;
   }
 
@@ -1101,7 +1103,7 @@ class Highs {
    * @brief Sets the constraint matrix format of the incumbent model
    */
   HighsStatus setMatrixFormat(const MatrixFormat desired_format) {
-    this->model_.lp_.setFormat(desired_format);
+    this->model_w().lp_.setFormat(desired_format);
     return HighsStatus::kOk;
   }
 
@@ -1159,12 +1161,12 @@ class Highs {
                       const double* values);
 
   HighsStatus ensureColwise() {
-    this->model_.lp_.ensureColwise();
+    this->model_w().lp_.ensureColwise();
     return HighsStatus::kOk;
   }
 
   HighsStatus ensureRowwise() {
-    this->model_.lp_.ensureRowwise();
+    this->model_w().lp_.ensureRowwise();
     return HighsStatus::kOk;
   }
 
@@ -1474,8 +1476,8 @@ class Highs {
   }
   void writeAllClocks() { this->timer_.writeAllClocks(); }
   HighsStatus clearModelNames() {
-    this->model_.lp_.col_names_.clear();
-    this->model_.lp_.row_names_.clear();
+    this->model_w().lp_.col_names_.clear();
+    this->model_w().lp_.row_names_.clear();
     return HighsStatus::kOk;
   }
 
@@ -1634,7 +1636,39 @@ class Highs {
   HighsBasis basis_;
   ICrashInfo icrash_info_;
 
+#ifdef HIGHS_RUST
+  // The model's LP data are the engine's (ekk_instance_'s model, an Lp of
+  // rust/src/lp_data/lp.rs); model_cache_ is their C++ copy, with the
+  // parts the Rust LP does not hold (the names and their hashes, the
+  // origin and objective names, the modifications, the Hessian). C++
+  // reads the model through model_r() and writes it through model_w();
+  // Rust code works on the engine's model after lpToRust().
+  mutable HighsModel model_cache_;
+  // The engine's model has changes the copy lacks
+  mutable bool lp_rs_newer_ = false;
+  // The copy has changes the engine's model lacks
+  bool lp_cpp_newer_ = true;
+  // The copy takes the engine model's LP data
+  void syncLpFromRust() const;
+  // The copy, current
+  const HighsModel& model_r() const {
+    if (lp_rs_newer_) syncLpFromRust();
+    return model_cache_;
+  }
+  // The copy, current, to change: the engine's model takes it at the
+  // next lpToRust()
+  HighsModel& model_w() {
+    model_r();
+    lp_cpp_newer_ = true;
+    return model_cache_;
+  }
+  // The engine's model, current
+  void lpToRust();
+#else
   HighsModel model_;
+  const HighsModel& model_r() const { return model_; }
+  HighsModel& model_w() { return model_; }
+#endif
   std::vector<HighsLinearObjective> multi_linear_objective_;
 
   HighsModel presolved_model_;
@@ -1682,8 +1716,8 @@ class Highs {
   void reportModelStats() const;
 
   void exactResizeModel() {
-    this->model_.lp_.exactResize();
-    this->model_.hessian_.exactResize();
+    this->model_w().lp_.exactResize();
+    this->model_w().hessian_.exactResize();
   }
 
   HighsStatus completeSolutionFromDiscreteAssignment();

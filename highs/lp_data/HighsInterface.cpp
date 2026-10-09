@@ -429,7 +429,7 @@ extern "C" void highs_rs_form_standard_form_lp(
 
 HighsStatus Highs::formStandardFormLp() {
   this->clearStandardFormLp();
-  HighsLp& lp = this->model_.lp_;
+  HighsLp& lp = this->model_w().lp_;
   HighsSparseMatrix& matrix = lp.a_matrix_;
   matrix.ensureRowwise();
   HighsSparseMatrix& sf = this->standard_form_matrix_;
@@ -899,7 +899,7 @@ void Highs::getColsInterface(const HighsIndexCollection& index_collection,
                              HighsInt& num_col, double* cost, double* lower,
                              double* upper, HighsInt& num_nz, HighsInt* start,
                              HighsInt* index, double* value) const {
-  const HighsLp& lp = model_.lp_;
+  const HighsLp& lp = model_r().lp_;
   if (lp.a_matrix_.isColwise()) {
     getSubVectors(index_collection, lp.num_col_, lp.col_cost_.data(),
                   lp.col_lower_.data(), lp.col_upper_.data(), lp.a_matrix_,
@@ -916,7 +916,7 @@ void Highs::getRowsInterface(const HighsIndexCollection& index_collection,
                              HighsInt& num_row, double* lower, double* upper,
                              HighsInt& num_nz, HighsInt* start, HighsInt* index,
                              double* value) const {
-  const HighsLp& lp = model_.lp_;
+  const HighsLp& lp = model_r().lp_;
   if (lp.a_matrix_.isColwise()) {
     getSubVectorsTranspose(index_collection, lp.num_row_, nullptr,
                            lp.row_lower_.data(), lp.row_upper_.data(),
@@ -962,7 +962,7 @@ void Highs::getCoefficientInterface(const HighsInt ext_row,
 void Highs::getCoefficientInterface(const HighsInt ext_row,
                                     const HighsInt ext_col,
                                     double& value) const {
-  const HighsLp& lp = model_.lp_;
+  const HighsLp& lp = model_r().lp_;
   assert(0 <= ext_row && ext_row < lp.num_row_);
   assert(0 <= ext_col && ext_col < lp.num_col_);
   const HighsSparseMatrix& a = lp.a_matrix_;
@@ -1058,7 +1058,7 @@ bool Highs::feasibleWrtBounds(const bool columns) const {
 bool Highs::feasibleWrtBounds(const bool columns) const {
   if (this->info_.primal_solution_status != kSolutionStatusFeasible)
     return false;
-  const HighsLp& lp = model_.lp_;
+  const HighsLp& lp = model_r().lp_;
   return highs_rs_feasible_wrt_bounds(
       rsMut(columns ? this->solution_.col_value : this->solution_.row_value),
       rsMut(columns ? lp.col_lower_ : lp.row_lower_),
@@ -1625,7 +1625,7 @@ struct HighsIfaceRust {
   RsIfaceCall call;
 
   HighsIfaceRust(Highs& highs, const HighsIndexCollection* ic) : h(highs) {
-    lp = rsLpVec(h.model_.lp_);
+    lp = rsLpVec(h.model_w().lp_);
     basis = rsBasisVec(h.basis_);
     call.ctx = this;
     call.op = op;
@@ -1640,13 +1640,13 @@ struct HighsIfaceRust {
   }
   // The scalars back into the C++ LP and basis
   void back() {
-    rsLpVecBack(lp, h.model_.lp_);
+    rsLpVecBack(lp, h.model_w().lp_);
     rsBasisVecBack(basis, h.basis_);
   }
 
   static int op(void* ctx, int code, int arg, const void* p, int n) {
     Highs& h = static_cast<HighsIfaceRust*>(ctx)->h;
-    HighsLp& lp = h.model_.lp_;
+    HighsLp& lp = h.model_w().lp_;
     switch (code) {
       case 1: {
         std::vector<std::string>& names = arg ? lp.col_names_ : lp.row_names_;
@@ -1690,7 +1690,7 @@ struct HighsIfaceRust {
         highs_rs::highs_rs_lph_clear_shell(h.ekk_instance_.p);
         return 0;
       case 8:
-        if (h.model_.hessian_.dim_) completeHessian(arg, h.model_.hessian_);
+        if (h.model_w().hessian_.dim_) completeHessian(arg, h.model_w().hessian_);
         return 0;
       case 9: {
         const RsIndexCollection& c = *static_cast<const RsIndexCollection*>(p);
@@ -1704,7 +1704,7 @@ struct HighsIfaceRust {
         ic.set_.assign(c.set.ptr, c.set.ptr + c.set.len);
         ic.is_mask_ = c.is_mask;
         ic.mask_.assign(c.mask.ptr, c.mask.ptr + c.mask.len);
-        h.model_.hessian_.deleteCols(ic);
+        h.model_w().hessian_.deleteCols(ic);
         return 0;
       }
     }
@@ -1846,8 +1846,8 @@ HighsStatus Highs::changeRowBoundsInterface(
 void Highs::changeCoefficientInterface(const HighsInt ext_row,
                                        const HighsInt ext_col,
                                        const double ext_new_value) {
-  assert(0 <= ext_row && ext_row < model_.lp_.num_row_);
-  assert(0 <= ext_col && ext_col < model_.lp_.num_col_);
+  assert(0 <= ext_row && ext_row < model_w().lp_.num_row_);
+  assert(0 <= ext_col && ext_col < model_w().lp_.num_col_);
   HighsIfaceRust r(*this, nullptr);
   highs_rs_iface_change_coefficient(&r.call, ext_row, ext_col, ext_new_value);
   r.back();
@@ -1875,7 +1875,7 @@ HighsStatus Highs::scaleRowInterface(const HighsInt row,
 // Get the basic variables, performing INVERT if necessary
 HighsStatus Highs::getBasicVariablesInterface(HighsInt* basic_variables) {
   HighsStatus return_status = HighsStatus::kOk;
-  HighsLp& lp = model_.lp_;
+  HighsLp& lp = model_w().lp_;
   HighsInt num_row = lp.num_row_;
   HighsInt num_col = lp.num_col_;
   HighsSimplexStatus& ekk_status = ekk_instance_.status_;
@@ -1893,7 +1893,7 @@ HighsStatus Highs::getBasicVariablesInterface(HighsInt* basic_variables) {
 #ifdef HIGHS_RUST
     return_status = interpretCallStatus(
         options_.log_options,
-        rsFormBasis(ekk_instance_, options_, lp, basis_,
+        rsFormBasis(*this, basis_,
                     only_from_known_basis),
         return_status, "formSimplexLpBasisAndFactor");
 #else
@@ -2278,7 +2278,7 @@ HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
 
 HighsStatus Highs::getRangingInterface() {
 #ifdef HIGHS_RUST
-  return getRangingData(this->ranging_, ekk_instance_, options_, model_.lp_,
+  return getRangingData(this->ranging_, ekk_instance_, options_, model_w().lp_,
                         basis_, solution_, model_status_,
                         info_.objective_function_value);
 #else
@@ -3352,7 +3352,7 @@ bool Highs::qFormatOk(const HighsInt num_nz, const HighsInt format) {
 #endif
 
 void Highs::clearZeroHessian() {
-  HighsHessian& hessian = model_.hessian_;
+  HighsHessian& hessian = model_w().hessian_;
   if (hessian.dim_) {
     // Clear any zero Hessian
     if (hessian.numNz() == 0) {
@@ -3624,13 +3624,13 @@ HighsStatus Highs::userScaleModel(HighsUserScaleData& data) {
   // Consider applying user objective and bound scaling to the model
   // by first identifying whether it causes any errors due to creating
   // extreme data values...
-  userScaleLp(this->model_.lp_, data, false);
-  userScaleHessian(this->model_.hessian_, data, false);
+  userScaleLp(this->model_w().lp_, data, false);
+  userScaleHessian(this->model_w().hessian_, data, false);
   HighsStatus return_status = userScaleStatus(this->options_.log_options, data);
   if (return_status == HighsStatus::kError) return HighsStatus::kError;
   // ... and, if not, actually apply the scaling
-  userScaleLp(this->model_.lp_, data);
-  userScaleHessian(this->model_.hessian_, data);
+  userScaleLp(this->model_w().lp_, data);
+  userScaleHessian(this->model_w().hessian_, data);
   return return_status;
 }
 

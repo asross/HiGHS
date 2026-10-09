@@ -238,6 +238,10 @@ LpHandle* highs_rs_lph_new_host(const LphHost* host);
 void* highs_rs_lph_lps(LpHandle* h);
 void highs_rs_lph_import_model(LpHandle* h, const RsLp* lp, const char* name,
                                size_t len);
+void highs_rs_lph_export_model(LpHandle* h, RsLpVec* lp, const char** name,
+                               size_t* len);
+bool highs_rs_lph_model_matches(LpHandle* h, const RsLp* lp, const char* name,
+                                size_t len);
 bool highs_rs_lph_take_matrix_back(LpHandle* h);
 void highs_rs_lph_ekk_clear(LpHandle* h);
 void highs_rs_lph_ekk_invalidate(LpHandle* h);
@@ -306,10 +310,9 @@ void rsSimplexProfiling(void* profiling, int code, HighsInt simplex_strategy,
                         int64_t arg);
 // The option values of a handle from a HighsOptions (HighsOptionsRust.cpp)
 void rsSyncOptions(highs_rs::LpHandle* h, const HighsOptions& options);
-// formSimplexLpBasisAndFactor of `basis` for `lp` on a Highs object's
-// engine (HighsRunRust.cpp)
-HighsStatus rsFormBasis(HighsEngine& ekk, const HighsOptions& options,
-                        HighsLp& lp, HighsBasis& basis,
+// formSimplexLpBasisAndFactor of `basis` for a Highs object's model on
+// its engine (HighsRunRust.cpp)
+HighsStatus rsFormBasis(Highs& h, HighsBasis& basis,
                         const bool only_from_known_basis);
 
 /// The simplex engine of a Highs object (HEkk's place, with the names of
