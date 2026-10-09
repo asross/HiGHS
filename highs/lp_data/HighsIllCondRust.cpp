@@ -7,8 +7,7 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /**@file lp_data/HighsIllCondRust.cpp
  * @brief Highs::computeIllConditioning done by Rust
- * (rust/src/lp_data/ill_cond.rs): the views, the solve of the analysis LP
- * and the records
+ * (rust/src/lp_data/ill_cond.rs): the views and the records
  */
 #include "lp_data/HighsRust.h"
 
@@ -16,18 +15,6 @@
 #include "Highs.h"
 
 namespace {
-struct RsIllLp {
-  HighsInt num_col, num_row;
-  RsMut<double> col_cost, col_lower, col_upper, row_lower, row_upper;
-  RsMut<HighsInt> start, index;
-  RsMut<double> value;
-  RsMut<const char*> names;
-  int run_status, model_status;
-  double objective;
-  RsMut<double> col_value;
-  double last_row_value;
-};
-
 struct RsIllHost {
   void* ctx;
   void (*op)(void* ctx, int code, void* p, HighsInt index, double x);
@@ -51,10 +38,6 @@ RsMut<uint8_t> illCondStatus(const std::vector<HighsBasisStatus>& s) {
           s.size()};
 }
 
-template <typename T>
-std::vector<T> illCondVec(const RsMut<T>& v) {
-  return std::vector<T>(v.ptr, v.ptr + v.len);
-}
 }  // namespace
 
 extern "C" int highs_rs_compute_ill_conditioning(const RsIllHost* host);
@@ -72,43 +55,12 @@ HighsStatus Highs::computeIllConditioning(
       illCondNames(incumbent_lp.row_names_);
   RsIllHost h;
   h.ctx = &ill_conditioning;
-  // Solve the analysis LP (code 0) or store a record (code 1)
+  // Store a record
   h.op = [](void* ctx, int code, void* p, HighsInt index, double x) {
-    if (code == 1) {
-      HighsIllConditioningRecord record;
-      record.index = index;
-      record.multiplier = x;
-      static_cast<HighsIllConditioning*>(ctx)->record.push_back(record);
-      return;
-    }
-    RsIllLp& a = *static_cast<RsIllLp*>(p);
-    Highs conditioning;
-    conditioning.setOptionValue("output_flag", false);
-    HighsLp& lp = conditioning.model_w().lp_;
-    lp.num_col_ = a.num_col;
-    lp.num_row_ = a.num_row;
-    lp.col_cost_ = illCondVec(a.col_cost);
-    lp.col_lower_ = illCondVec(a.col_lower);
-    lp.col_upper_ = illCondVec(a.col_upper);
-    lp.row_lower_ = illCondVec(a.row_lower);
-    lp.row_upper_ = illCondVec(a.row_upper);
-    lp.a_matrix_.start_ = illCondVec(a.start);
-    lp.a_matrix_.index_ = illCondVec(a.index);
-    lp.a_matrix_.value_ = illCondVec(a.value);
-    lp.a_matrix_.num_col_ = a.num_col;
-    lp.a_matrix_.num_row_ = a.num_row;
-    for (size_t k = 0; k < a.names.len; k++)
-      lp.col_names_.push_back(a.names.ptr[k]);
-    a.run_status = int(conditioning.run());
-    a.model_status = int(conditioning.getModelStatus());
-    a.objective = conditioning.getInfo().objective_function_value;
-    const HighsSolution& solution = conditioning.solution_;
-    for (size_t k = 0; k < a.col_value.len && k < solution.col_value.size();
-         k++)
-      a.col_value.ptr[k] = solution.col_value[k];
-    if (solution.row_value.size() == size_t(conditioning.getNumRow()) &&
-        conditioning.getNumRow() > 0)
-      a.last_row_value = solution.row_value[conditioning.getNumRow() - 1];
+    HighsIllConditioningRecord record;
+    record.index = index;
+    record.multiplier = x;
+    static_cast<HighsIllConditioning*>(ctx)->record.push_back(record);
   };
   h.log = rsLog(options_.log_options);
   h.lp = rsLp(incumbent_lp);

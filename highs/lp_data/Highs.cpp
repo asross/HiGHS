@@ -818,7 +818,7 @@ HighsStatus Highs::passRowName(const HighsInt row, const std::string& name) {
 }
 
 HighsStatus Highs::passModelName(const std::string& name) {
-  this->model_w().lp_.model_name_ = name;
+  lpSetName(name);
   return HighsStatus::kOk;
 }
 
@@ -1161,7 +1161,7 @@ HighsStatus Highs::run() {
   // MIP solver's LP relaxation
   if (this->options_.output_flag)
     assessExcessiveObjectiveBoundScaling(this->options_.log_options,
-                                         this->model_w(), user_scale_data);
+                                         this->model_r(), user_scale_data);
 
   // Optimize the model in the Highs instance
   status = optimizeHighs();
@@ -2984,7 +2984,7 @@ HighsStatus Highs::addRows(const HighsInt num_new_row,
 HighsStatus Highs::changeObjectiveSense(const ObjSense sense) {
   if ((sense == ObjSense::kMinimize) !=
       (model_r().lp_.sense_ == ObjSense::kMinimize)) {
-    model_w().lp_.sense_ = sense;
+    lpSetScalars(sense, model_r().lp_.offset_);
     // Nontrivial change
     clearDerivedModelProperties();
     invalidateModelStatusSolutionAndInfo();
@@ -2995,7 +2995,7 @@ HighsStatus Highs::changeObjectiveSense(const ObjSense sense) {
 HighsStatus Highs::changeObjectiveOffset(const double offset) {
   // Update the objective value
   info_.objective_function_value += (offset - model_r().lp_.offset_);
-  model_w().lp_.offset_ = offset;
+  lpSetScalars(model_r().lp_.sense_, offset);
   presolved_model_.lp_.offset_ += offset;
   return returnFromHighs(HighsStatus::kOk);
 }

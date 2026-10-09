@@ -456,6 +456,21 @@ HighsStatus rsFormBasis(Highs& h, HighsBasis& basis,
   return status;
 }
 
+void Highs::lpSetScalars(const ObjSense sense, const double offset) {
+  model_cache_.lp_.sense_ = sense;
+  model_cache_.lp_.offset_ = offset;
+  if (!lp_cpp_newer_)
+    highs_rs::highs_rs_lph_set_model_scalars(ekk_instance_.p, int(sense),
+                                             offset);
+}
+
+void Highs::lpSetName(const std::string& name) {
+  model_cache_.lp_.model_name_ = name;
+  if (!lp_cpp_newer_)
+    highs_rs::highs_rs_lph_set_model_name(ekk_instance_.p, name.data(),
+                                          name.size());
+}
+
 void Highs::lpFromRust() {
   HighsLp& lp = model_cache_.lp_;
   RsLpVec v = rsLpVec(lp);

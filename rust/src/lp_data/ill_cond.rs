@@ -4,8 +4,9 @@
 //! view) or columns (column view), and the report of those multipliers.
 //!
 //! C++ (lp_data/HighsIllCondRust.cpp) clears the result, makes the
-//! incumbent matrix column-wise and passes views; the analysis LP is
-//! solved by a silent Highs through `op`, which also stores the records.
+//! incumbent matrix column-wise and passes views, and stores the records
+//! through `op`; the analysis LP is solved by a silent LP solver (an
+//! LpHandle, as the C++ ran a silent Highs).
 
 use super::ffi::{CLp, RsMut};
 use super::{Log, LogType, Status, INF};
@@ -18,35 +19,11 @@ const BASIC: u8 = 1;
 const MS_OPTIMAL: i32 = 7;
 const MS_INFEASIBLE: i32 = 8;
 
-/// The analysis LP, and its solution once solved
-#[repr(C)]
-pub struct CIllLp {
-    pub num_col: i32,
-    pub num_row: i32,
-    pub col_cost: RsMut<f64>,
-    pub col_lower: RsMut<f64>,
-    pub col_upper: RsMut<f64>,
-    pub row_lower: RsMut<f64>,
-    pub row_upper: RsMut<f64>,
-    pub start: RsMut<i32>,
-    pub index: RsMut<i32>,
-    pub value: RsMut<f64>,
-    /// Column names, each NUL terminated, or empty
-    pub names: RsMut<*const c_char>,
-    // Out: the run's HighsStatus, model status and objective, the first
-    // `col_value.len` column values and the last row value
-    pub run_status: i32,
-    pub model_status: i32,
-    pub objective: f64,
-    pub col_value: RsMut<f64>,
-    pub last_row_value: f64,
-}
-
 /// What computeIllConditioning works on (HighsIllCondRust.cpp)
 #[repr(C)]
 pub struct CIllHost {
     pub ctx: *mut c_void,
-    /// code 0: solve the CIllLp at `p`; 1: add the record (index, x)
+    /// Add the record (index, x) (code 1)
     pub op: unsafe extern "C" fn(*mut c_void, i32, *mut c_void, i32, f64),
     pub log: Log,
     pub lp: CLp,
@@ -72,7 +49,6 @@ struct Lp {
     start: Vec<i32>,
     index: Vec<i32>,
     value: Vec<f64>,
-    names: Vec<String>,
 }
 
 impl Lp {
@@ -138,7 +114,7 @@ struct Incumbent<'a> {
 
 /// The basic columns, each with its matrix column (`extra` appends
 /// entries), then the basic slacks; the basic variables in order
-fn basic_columns(inc: &Incumbent, lp: &mut Lp, names: bool, extra: impl Fn(&mut Lp, usize)) -> Vec<usize> {
+fn basic_columns(inc: &Incumbent, lp: &mut Lp, extra: impl Fn(&mut Lp, usize)) -> Vec<usize> {
     let mut basic_var = Vec::new();
     let mut k = 0;
     for col in 0..inc.num_col {
@@ -146,9 +122,6 @@ fn basic_columns(inc: &Incumbent, lp: &mut Lp, names: bool, extra: impl Fn(&mut 
             continue;
         }
         basic_var.push(col);
-        if names {
-            lp.names.push(format!("y_{k}"));
-        }
         lp.col(0.0, -INF, INF);
         for el in inc.start[col] as usize..inc.start[col + 1] as usize {
             lp.el(inc.index[el] as usize, inc.value[el]);
@@ -162,9 +135,6 @@ fn basic_columns(inc: &Incumbent, lp: &mut Lp, names: bool, extra: impl Fn(&mut 
             continue;
         }
         basic_var.push(inc.num_col + row);
-        if names {
-            lp.names.push(format!("y_{k}"));
-        }
         lp.col(0.0, -INF, INF);
         lp.el(row, -1.0);
         extra(lp, k);
@@ -184,7 +154,7 @@ fn form_lp0(inc: &Incumbent, constraint: bool) -> (Lp, Vec<usize>) {
     lp.row_lower.push(1.0);
     lp.row_upper.push(1.0);
     let e_row = m;
-    let basic_var = basic_columns(inc, &mut lp, false, |lp, _| {
+    let basic_var = basic_columns(inc, &mut lp, |lp, _| {
         if !constraint {
             lp.el(e_row, 1.0);
         }
@@ -215,7 +185,7 @@ fn form_lp1(inc: &Incumbent, constraint: bool, bound: f64) -> (Lp, Vec<usize>) {
     let mut lp = Lp { start: vec![0], ..Default::default() };
     lp.row_lower = vec![0.0; c6];
     lp.row_upper = vec![0.0; c6];
-    let basic_var = basic_columns(inc, &mut lp, true, |lp, k| {
+    let basic_var = basic_columns(inc, &mut lp, |lp, k| {
         if !constraint {
             lp.el(c1 + k, 1.0);
             lp.el(c6, 1.0);
@@ -237,8 +207,7 @@ fn form_lp1(inc: &Incumbent, constraint: bool, bound: f64) -> (Lp, Vec<usize>) {
     }
     lp.num_row = 3 * m + 2;
     for row in 0..m {
-        for (name, w) in [("u", -1.0), ("w", 1.0)] {
-            lp.names.push(format!("{name}_{row}"));
+        for w in [-1.0, 1.0] {
             lp.col(0.0, 0.0, INF);
             lp.el(c1 + row, w);
             lp.el(c7 + row, 1.0);
@@ -246,8 +215,7 @@ fn form_lp1(inc: &Incumbent, constraint: bool, bound: f64) -> (Lp, Vec<usize>) {
         }
     }
     for row in 0..m {
-        for (name, w) in [("s", -1.0), ("t", 1.0)] {
-            lp.names.push(format!("{name}_{row}"));
+        for w in [-1.0, 1.0] {
             lp.col(0.0, 0.0, INF);
             lp.el(c4 + row, w);
             lp.el(c5, 1.0);
@@ -259,8 +227,7 @@ fn form_lp1(inc: &Incumbent, constraint: bool, bound: f64) -> (Lp, Vec<usize>) {
     lp.row_lower.push(-INF);
     lp.row_upper.push(bound);
     for row in 0..m {
-        for (name, w) in [("IfsPlus", -1.0), ("IfsMinus", 1.0)] {
-            lp.names.push(format!("{name}_{row}"));
+        for w in [-1.0, 1.0] {
             lp.col(1.0, 0.0, INF);
             lp.el(c7 + row, w);
             lp.end_col();
@@ -270,8 +237,36 @@ fn form_lp1(inc: &Incumbent, constraint: bool, bound: f64) -> (Lp, Vec<usize>) {
     (lp, basic_var)
 }
 
-fn mut_of<T>(v: &mut [T]) -> RsMut<T> {
-    RsMut { ptr: v.as_mut_ptr(), len: v.len() }
+/// Highs::run of a silent Highs whose model's members are the analysis
+/// LP (set in place: no passModel): the run's status, the model status,
+/// the objective, the first `m` column values and the last row value
+fn solve_analysis_lp(a: Lp, m: usize) -> (Status, i32, f64, Vec<f64>, f64) {
+    use super::lp_handle::LpHandle;
+    use super::opts::OptValue;
+    let mut h = LpHandle::new();
+    h.set_option("output_flag", OptValue::Bool(false));
+    let lp = &mut h.model.g;
+    lp.num_col = a.num_col as i32;
+    lp.num_row = a.num_row as i32;
+    lp.col_cost = a.cost;
+    lp.col_lower = a.lower;
+    lp.col_upper = a.upper;
+    lp.row_lower = a.row_lower;
+    lp.row_upper = a.row_upper;
+    lp.a.num_col = a.num_col as i32;
+    lp.a.num_row = a.num_row as i32;
+    lp.a.start = a.start;
+    lp.a.index = a.index;
+    lp.a.value = a.value;
+    let run_status = h.run_lp();
+    let s = h.solution();
+    let mut col_value = vec![0.0; m];
+    for (x, &v) in col_value.iter_mut().zip(&s.col_value) {
+        *x = v;
+    }
+    let num_row = h.model.num_row as usize;
+    let last_row_value = if s.row_value.len() == num_row && num_row > 0 { s.row_value[num_row - 1] } else { 0.0 };
+    (run_status, h.model_status(), h.info().objective_function_value, col_value, last_row_value)
 }
 
 /// `ss << x` of a double (precision 6, like %g)
@@ -302,33 +297,10 @@ pub unsafe fn compute_ill_conditioning(h: &CIllHost) -> Status {
         col_status: h.col_status.get(),
         row_status: h.row_status.get(),
     };
-    let (mut a, basic_var) = if h.method == 0 { form_lp0(&inc, h.constraint) } else { form_lp1(&inc, h.constraint, h.bound) };
-    let mut name_ptrs: Vec<std::ffi::CString> =
-        a.names.iter().map(|s| std::ffi::CString::new(s.as_str()).unwrap()).collect();
-    let mut name_p: Vec<*const c_char> = name_ptrs.iter_mut().map(|s| s.as_ptr()).collect();
-    let mut col_value = vec![0.0; m];
-    let mut c = CIllLp {
-        num_col: a.num_col as i32,
-        num_row: a.num_row as i32,
-        col_cost: mut_of(&mut a.cost),
-        col_lower: mut_of(&mut a.lower),
-        col_upper: mut_of(&mut a.upper),
-        row_lower: mut_of(&mut a.row_lower),
-        row_upper: mut_of(&mut a.row_upper),
-        start: mut_of(&mut a.start),
-        index: mut_of(&mut a.index),
-        value: mut_of(&mut a.value),
-        names: mut_of(&mut name_p),
-        run_status: 0,
-        model_status: 0,
-        objective: 0.0,
-        col_value: mut_of(&mut col_value),
-        last_row_value: 0.0,
-    };
-    (h.op)(h.ctx, 0, &mut c as *mut CIllLp as *mut c_void, 0, 0.0);
+    let (a, basic_var) = if h.method == 0 { form_lp0(&inc, h.constraint) } else { form_lp1(&inc, h.constraint, h.bound) };
+    let (run_status, ms, objective, col_value, last_row_value) = solve_analysis_lp(a, m);
     let ty = if h.constraint { "Constraint" } else { "Column" };
-    let ms = c.model_status;
-    let failed = c.run_status != Status::Ok as i32
+    let failed = run_status != Status::Ok
         || (h.method == 0 && ms != MS_OPTIMAL)
         || (h.method == 1 && ms != MS_OPTIMAL && ms != MS_INFEASIBLE);
     if failed {
@@ -350,7 +322,7 @@ pub unsafe fn compute_ill_conditioning(h: &CIllHost) -> Status {
     for v in &col_value {
         norm += v.abs();
     }
-    let measure = (if h.method == 0 { c.objective } else { c.last_row_value }) / norm;
+    let measure = (if h.method == 0 { objective } else { last_row_value }) / norm;
     log_user!(
         log,
         LogType::Info,

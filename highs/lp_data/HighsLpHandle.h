@@ -244,6 +244,8 @@ bool highs_rs_lph_model_matches(LpHandle* h, const RsLp* lp, const char* name,
                                 size_t len);
 bool highs_rs_lph_take_matrix_back(LpHandle* h);
 void highs_rs_lph_exact_resize_model(LpHandle* h);
+void highs_rs_lph_set_model_scalars(LpHandle* h, int sense, double offset);
+void highs_rs_lph_set_model_name(LpHandle* h, const char* name, size_t len);
 void highs_rs_lph_ekk_clear(LpHandle* h);
 void highs_rs_lph_ekk_invalidate(LpHandle* h);
 void highs_rs_lph_update_status(LpHandle* h, int action);

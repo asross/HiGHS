@@ -1658,6 +1658,9 @@ class Highs {
   void lpToRust();
   // The copy takes the engine model's LP data
   void lpFromRust();
+  // The model's sense and offset, and its name, in both copies
+  void lpSetScalars(const ObjSense sense, const double offset);
+  void lpSetName(const std::string& name);
   HighsInt lpNumCol() const { return model_cache_.lp_.num_col_; }
   HighsInt lpNumRow() const { return model_cache_.lp_.num_row_; }
   HighsInt lpNumNz() const { return model_cache_.lp_.a_matrix_.numNz(); }
@@ -1675,6 +1678,11 @@ class Highs {
   HighsInt lpNumNz() const { return model_.lp_.a_matrix_.numNz(); }
   HighsLp& lpCpp() { return model_.lp_; }
   const HighsLp& lpCpp() const { return model_.lp_; }
+  void lpSetScalars(const ObjSense sense, const double offset) {
+    model_.lp_.sense_ = sense;
+    model_.lp_.offset_ = offset;
+  }
+  void lpSetName(const std::string& name) { model_.lp_.model_name_ = name; }
 #endif
   std::vector<HighsLinearObjective> multi_linear_objective_;
 

@@ -2823,6 +2823,25 @@ pub mod ffi {
         d.is_empty()
     }
 
+    /// The model's sense (ObjSense) and offset
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_set_model_scalars(p: *mut LpHandle, sense: i32, offset: f64) {
+        let m = &mut h(p).model;
+        m.sense = sense;
+        m.offset = offset;
+    }
+
+    /// The model's name
+    ///
+    /// # Safety
+    /// `name` holds `len` bytes
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_set_model_name(p: *mut LpHandle, name: *const u8, len: usize) {
+        let m = &mut h(p).model;
+        m.model_name.clear();
+        m.model_name.extend_from_slice(sl(name, len as i32));
+    }
+
     /// HighsLp::exactResize of the model
     #[no_mangle]
     pub extern "C" fn highs_rs_lph_exact_resize_model(p: *mut LpHandle) {
