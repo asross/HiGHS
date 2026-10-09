@@ -42,6 +42,22 @@ the sole caller's path.
 Order: HFactor -> simplex (HEkk, HSimplexNla) -> presolve -> MIP -> top level;
 file readers in parallel. IPX, PDLP and QP last.
 
+## Verification tiers
+
+Checks cost: run the cheap ones per change, the expensive ones per batch.
+
+- **Every change (~3 min):** build, then `rust/bench/quick_check.sh
+  <C++ build> <Rust build>`: cargo test, LP logs on 12 instances (presolve
+  on/off), 9 MIPs at 200 nodes, api_compare, cli_compare. Exit status 0
+  iff all match, so `git bisect run rust/bench/quick_check.sh ...` finds
+  the commit that broke a path.
+- **Every batch of a few commits:** the full MIP log comparison at 100
+  nodes (not 300; skip markshare_4_0, 50v-10; cygnet and supportcase10
+  only if time allows), one `perf.py --reps 1`.
+- **Milestones (before pushing a stage, before the extraction):** gcc pair
+  (`gcc_builds.sh`), x86_64 under Rosetta, 300-node MIP suite, ctest with
+  ALL_TESTS, `perf.py --reps 3`.
+
 ## Known divergences from the C++ (deliberate)
 
 - **dualize (simplex_dualize_strategy on, not the default):** HEkk keeps the
