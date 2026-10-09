@@ -239,7 +239,6 @@ _srcs = [
     'io/HighsIO.cpp',
     'io/LoadOptions.cpp',
     'ipm/IpxWrapper.cpp',
-    'ipm/IpxWrapperRust.cpp',
     'lp_data/Highs.cpp',
     'lp_data/HighsAppRust.cpp',
     'lp_data/HighsCallback.cpp',

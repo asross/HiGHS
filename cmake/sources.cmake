@@ -355,7 +355,6 @@ set(highs_sources
     io/LoadOptions.cpp
     io/filereaderlp/reader.cpp
     ipm/IpxWrapper.cpp
-    ipm/IpxWrapperRust.cpp
     lp_data/Highs.cpp
     lp_data/HighsAppRust.cpp
     lp_data/HighsCallback.cpp

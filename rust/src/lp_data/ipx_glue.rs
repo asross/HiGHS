@@ -1,14 +1,15 @@
-//! The IPX glue of highs/ipm/IpxWrapper.cpp: solveLpIpx (IPX parameters
-//! from the options, the LP in IPX form, the solve, the status reports and
-//! checks, and the interior or basic solution in HiGHS form) and
-//! fillInIpxData. IPX itself is the Rust port (crate::ipx).
+//! The IPX glue of highs/ipm/IpxWrapper.cpp and presolve/ICrashX.cpp:
+//! solveLpIpx (IPX parameters from the options, the LP in IPX form, the
+//! solve, the status reports and checks, and the interior or basic
+//! solution in HiGHS form), fillInIpxData and callCrossover. IPX itself is
+//! the Rust port (crate::ipx).
 //!
-//! C++ (highs/ipm/IpxWrapperRust.cpp) passes the options, the LP view, the
-//! HighsInfo, model status and validity flags in place, and callbacks for
-//! the timer and for sizing the solution and basis vectors at the points
-//! the C++ resized them; the IPX hooks (logging, task and user interrupt)
-//! are those of ipx::LpSolver. A cancelled task returns `CANCELLED` and C++
-//! throws HighsTask::Interrupt.
+//! The caller (an LP run on Rust data, lp_run.rs, or a handle's crossover)
+//! passes the options, the LP view, the HighsInfo, model status and
+//! validity flags in place, and callbacks for the timer and for sizing the
+//! solution and basis vectors at the points the C++ resized them; the IPX
+//! hooks (logging, task and user interrupt) are the handle's. A cancelled
+//! task returns `CANCELLED` and C++ throws HighsTask::Interrupt.
 
 use super::basis::{ipx_basic_solution_to_highs_basic_solution, ipx_solution_to_highs_solution, COut, IpxSolution};
 use super::ffi::CLp;
@@ -17,6 +18,7 @@ use super::solution::Info;
 use super::solve::reset_model_status_and_info;
 use super::{Log, LogType, Status, INF};
 use crate::ipx::{self, Hooks, LpSolver, Parameters};
+use crate::util::fma::ClangFma;
 use crate::{log_dev, log_user};
 use std::ffi::c_void;
 
@@ -210,7 +212,7 @@ fn data<T>(v: &[T], cap: usize) -> *const T {
     }
 }
 
-/// The options solveLpIpx reads (IpxWrapperRust.cpp: RsIpxOptions)
+/// The options solveLpIpx reads
 #[repr(C)]
 pub struct CIpxOptions {
     pub log: Log,
@@ -235,7 +237,7 @@ pub struct CIpxOptions {
     pub centring_ratio_tolerance: f64,
 }
 
-/// What solveLpIpx works on (IpxWrapperRust.cpp: RsIpxHost)
+/// What solveLpIpx works on
 #[repr(C)]
 pub struct CIpxHost {
     pub ctx: *mut c_void,
@@ -255,7 +257,7 @@ pub struct CIpxHost {
     pub basis_useful: *mut bool,
 }
 
-// The C layouts (checked on the C++ side too, IpxWrapperRust.cpp)
+// The C layouts
 const _: () = assert!(std::mem::size_of::<CIpxOptions>() == 112);
 const _: () = assert!(std::mem::size_of::<CIpxHost>() == 64 + std::mem::size_of::<CLp>() + 112 + 48);
 
@@ -745,50 +747,162 @@ pub unsafe extern "C" fn highs_rs_solve_lp_ipx(h: *const CIpxHost) -> i32 {
     solve_lp_ipx(&*h)
 }
 
-/// fillInIpxData for C++ (ICrashX.cpp): a handle read by
-/// highs_rs_ipx_data_get and freed by highs_rs_ipx_data_free
+/// std::max and std::min of doubles
+fn cpp_max(a: f64, b: f64) -> f64 {
+    if a < b {
+        b
+    } else {
+        a
+    }
+}
+fn cpp_min(a: f64, b: f64) -> f64 {
+    if b < a {
+        b
+    } else {
+        a
+    }
+}
+
+/// A C++ vector's data() as IPX reads it: null when empty
+fn opt(v: &[f64]) -> Option<&[f64]> {
+    (!v.is_empty()).then_some(v)
+}
+
+/// callCrossover (ICrashX.cpp): IPX crossover from the primal point
+/// `col_value` (and the duals `(row_dual, col_dual)` if given), the basic
+/// solution in HiGHS form; returns the HighsStatus, or `CANCELLED`. Of the
+/// host's options only the log, log options, output_flag and
+/// log_dev_level are read.
 ///
 /// # Safety
-/// lp a valid view
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_fill_in_ipx_data(lp: *const CLp) -> *mut IpxData {
-    Box::into_raw(Box::new(fill_in_ipx_data(&*lp)))
-}
-
-/// The IpxData's arrays (C++ copies them), as (pointer, length) pairs:
-/// obj, col_lb, col_ub, ax, rhs (f64); ap, ai (i32); constraint_type
-#[repr(C)]
-pub struct CIpxData {
-    pub num_col: i32,
-    pub num_row: i32,
-    pub offset: f64,
-    pub f: [super::ffi::RsMut<f64>; 5],
-    pub i: [super::ffi::RsMut<i32>; 2],
-    pub constraint_type: super::ffi::RsMut<u8>,
-}
-
-/// # Safety
-/// d from highs_rs_fill_in_ipx_data
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_ipx_data_get(d: *mut IpxData, out: *mut CIpxData) {
-    use super::ffi::RsMut;
-    let d = &mut *d;
-    fn m<T>(v: &mut Vec<T>) -> RsMut<T> {
-        RsMut { ptr: v.as_mut_ptr(), len: v.len() }
+/// As solve_lp_ipx
+pub unsafe fn call_crossover(h: &CIpxHost, col_value: &[f64], duals: Option<(&[f64], &[f64])>) -> i32 {
+    let o = &h.options;
+    let log = &o.log;
+    let lp = &h.lp;
+    let d = fill_in_ipx_data(lp);
+    let mut p = Parameters::default();
+    p.run_crossover = 1;
+    p.crash_basis = 1;
+    p.display = o.output_flag as i32;
+    p.debug = match o.log_dev_level {
+        1 => 2,
+        3 => 4,
+        _ => 0,
+    };
+    p.highs_logging = true;
+    p.log_options = o.log_options;
+    let mut lps = LpSolver::new();
+    lps.set_hooks(h.hooks);
+    lps.set_parameters(p);
+    // SAFETY: lps is an LpSolver; the arrays have the sizes IPX documents
+    let load_status = ipx::ffi::ipx_rs_load_model(
+        &mut lps as *mut LpSolver as *mut c_void,
+        d.num_col,
+        d.offset,
+        data(&d.obj, d.obj.capacity()),
+        data(&d.col_lb, d.col_lb.capacity()),
+        data(&d.col_ub, d.col_ub.capacity()),
+        d.num_row,
+        data(&d.ap, d.ap.capacity()),
+        data(&d.ai, d.ai.capacity()),
+        data(&d.ax, d.ax.capacity()),
+        data(&d.rhs, d.rhs.capacity()),
+        data(&d.constraint_type, d.constraint_type.capacity()) as *const std::ffi::c_char,
+    );
+    if load_status != 0 {
+        log_user!(log, LogType::Error, "Error loading ipx model\n");
+        return Status::Error as i32;
     }
-    *out = CIpxData {
+    let (n, m) = (d.num_col as usize, d.num_row as usize);
+    // x within its bounds (a short point is padded with zeros)
+    let mut x = col_value.to_vec();
+    x.resize(x.len().max(n), 0.0);
+    for i in 0..n {
+        x[i] = cpp_min(cpp_max(x[i], d.col_lb[i]), d.col_ub[i]);
+    }
+    // The slacks rhs - A*x, subject to the sign conditions
+    let mut slack = d.rhs.clone();
+    for i in 0..n {
+        for p in d.ap[i] as usize..d.ap[i + 1] as usize {
+            // clang fuses `slack[Ai[p]] -= Av[p] * x[i]`
+            let r = d.ai[p] as usize;
+            slack[r] = (-d.ax[p]).mul_add_c(x[i], slack[r]);
+        }
+    }
+    for i in 0..m {
+        match d.constraint_type[i] {
+            b'=' => slack[i] = 0.0,
+            b'<' => slack[i] = cpp_max(slack[i], 0.0),
+            b'>' => slack[i] = cpp_min(slack[i], 0.0),
+            _ => {}
+        }
+    }
+    let crossover_status = match duals {
+        Some((row_dual, col_dual)) => {
+            log_user!(log, LogType::Info, "Calling IPX crossover with primal and dual values\n");
+            lps.crossover_from_starting_point(opt(&x[..n]), opt(&slack), opt(row_dual), opt(col_dual))
+        }
+        None => {
+            log_user!(log, LogType::Info, "Calling IPX crossover with only primal values\n");
+            lps.crossover_from_starting_point(opt(&x[..n]), opt(&slack), None, None)
+        }
+    };
+    if lps.cancelled() {
+        return CANCELLED;
+    }
+    if crossover_status != 0 {
+        log_user!(log, LogType::Error, "IPX crossover error: flag = %d\n", crossover_status);
+        return Status::Error as i32;
+    }
+    let ii = lps.get_info();
+    let info = &mut *h.info;
+    info.crossover_iteration_count += ii.updates_crossover;
+    let imprecise = ii.status_crossover == IMPRECISE;
+    if ii.status_crossover != OPTIMAL && ii.status_crossover != IMPRECISE && ii.status_crossover != TIME_LIMIT {
+        log_user!(log, LogType::Error, "IPX crossover failed: status = %d\n", ii.status_crossover);
+        return Status::Error as i32;
+    }
+    if ii.status_crossover == TIME_LIMIT {
+        *h.model_status = MS_TIME_LIMIT;
+        return Status::Warning as i32;
+    }
+    let (mut cv, mut rv, mut cd, mut rd) = (vec![0.0; n], vec![0.0; m], vec![0.0; n], vec![0.0; m]);
+    let (mut rs, mut cs) = (vec![0i32; m], vec![0i32; n]);
+    let errflag =
+        lps.get_basic_solution(Some(&mut cv), Some(&mut rv), Some(&mut rd), Some(&mut cd), Some(&mut rs), Some(&mut cs));
+    if errflag != 0 {
+        log_user!(log, LogType::Error, "IPX crossover getting basic solution: flag = %d\n", errflag);
+        return Status::Error as i32;
+    }
+    let ipx_solution = IpxSolution {
         num_col: d.num_col,
         num_row: d.num_row,
-        offset: d.offset,
-        f: [m(&mut d.obj), m(&mut d.col_lb), m(&mut d.col_ub), m(&mut d.ax), m(&mut d.rhs)],
-        i: [m(&mut d.ap), m(&mut d.ai)],
-        constraint_type: m(&mut d.constraint_type),
+        col_value: &cv,
+        row_value: &rv,
+        col_dual: &cd,
+        row_dual: &rd,
+        col_status: &cs,
+        row_status: &rs,
     };
-}
-
-/// # Safety
-/// d from highs_rs_fill_in_ipx_data, not used afterwards
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_ipx_data_free(d: *mut IpxData) {
-    drop(Box::from_raw(d));
+    let mut out = std::mem::zeroed::<COut>();
+    (h.resize)(h.ctx, true, &mut out);
+    if ipx_basic_solution_to_highs_basic_solution(log, lp, &d.rhs, &d.constraint_type, &ipx_solution, &mut out.view())
+        == Status::Error
+    {
+        log_user!(log, LogType::Error, "Failed to convert IPX basic solution to Highs basic solution\n");
+        return Status::Error as i32;
+    }
+    *h.value_valid = true;
+    *h.dual_valid = true;
+    *h.basis_valid = true;
+    *h.basis_useful = true;
+    info.basis_validity = BASIS_VALIDITY_VALID;
+    if imprecise {
+        *h.model_status = MS_UNKNOWN;
+        Status::Warning as i32
+    } else {
+        *h.model_status = MS_OPTIMAL;
+        Status::Ok as i32
+    }
 }

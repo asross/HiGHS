@@ -1809,6 +1809,41 @@ impl LpHandle {
         }
     }
 
+    /// callCrossover (Highs::crossover) on the model and the run's data:
+    /// IPX crossover from the run's solution; the HighsStatus, or
+    /// ipx_glue's `CANCELLED`
+    pub fn crossover(&mut self) -> i32 {
+        use super::lp_run::{ipx_resize, ipx_timer, IpxCtx};
+        let mut h = self.ipx_template();
+        let lps: *mut LpSolver = &mut *self.lps;
+        let c = IpxCtx {
+            timer_read: h.timer_read,
+            timer_ctx: h.ctx,
+            lps,
+            num_col: self.model.num_col as usize,
+            num_row: self.model.num_row as usize,
+        };
+        h.ctx = &c as *const IpxCtx as *mut c_void;
+        h.timer_read = ipx_timer;
+        h.resize = ipx_resize;
+        // SAFETY: the run's data, not otherwise borrowed during the call
+        unsafe {
+            let r = &mut (*lps).run;
+            h.info = &mut r.info;
+            h.model_status = &mut r.model_status;
+            h.value_valid = &mut r.solution.value_valid;
+            h.dual_valid = &mut r.solution.dual_valid;
+            h.basis_valid = &mut r.basis.b.valid;
+            h.basis_useful = &mut r.basis.b.useful;
+            let s = &r.solution;
+            let (nc, nr) = (c.num_col, c.num_row);
+            let x = s.col_value.clone();
+            let duals = (s.dual_valid && s.col_dual.len() == nc && s.row_dual.len() == nr)
+                .then(|| (s.row_dual.clone(), s.col_dual.clone()));
+            super::ipx_glue::call_crossover(&h, &x, duals.as_ref().map(|(r, c)| (&r[..], &c[..])))
+        }
+    }
+
     /// solveLpIpx's options, hooks and timer (rsIpxHostTemplate)
     fn ipx_template(&mut self) -> CIpxHost {
         let log = self.log();
@@ -2700,6 +2735,12 @@ pub mod ffi {
         let (s, won) = h(p).optimize_racing_ipx(seed, &mut *extra);
         *ipx_won = won;
         s as i32
+    }
+
+    /// Highs::crossover's callCrossover on the handle's model and run data
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_crossover(p: *mut LpHandle) -> i32 {
+        h(p).crossover()
     }
 
     #[no_mangle]

@@ -27,7 +27,6 @@
 #include "mip/HighsMipSolver.h"
 #include "parallel/HighsParallel.h"
 #include "model/HighsHessianUtils.h"
-#include "presolve/ICrashX.h"
 #include "simplex/HSimplex.h"
 #include "util/HighsMatrixPic.h"
 
@@ -1196,9 +1195,21 @@ struct HighsRunRust {
         return 0;
       case RunOp::kCrossover:
         if (arg == 0) {
+          // callCrossover on the engine (lp_handle.rs crossover): the
+          // model, options, solution, basis, info and model status
+          // copied in and out
           h.solution_ = *user_solution;
-          return st(callCrossover(options, lp, h.basis_, h.solution_,
-                                  h.model_status_, h.info_, h.callback_));
+          RsBasisVec basis;
+          RsRunData d = runData(basis);
+          highs_rs::LpHandle* e = h.ekk_instance_.p;
+          highs_rs_lps_run_import(h.ekk_instance_.lps, &d);
+          rsSyncOptions(e, options);
+          rsImportModel(e, lp);
+          const int status = highs_rs::highs_rs_lph_crossover(e);
+          highs_rs_lps_run_export(h.ekk_instance_.lps, &d);
+          rsBasisVecBack(basis, h.basis_);
+          if (status == 2) throw HighsTask::Interrupt();
+          return status;
         }
         h.info_.objective_function_value =
             lp.objectiveValue(h.solution_.col_value);

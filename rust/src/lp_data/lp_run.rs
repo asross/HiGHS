@@ -593,20 +593,20 @@ pub struct UnconTemplate {
 }
 
 /// The context of IPX's host functions on the Rust data
-struct IpxCtx {
-    timer_read: unsafe extern "C" fn(*mut c_void) -> f64,
-    timer_ctx: *mut c_void,
-    lps: *mut LpSolver,
-    num_col: usize,
-    num_row: usize,
+pub(crate) struct IpxCtx {
+    pub(crate) timer_read: unsafe extern "C" fn(*mut c_void) -> f64,
+    pub(crate) timer_ctx: *mut c_void,
+    pub(crate) lps: *mut LpSolver,
+    pub(crate) num_col: usize,
+    pub(crate) num_row: usize,
 }
 
-unsafe extern "C" fn ipx_timer(ctx: *mut c_void) -> f64 {
+pub(crate) unsafe extern "C" fn ipx_timer(ctx: *mut c_void) -> f64 {
     let c = &*(ctx as *const IpxCtx);
     (c.timer_read)(c.timer_ctx)
 }
 
-unsafe extern "C" fn ipx_resize(ctx: *mut c_void, with_basis: bool, out: *mut COut) {
+pub(crate) unsafe extern "C" fn ipx_resize(ctx: *mut c_void, with_basis: bool, out: *mut COut) {
     let c = &*(ctx as *const IpxCtx);
     let r = &mut (*c.lps).run;
     let s = &mut r.solution;

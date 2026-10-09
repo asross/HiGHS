@@ -27,9 +27,9 @@ if(HIGHS_RUST)
   set_source_files_properties(HighsExternalApi.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
   # Left out of Crestline (rust/PORTING.md, "Crestline's scope"): HiPO,
   # HiPDLP, PAMI (HEkkDualMulti.cpp; SIP is guarded in HEkkDual.cpp),
-  # iCrash (ICrashX.cpp is callCrossover, kept), the C API, the dev KKT
-  # checker and the MIP debug solution (empty without HIGHS_DEBUGSOL).
-  # Requests for them fail cleanly.
+  # iCrash (callCrossover of ICrashX.cpp is Rust: lp_handle.rs crossover),
+  # the C API, the dev KKT checker and the MIP debug solution (empty
+  # without HIGHS_DEBUGSOL). Requests for them fail cleanly.
   set(hipo_sources)
   set(hipo_headers)
   set(factor_highs_sources)
@@ -47,6 +47,7 @@ if(HIGHS_RUST)
     pdlp/hipdlp/scaling.cc
     presolve/ICrash.cpp
     presolve/ICrashUtil.cpp
+    presolve/ICrashX.cpp
     simplex/HEkkDualMulti.cpp
     test_kkt/DevKkt.cpp
     test_kkt/KktCh2.cpp)

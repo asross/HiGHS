@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "lp_data/HStruct.h"
+#include "lp_data/HighsInfo.h"
 #include "lp_data/HighsRust.h"
 #include "lp_data/HighsStatus.h"
 #include "simplex/SimplexStruct.h"
@@ -227,6 +228,7 @@ const HighsInt* highs_rs_lph_basic_index(LpHandle* h);
 const double* highs_rs_lph_dual_edge_weights(LpHandle* h);
 double highs_rs_lph_run_time(LpHandle* h);
 void highs_rs_lph_set_profiling(LpHandle* h, void* profiling);
+int highs_rs_lph_crossover(LpHandle* h);
 int highs_rs_lph_race_ipx(LpHandle* h, HighsInt seed, int64_t* extra,
                           bool* ipx_won);
 void highs_rs_lph_ipm_basis(LpHandle* h, bool use_presolve, void* profiling);
