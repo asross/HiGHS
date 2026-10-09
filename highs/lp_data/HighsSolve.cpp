@@ -14,7 +14,12 @@
 #include "lp_data/HighsSolutionDebug.h"
 #include "pdlp/CupdlpWrapper.h"
 #include "pdlp/HiPdlpWrapper.h"
+#ifdef HIGHS_RUST
+#include "lp_data/HighsRust.h"
+#include "model/HighsModel.h"
+#else
 #include "simplex/HApp.h"
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsSolveRust.cpp, rust/src/lp_data/solve.rs)
@@ -181,6 +186,29 @@ HighsStatus solveLp(HighsLpSolverObject& solver_object, const string message) {
 
 // Solves an unconstrained LP without scaling, setting HighsBasis, HighsSolution
 // and HighsInfo
+#ifdef HIGHS_RUST
+extern "C" void highs_rs_assess_excessive_objective_bound_scaling(
+    const RsLog* log, const RsLp* lp, RsMut<double> hessian_value,
+    HighsInt user_objective_scale, HighsInt user_bound_scale,
+    HighsInt* suggested_user_objective_scale,
+    HighsInt* suggested_user_bound_scale);
+
+// rust/src/lp_data/solve.rs
+void assessExcessiveObjectiveBoundScaling(const HighsLogOptions log_options,
+                                          const HighsModel& model,
+                                          HighsUserScaleData& user_scale_data) {
+  const RsLog log = rsLog(log_options);
+  const RsLp v = rsLp(model.lp_);
+  const RsMut<double> hessian_value = {
+      const_cast<double*>(model.hessian_.value_.data()),
+      size_t(model.hessian_.numNz())};
+  highs_rs_assess_excessive_objective_bound_scaling(
+      &log, &v, hessian_value, user_scale_data.user_objective_scale,
+      user_scale_data.user_bound_scale,
+      &user_scale_data.suggested_user_objective_scale,
+      &user_scale_data.suggested_user_bound_scale);
+}
+#else
 HighsStatus solveUnconstrainedLp(HighsLpSolverObject& solver_object) {
   return (solveUnconstrainedLp(solver_object.options_, solver_object.lp_,
                                solver_object.model_status_,
@@ -188,7 +216,6 @@ HighsStatus solveUnconstrainedLp(HighsLpSolverObject& solver_object) {
                                solver_object.solution_, solver_object.basis_));
 }
 
-#ifndef HIGHS_RUST
 // Ported to Rust (HighsSolveRust.cpp, rust/src/lp_data/solve.rs)
 // Solves an unconstrained LP without scaling, setting HighsBasis, HighsSolution
 // and HighsInfo

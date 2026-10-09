@@ -379,7 +379,6 @@ set(highs_sources
     lp_data/HighsSolution.cpp
     lp_data/HighsSolutionRust.cpp
     lp_data/HighsWritersRust.cpp
-    lp_data/HighsSolveRust.cpp
     lp_data/HighsSolutionDebug.cpp
     lp_data/HighsSolve.cpp
     lp_data/HighsStatus.cpp
@@ -452,7 +451,6 @@ set(highs_sources
     simplex/HEkkDualRowRust.cpp
     simplex/HEkkInterface.cpp
     simplex/HEkkPrimal.cpp
-    simplex/HEkkRust.cpp
     simplex/HighsSimplexAnalysis.cpp
     simplex/HSimplex.cpp
     simplex/HSimplexDebug.cpp
@@ -511,6 +509,7 @@ set(highs_headers
     lp_data/HighsInfo.h
     lp_data/HighsInfoDebug.h
     lp_data/HighsLp.h
+    lp_data/HighsLpHandle.h
     lp_data/HighsLpSolverObject.h
     lp_data/HighsLpUtils.h
     lp_data/HighsRust.h
@@ -611,7 +610,6 @@ set(highs_headers
     qpsolver/steepestedgepricing.hpp
     simplex/HApp.h
     simplex/HEkk.h
-    simplex/HEkkRust.h
     simplex/HEkkDual.h
     simplex/HEkkDualRHS.h
     simplex/HEkkDualRow.h

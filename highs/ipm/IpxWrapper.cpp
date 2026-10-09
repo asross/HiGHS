@@ -21,6 +21,7 @@
 
 using std::min;
 
+#ifndef HIGHS_RUST  // IPX glue in Rust (rust/src/lp_data/ipx_glue.rs)
 HighsStatus solveLpIpx(HighsLpSolverObject& solver_object) {
   return solveLpIpx(solver_object.options_, solver_object.timer_,
                     solver_object.lp_, solver_object.basis_,
@@ -28,7 +29,6 @@ HighsStatus solveLpIpx(HighsLpSolverObject& solver_object) {
                     solver_object.highs_info_, solver_object.callback_);
 }
 
-#ifndef HIGHS_RUST  // IPX glue in Rust (rust/src/lp_data/ipx_glue.rs)
 HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
                        const HighsLp& lp, HighsBasis& highs_basis,
                        HighsSolution& highs_solution,

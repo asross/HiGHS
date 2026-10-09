@@ -22,6 +22,9 @@
 #include "model/HighsModel.h"
 #include "presolve/ICrash.h"
 #include "presolve/PresolveComponent.h"
+#ifdef HIGHS_RUST
+#include "lp_data/HighsLpHandle.h"
+#endif
 
 /**
  * @brief Return the version
@@ -46,6 +49,10 @@ class Highs {
   friend struct HighsIfaceRust;
   // The IIS in Rust (lp_data/HighsIisRust.cpp)
   friend struct HighsIisRust;
+#ifdef HIGHS_RUST
+  // What the simplex engine calls in C++ (lp_data/HighsRunRust.cpp)
+  friend highs_rs::LphHost rsEngineHost(Highs* highs);
+#endif
 
  public:
   Highs();
@@ -1378,12 +1385,21 @@ class Highs {
   // Used in MIP solver as minimal LP solve
   HighsStatus optimizeLp();
 
+#ifdef HIGHS_RUST
+  const HighsSimplexStats& getSimplexStats() const {
+    return ekk_instance_.getSimplexStats();
+  }
+  void reportSimplexStats(FILE* file) const {
+    ekk_instance_.getSimplexStats().report(file);
+  }
+#else
   const HighsSimplexStats& getSimplexStats() const {
     return ekk_instance_.getSimplexStats();
   }
   void reportSimplexStats(FILE* file) const {
     ekk_instance_.reportSimplexStats(file);
   }
+#endif
 
   /**
    * @brief Put a copy of the current iterate - basis; invertible
@@ -1405,7 +1421,7 @@ class Highs {
    */
   const double* getDualEdgeWeights() const {
 #ifdef HIGHS_RUST
-    return ekk_instance_.dualEdgeWeights();
+    return highs_rs::highs_rs_lph_dual_edge_weights(ekk_instance_.p);
 #else
     return ekk_instance_.status_.has_dual_steepest_edge_weights
                ? ekk_instance_.dual_edge_weight_.data()
@@ -1436,7 +1452,11 @@ class Highs {
    * method: for HiGHS IIS calculation
    */
   const std::vector<double>& getPrimalPhase1Dual() const {
+#ifdef HIGHS_RUST
+    return ekk_instance_.primalPhase1Dual();
+#else
     return ekk_instance_.primal_phase1_dual_;
+#endif
   }
 
   /**
@@ -1564,7 +1584,11 @@ class Highs {
    * @brief Get the hot start basis data from the most recent simplex
    * solve. Advanced method: for HiGHS MIP solver
    */
+#ifdef HIGHS_RUST
+  const HotStart& getHotStart() const { return ekk_instance_.hotStart(); }
+#else
   const HotStart& getHotStart() const { return ekk_instance_.hot_start_; }
+#endif
 
   /**
    * @brief Set up for simplex using the supplied hot start
@@ -1634,7 +1658,12 @@ class Highs {
   std::vector<double> standard_form_rhs_;
   HighsSparseMatrix standard_form_matrix_;
 
+#ifdef HIGHS_RUST
+  // The simplex engine, on which the LP runs are made
+  HighsEngine ekk_instance_;
+#else
   HEkk ekk_instance_;
+#endif
 
   HighsPresolveLog presolve_log_;
 
@@ -1696,7 +1725,11 @@ class Highs {
   void clearStandardFormLp();
 
   // Clears the ray records
+#ifdef HIGHS_RUST
+  void clearRayRecords() { highs_rs::highs_rs_lps_clear_ray_records(ekk_instance_.lps); }
+#else
   void clearRayRecords() { this->ekk_instance_.clearRayRecords(); }
+#endif
   //
   // Methods to clear solver data for users in Highs class members
   // before (possibly) updating them with data from trying to solve

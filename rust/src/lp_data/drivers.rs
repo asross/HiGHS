@@ -112,6 +112,36 @@ impl Run<'_> {
         }
     }
 
+    /// callRunPostsolve's clean-up solve of the model LP, timed by the
+    /// solve clock, on the engine's data (as the LP part of a run, but the
+    /// Highs object's presolve data are kept)
+    fn postsolve_cleanup_solve(&self) -> Status {
+        let mut handle: *mut super::lp_handle::LpHandle = std::ptr::null_mut();
+        self.op(Op::LpRustBegin, 0, &mut handle as *mut _ as *mut c_void);
+        if self.ab() {
+            return Status::Error;
+        }
+        let mode = super::lp_run::LpMode::new(self.c, handle);
+        let c2 = mode.view();
+        // SAFETY: c2's pointers live for the call
+        let run2 = unsafe { Run::new(&c2) };
+        run2.op0(Op::EkkInvalidate);
+        run2.op_msg(Op::SetEkkLpName, 0, "Postsolve LP");
+        self.clock(super::run::Clock::Solve, 1);
+        let call_status =
+            self.st(run2.op_msg(Op::CallSolveLp, 0, "Solving the original LP from the solution after postsolve"));
+        let aborted = run2.ab() || mode.aborted.get();
+        if !aborted {
+            self.clock(super::run::Clock::Solve, 2);
+        }
+        self.op(Op::LpRustEnd, 1, std::ptr::null_mut());
+        if aborted {
+            self.abort();
+            return Status::Error;
+        }
+        call_status
+    }
+
     /// Highs::checkOptimality
     pub fn check_optimality(&self, solver_type: &str) -> Status {
         let info = self.info();
@@ -643,18 +673,10 @@ impl Run<'_> {
                     self.op0(Op::SaveOptions);
                     self.op0(Op::OptionsPostsolveCleanup);
                     self.op0(Op::RefineBasis);
-                    self.op0(Op::EkkInvalidate);
-                    self.op_msg(Op::SetEkkLpName, 0, "Postsolve LP");
-                    self.clock(super::run::Clock::Solve, 1);
-                    let call_status = self.st(self.op_msg(
-                        Op::CallSolveLp,
-                        0,
-                        "Solving the original LP from the solution after postsolve",
-                    ));
+                    let call_status = self.postsolve_cleanup_solve();
                     if self.ab() {
                         return Status::Error;
                     }
-                    self.clock(super::run::Clock::Solve, 2);
                     return_status = self.interpret(call_status, return_status, "callSolveLp");
                     self.op0(Op::RestoreOptions);
                     self.op(Op::PostsolveKkt, 0, std::ptr::null_mut());

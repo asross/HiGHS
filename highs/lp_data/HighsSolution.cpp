@@ -2098,11 +2098,11 @@ void accommodateAlienBasis(HighsLpSolverObject& solver_object) {
   assert(num_basic_variables == num_row);
 }
 
-#endif  // HIGHS_RUST: rust/src/lp_data/form_basis.rs
 void resetModelStatusAndHighsInfo(HighsLpSolverObject& solver_object) {
   resetModelStatusAndHighsInfo(solver_object.model_status_,
                                solver_object.highs_info_);
 }
+#endif  // HIGHS_RUST: rust/src/lp_data/form_basis.rs
 
 void resetModelStatusAndHighsInfo(HighsModelStatus& model_status,
                                   HighsInfo& highs_info) {

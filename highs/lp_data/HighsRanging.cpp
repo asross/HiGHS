@@ -15,6 +15,7 @@
 #include <functional>  // for negate
 #include <sstream>
 
+#include "lp_data/HighsLpHandle.h"
 #include "lp_data/HighsModelUtils.h"
 #include "lp_data/HighsRust.h"
 
@@ -634,7 +635,7 @@ extern "C" int highs_rs_get_ranging_data(const RsRanging* c);
 
 namespace {
 struct RangingFtran {
-  HEkk& ekk;
+  HighsEngine& ekk;
   const HighsSparseMatrix& matrix;
   HVector column;
 };
@@ -658,27 +659,31 @@ RsRangingRecord rsRangingRecord(HighsRangingRecord& r, const HighsInt n) {
 }
 }  // namespace
 
-HighsStatus getRangingData(HighsRanging& ranging,
-                           HighsLpSolverObject& solver_object) {
+HighsStatus getRangingData(HighsRanging& ranging, HighsEngine& ekk_instance,
+                           const HighsOptions& options, const HighsLp& use_lp,
+                           const HighsBasis& basis,
+                           const HighsSolution& solution,
+                           const HighsModelStatus model_status,
+                           const double objective_function_value) {
   ranging.clear();
-  HEkk& ekk_instance = solver_object.ekk_instance_;
   RsRanging c{};
-  c.log = rsLog(solver_object.options_.log_options);
-  c.optimal = solver_object.model_status_ == HighsModelStatus::kOptimal;
+  c.log = rsLog(options.log_options);
+  c.optimal = model_status == HighsModelStatus::kOptimal;
   c.initialised_for_solve = ekk_instance.status_.initialised_for_solve;
-  const HighsLp& use_lp = solver_object.lp_;
   if (c.optimal && c.initialised_for_solve) {
     // Unscale the simplex data if the LP has been solved in the scaled space
-    ekk_instance.unscaleSimplex(use_lp);
+    const RsLp v = rsLp(use_lp);
+    highs_rs::highs_rs_lps_unscale_simplex(ekk_instance.lps, &v);
   }
   // The simplex data, owned by the Rust simplex engine
-  const highs_rs::RangingSlices s = ekk_instance.rangingSlices();
+  highs_rs::RangingSlices s;
+  highs_rs::highs_rs_lps_ranging_slices(ekk_instance.lps, &s);
   const HighsInt num_col = use_lp.num_col_;
   const HighsInt num_row = use_lp.num_row_;
   c.num_col = num_col;
   c.num_row = num_row;
   c.sense = use_lp.sense_ == ObjSense::kMaximize ? -1 : 1;
-  c.objective = solver_object.highs_info_.objective_function_value;
+  c.objective = objective_function_value;
   c.work_value = s.work_value;
   c.work_dual = s.work_dual;
   c.work_cost = s.work_cost;
@@ -705,11 +710,9 @@ HighsStatus getRangingData(HighsRanging& ranging,
   const HighsStatus status = HighsStatus(highs_rs_get_ranging_data(&c));
   if (status != HighsStatus::kOk) return status;
   ranging.valid = true;
-  if (solver_object.options_.log_dev_level)
-    writeRangingFile(stdout, use_lp,
-                     solver_object.highs_info_.objective_function_value,
-                     solver_object.basis_, solver_object.solution_, ranging,
-                     kSolutionStylePretty);
+  if (options.log_dev_level)
+    writeRangingFile(stdout, use_lp, objective_function_value, basis,
+                     solution, ranging, kSolutionStylePretty);
   return HighsStatus::kOk;
 }
 #endif

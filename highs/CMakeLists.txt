@@ -62,13 +62,18 @@ if(HIGHS_RUST)
     simplex/HEkkPrimal.cpp
     simplex/HSimplexNlaProductForm.cpp
     # HEkk's data and logic are Rust (rust/src/simplex/lp_solver.rs):
-    # HEkkRust.cpp is its C++ shell
+    # the Highs object owns it (lp_data/HighsLpHandle.h)
     simplex/HEkk.cpp
     simplex/HEkkControl.cpp
     simplex/HEkkDebug.cpp
     simplex/HSimplexNla.cpp
     simplex/HSimplexNlaDebug.cpp
     simplex/HSimplexNlaFreeze.cpp
+    # the simplex logs, the CHUZC failure reports and the solution
+    # statuses are Rust's (rust/src/simplex/report.rs, lp_handle.rs)
+    simplex/HighsSimplexAnalysis.cpp
+    simplex/HSimplexDebug.cpp
+    simplex/HSimplex.cpp
     # unused once the C++ simplex is gone (HighsLinearSumBounds: presolve
     # and the MIP domain are Rust)
     simplex/HEkkInterface.cpp

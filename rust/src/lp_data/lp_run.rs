@@ -15,6 +15,7 @@ use super::ffi::{rs_vec_test::rs_vec, CLp, RsMut, RsVec};
 use super::ipx_glue::{solve_lp_ipx, CIpxHost};
 use super::basis::COut;
 use super::interface::BasisG;
+use super::lp_handle::LpHandle;
 use super::lp_presolve::PresolveData;
 use super::run::{CHighs, Op, MS_ITERATION_LIMIT, MS_NOTSET, MS_TIME_LIMIT, MS_UNKNOWN};
 use super::solution::{lp_kkt_check, CKktOptions, CSolution, Info, LpRef, SolRef};
@@ -228,7 +229,13 @@ pub unsafe extern "C" fn highs_rs_lps_run_export(lps: *mut LpSolver, d: *mut CRu
 /// The Rust LP run: the Highs object's steps and the engine
 pub struct LpMode<'a> {
     pub orig: &'a CHighs,
+    /// The LP solver whose engine and model the run uses: the Highs
+    /// object's (an LpHandle, or the C++ Highs object's engine)
+    pub handle: *mut LpHandle,
     pub lps: *mut LpSolver,
+    /// The run is a C++ Highs object's: the steps on the engine, the
+    /// model and the solvers' options are its handle's
+    host: bool,
     /// A step threw or IPX was cancelled: no further step
     pub aborted: Cell<bool>,
 }
@@ -236,20 +243,66 @@ pub struct LpMode<'a> {
 /// What a step returns when it threw (run.rs ABORT)
 const ABORT: i64 = i64::MIN;
 
+/// The steps of a C++ Highs object's LP run made by its handle: the
+/// simplex engine and shell, the solvers' options and templates (built
+/// from the handle's copy of the options, which the run changes and
+/// restores), and the model (the handle's copy of the Highs object's LP,
+/// whose scale factors the simplex sets)
+fn is_handle_step(op: i32, arg: i64) -> bool {
+    const STEPS: [Op; 19] = [
+        Op::SetEkkLpName,
+        Op::EkkClear,
+        Op::EkkInvalidate,
+        Op::EkkPivotThreshold,
+        Op::SaveOptions,
+        Op::RestoreOptions,
+        Op::OptionsPrimalSimplex,
+        Op::OptionsCleanup,
+        Op::KktOptions,
+        Op::SolveTemplate,
+        Op::UnconstrainedTemplate,
+        Op::IpxTemplate,
+        Op::SimplexTemplate,
+        Op::SimplexShell,
+        Op::PresolveOptions,
+        Op::DependentEquations,
+        Op::LpOptions,
+        Op::EkkFactorCompatible,
+        Op::RetainedEkkDataOk,
+    ];
+    STEPS.iter().any(|&s| s as i32 == op) || ((op == Op::LpView as i32 || op == Op::Facts as i32) && arg == 0)
+}
+
 impl LpMode<'_> {
+    /// The run on `handle`'s engine (`orig` a C++ Highs object, or the
+    /// handle's own run)
+    pub fn new(orig: &CHighs, handle: *mut LpHandle) -> LpMode<'_> {
+        // SAFETY: the run's handle
+        let lps: *mut LpSolver = unsafe { &mut *(*handle).lps };
+        let host = orig.ctx != handle as *mut c_void;
+        LpMode { orig, handle, lps, host, aborted: Cell::new(false) }
+    }
     #[allow(clippy::mut_from_ref)]
     pub(super) fn lps<'b>(&self) -> &'b mut LpSolver {
-        // SAFETY: the C++ HEkk's engine; borrowed between C++ steps
+        // SAFETY: the handle's engine; borrowed between steps
         unsafe { &mut *self.lps }
     }
     #[allow(clippy::mut_from_ref)]
     pub(super) fn run<'b>(&self) -> &'b mut LpRun {
         &mut self.lps().run
     }
-    /// A step of the Highs object
+    /// A step of the Highs object (or its handle's)
     pub fn fwd(&self, op: Op, arg: i64, p: *mut c_void, msg: &[u8]) -> i64 {
-        // SAFETY: the Highs object's op with its context
-        let r = unsafe { (self.orig.op)(self.orig.ctx, op as i32, arg, p, msg.as_ptr(), msg.len()) };
+        self.fwd_raw(op as i32, arg, p, msg.as_ptr(), msg.len())
+    }
+    fn fwd_raw(&self, op: i32, arg: i64, p: *mut c_void, msg: *const u8, len: usize) -> i64 {
+        let (f, ctx) = if self.host && is_handle_step(op, arg) {
+            (super::lp_handle::HANDLE_OP, self.handle as *mut c_void)
+        } else {
+            (self.orig.op, self.orig.ctx)
+        };
+        // SAFETY: the Highs object's (or handle's) op with its context
+        let r = unsafe { f(ctx, op, arg, p, msg, len) };
         if r == ABORT {
             self.aborted.set(true);
         }
@@ -272,6 +325,15 @@ impl LpMode<'_> {
     pub fn view(&self) -> CHighs {
         let o = self.orig;
         let r = self.run();
+        let mut ro = o.o;
+        if self.host {
+            // The options the LP part of the run changes and restores are
+            // the handle's copy, which the solvers read
+            // SAFETY: the run's handle
+            let opts = unsafe { &mut (*self.handle).opts };
+            ro.objective_bound = &mut opts.objective_bound;
+            ro.lp_presolve_requires_basis_postsolve = &mut opts.lp_presolve_requires_basis_postsolve;
+        }
         CHighs {
             log: o.log,
             ctx: self as *const LpMode as *mut c_void,
@@ -288,7 +350,7 @@ impl LpMode<'_> {
             basis_useful: &mut r.basis.b.useful,
             basis_was_alien: &mut r.basis.b.was_alien,
             called_return: o.called_return,
-            o: o.o,
+            o: ro,
         }
     }
 
@@ -420,13 +482,7 @@ unsafe extern "C" fn lp_op(ctx: *mut c_void, op: i32, arg: i64, p: *mut c_void, 
             r.basis.invalidate();
             0
         }
-        _ => {
-            let r = (m.orig.op)(m.orig.ctx, op, arg, p, msg, len);
-            if r == ABORT {
-                m.aborted.set(true);
-            }
-            r
-        }
+        _ => m.fwd_raw(op, arg, p, msg, len),
     }
 }
 

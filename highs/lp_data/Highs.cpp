@@ -24,7 +24,9 @@
 #include "ipm/IpxWrapper.h"
 #include "lp_data/HighsCallbackStruct.h"
 #include "lp_data/HighsInfoDebug.h"
+#ifndef HIGHS_RUST
 #include "lp_data/HighsLpSolverObject.h"
+#endif
 #include "lp_data/HighsRust.h"
 #include "lp_data/HighsSolve.h"
 #include "mip/HighsMipSolver.h"
@@ -50,7 +52,11 @@ HighsInt highsVersionPatch() { return HIGHS_VERSION_PATCH; }
 const char* highsGithash() { return HIGHS_GITHASH; }
 const char* highsCompilationDate() { return "deprecated"; }
 
+#ifdef HIGHS_RUST
+Highs::Highs() : callback_(this), ekk_instance_(rsEngineHost(this)) {}
+#else
 Highs::Highs() : callback_(this) {}
+#endif
 
 std::string Highs::getThirdPartyNotice() const {
   return HighsExternalApi::getThirdPartyNotice<HighsExtras::all>();
@@ -4212,6 +4218,7 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
 }
 #endif
 
+#ifndef HIGHS_RUST  // the LP runs on the engine's data (lp_data/lp_run.rs)
 // The method below runs calls solveLp for the given LP
 HighsStatus Highs::callSolveLp(HighsLp& lp, const std::string& message) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -4229,6 +4236,7 @@ HighsStatus Highs::callSolveLp(HighsLp& lp, const std::string& message) {
   model_status_ = solver_object.model_status_;
   return return_status;
 }
+#endif
 
 #ifndef HIGHS_RUST  // the QP glue is Rust (rust/src/qp/glue.rs)
 HighsStatus Highs::callSolveQp() {

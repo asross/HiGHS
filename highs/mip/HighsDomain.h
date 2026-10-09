@@ -19,6 +19,7 @@
 #include "mip/HighsDomainChange.h"
 #include "mip/HighsMipSolver.h"
 #include "util/HighsCDouble.h"
+#include "util/HighsHash.h"
 #include "util/HighsRbTree.h"
 
 class HighsCutPool;

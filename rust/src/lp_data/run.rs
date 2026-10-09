@@ -585,6 +585,10 @@ impl<'a> Run<'a> {
     pub(crate) fn ab(&self) -> bool {
         self.aborted.get()
     }
+    /// A step threw: no further step
+    pub(crate) fn abort(&self) {
+        self.aborted.set(true);
+    }
     pub(crate) fn op0(&self, op: Op) -> i64 {
         self.op(op, 0, std::ptr::null_mut())
     }
@@ -904,12 +908,12 @@ impl<'a> Run<'a> {
         let incumbent = self.facts(0);
         let _ = (incumbent, solver_will_use_basis);
         let end = {
-            let mut lps: *mut crate::simplex::lp_solver::LpSolver = std::ptr::null_mut();
-            self.op(Op::LpRustBegin, 0, &mut lps as *mut _ as *mut c_void);
+            let mut handle: *mut super::lp_handle::LpHandle = std::ptr::null_mut();
+            self.op(Op::LpRustBegin, 0, &mut handle as *mut _ as *mut c_void);
             if self.ab() {
                 return Status::Error;
             }
-            let mode = super::lp_run::LpMode { orig: c, lps, aborted: Cell::new(false) };
+            let mode = super::lp_run::LpMode::new(c, handle);
             let c2 = mode.view();
             // SAFETY: c2's pointers live for the call
             let run2 = unsafe { Run::new(&c2) };

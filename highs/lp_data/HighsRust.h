@@ -204,11 +204,6 @@ struct RsBasisVec {
 RsBasisVec rsBasisVec(HighsBasis& b);
 void rsBasisVecBack(const RsBasisVec& v, HighsBasis& b);
 
-// The templates of the solvers' hosts of the LP run on Rust data
-// (rust/src/lp_data/lp_run.rs), filled from the options
-class HighsTimer;
-struct HighsCallback;
-void rsKktOptionsInto(const HighsOptions& options, void* out);
 // The option values a solver reads, built by Rust from a typed copy of the
 // options (rust/src/lp_data/opts.rs TEMPLATE_ codes: 0 the simplex's
 // LpsOptions, 1 RsKktOptions, 2 RsLpOptions, 3 the IPX options, 4 the
@@ -216,9 +211,7 @@ void rsKktOptionsInto(const HighsOptions& options, void* out);
 void rsOptionsTemplate(const HighsOptions& options, int which, void* out);
 // The options whose values differ from the Rust defaults (0 if none)
 HighsInt rsOptionsDefaultsDiffer(const HighsOptions& options);
-void rsSolveTemplate(const HighsOptions& options, void* out);
-void rsIpxHostTemplate(const HighsOptions& options, HighsTimer& timer,
-                       HighsCallback& callback, void* out);
+// The PDLP template of the LP run on Rust data (lp_run.rs)
 void rsPdlpTemplate(const HighsOptions& options, void* out);
 
 RsMatVec rsMatVec(HighsSparseMatrix& a);

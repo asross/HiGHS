@@ -19,6 +19,7 @@
 
 #include "io/LoadOptions.h"
 #include "lp_data/HighsInfo.h"
+#include "lp_data/HighsLpHandle.h"
 
 namespace {
 
@@ -103,6 +104,15 @@ void rsOptionsTemplate(const HighsOptions& options, int which, void* out) {
   const RsLog log = rsLog(options.log_options);
   highs_rs_opts_template(recs.data(), recs.size(), which, &log,
                          &options.log_options, out);
+}
+
+extern "C" void highs_rs_lph_sync_options(highs_rs::LpHandle* h,
+                                          const RsOptionRecord* recs,
+                                          size_t n);
+
+void rsSyncOptions(highs_rs::LpHandle* h, const HighsOptions& options) {
+  const std::vector<RsOptionRecord> recs = rsOptionRecords(options.records);
+  highs_rs_lph_sync_options(h, recs.data(), recs.size());
 }
 
 HighsInt rsOptionsDefaultsDiffer(const HighsOptions& options) {
