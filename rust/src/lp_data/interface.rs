@@ -847,19 +847,31 @@ mod tests {
 // The C++ host and entry points
 pub mod ffi {
     use super::*;
-    use crate::lp_data::ffi::{CIndexCollection, RsVec};
-    use crate::lp_data::lp::CppLp;
+    use crate::lp_data::ffi::{CIndexCollection, RsMut, RsVec};
+    use crate::lp_data::lp::LpCore;
+    use crate::lp_data::lp_handle::LpHandle;
     use std::ffi::c_void;
 
     pub type CppBasis = BasisG<RsVec<u8>>;
 
-    /// The C++ side of the interfaces (HighsInterface.cpp)
+    /// The C++ side of the interfaces (HighsInterface.cpp): a Highs
+    /// object whose engine holds the model the interfaces edit
     #[repr(C)]
     pub struct CIfaceHost {
         pub ctx: *mut c_void,
         /// (ctx, op, arg, p, n) -> result
         pub op: unsafe extern "C" fn(*mut c_void, i32, i32, *const c_void, i32) -> i32,
         pub lps: *mut LpSolver,
+        pub handle: *mut LpHandle,
+    }
+
+    /// What Highs::feasibleWrtBounds reads of the Highs object (op
+    /// OP_FEASIBLE_WRT_BOUNDS, when the primal solution is feasible)
+    #[repr(C)]
+    struct CSolutionValues {
+        col_value: RsMut<f64>,
+        row_value: RsMut<f64>,
+        primal_feasibility_tolerance: f64,
     }
 
     const OP_NAMES_RESIZE: i32 = 1;
@@ -867,8 +879,6 @@ pub mod ffi {
     const OP_NAMES_HASH_CLEAR: i32 = 3;
     const OP_INVALIDATE: i32 = 4;
     const OP_FEASIBLE_WRT_BOUNDS: i32 = 5;
-    const OP_EKK_NLA_LP: i32 = 6;
-    const OP_EKK_CLEAR_SHELL: i32 = 7;
     const OP_HESSIAN_COMPLETE: i32 = 8;
     const OP_HESSIAN_DELETE_COLS: i32 = 9;
 
@@ -897,13 +907,27 @@ pub mod ffi {
             self.op(OP_INVALIDATE, what as i32, std::ptr::null(), 0);
         }
         fn feasible_wrt_bounds(&self, columns: bool) -> bool {
-            self.op(OP_FEASIBLE_WRT_BOUNDS, columns as i32, std::ptr::null(), 0) != 0
+            // SAFETY: plain data, filled by C++
+            let mut v: CSolutionValues = unsafe { std::mem::zeroed() };
+            let p = &mut v as *mut CSolutionValues as *const c_void;
+            if self.op(OP_FEASIBLE_WRT_BOUNDS, 0, p, 0) == 0 {
+                return false;
+            }
+            // SAFETY: the engine's model, read only; the Highs object's
+            // solution values
+            let (m, value) = unsafe {
+                (&(*self.handle).model, if columns { v.col_value.get() } else { v.row_value.get() })
+            };
+            let (l, u) = if columns { (&m.col_lower, &m.col_upper) } else { (&m.row_lower, &m.row_upper) };
+            crate::lp_data::edit::feasible_wrt_bounds(value, l, u, v.primal_feasibility_tolerance)
         }
         fn ekk_nla_lp(&mut self) {
-            self.op(OP_EKK_NLA_LP, 0, std::ptr::null(), 0);
+            // SAFETY: the Highs object's engine; the model is current
+            unsafe { (*self.handle).set_nla_model() }
         }
         fn ekk_clear_shell(&mut self) {
-            self.op(OP_EKK_CLEAR_SHELL, 0, std::ptr::null(), 0);
+            // SAFETY: the Highs object's engine
+            unsafe { (*self.handle).clear_shell() }
         }
         fn hessian_complete(&mut self, num_col: i32) {
             self.op(OP_HESSIAN_COMPLETE, num_col, std::ptr::null(), 0);
@@ -926,14 +950,23 @@ pub mod ffi {
         }
     }
 
-    /// The data of an interface call
+    /// The data of an interface call: the model edited is the engine's
     #[repr(C)]
     pub struct CIfaceCall {
         pub host: CIfaceHost,
-        pub lp: *mut CppLp,
         pub basis: *mut CppBasis,
         pub o: IfaceOptions,
         pub ic: CIndexCollection,
+    }
+
+    impl CIfaceCall {
+        /// The engine's model (the interfaces reach the rest of the
+        /// handle through the host, which does not touch the model's
+        /// vectors while they are borrowed)
+        #[allow(clippy::mut_from_ref)]
+        unsafe fn lp<'a>(&self) -> &'a mut LpCore {
+            &mut (*self.host.handle).model.g
+        }
     }
 
     /// Highs::addColsInterface (`num` columns) or addRowsInterface after
@@ -958,7 +991,7 @@ pub mod ffi {
     ) -> i32 {
         use crate::ffi::sl;
         let c = &mut *c;
-        let (lp, basis) = (&mut *c.lp, &mut *c.basis);
+        let (lp, basis) = (c.lp(), &mut *c.basis);
         let nz = num_nz.max(0);
         let (start, index, value) = if nz > 0 { (sl(start, num), sl(index, nz), sl(value, nz)) } else { (&[][..], &[][..], &[][..]) };
         if cols {
@@ -976,7 +1009,7 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_iface_delete(c: *mut CIfaceCall, cols: bool) {
         let c = &mut *c;
-        let (lp, basis) = (&mut *c.lp, &mut *c.basis);
+        let (lp, basis) = (c.lp(), &mut *c.basis);
         let dim = if cols { lp.num_col } else { lp.num_row } as usize;
         let renumber = {
             let ic = c.ic.view();
@@ -1007,7 +1040,7 @@ pub mod ffi {
     ) -> i32 {
         use crate::ffi::sl;
         let c = &mut *c;
-        let (lp, basis) = (&mut *c.lp, &mut *c.basis);
+        let (lp, basis) = (c.lp(), &mut *c.basis);
         match what {
             0 => change_costs_iface(lp, &mut c.host, &c.o, &c.ic.view(), sl(x0 as *const f64, num)) as i32,
             1 | 2 => {
@@ -1032,7 +1065,7 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_iface_change_coefficient(c: *mut CIfaceCall, row: i32, col: i32, value: f64) {
         let c = &mut *c;
-        change_coefficient(&mut *c.lp, &mut *c.basis, &mut c.host, &c.o, row, col, value);
+        change_coefficient(c.lp(), &mut *c.basis, &mut c.host, &c.o, row, col, value);
     }
 
     /// Highs::scaleColInterface (`is_col`) or scaleRowInterface
@@ -1043,6 +1076,6 @@ pub mod ffi {
     pub unsafe extern "C" fn highs_rs_iface_scale(c: *mut CIfaceCall, is_col: bool, ix: i32, scale: f64) -> i32 {
         let c = &mut *c;
         let log = c.o.log;
-        scale_col_row(&mut *c.lp, &mut *c.basis, &mut c.host, &log, is_col, ix, scale) as i32
+        scale_col_row(c.lp(), &mut *c.basis, &mut c.host, &log, is_col, ix, scale) as i32
     }
 }

@@ -769,18 +769,18 @@ class Highs {
   /**
    * @brief Get the number of columns in the incumbent model
    */
-  HighsInt getNumCol() const { return model_r().lp_.num_col_; }
+  HighsInt getNumCol() const { return lpNumCol(); }
 
   /**
    * @brief Get the number of rows in the incumbent model
    */
-  HighsInt getNumRow() const { return model_r().lp_.num_row_; }
+  HighsInt getNumRow() const { return lpNumRow(); }
 
   /**
    * @brief Get the number of (constraint matrix) nonzeros in the incumbent
    * model
    */
-  HighsInt getNumNz() const { return model_r().lp_.a_matrix_.numNz(); }
+  HighsInt getNumNz() const { return lpNumNz(); }
 
   /**
    * @brief Get the number of Hessian matrix nonzeros in the incumbent model
@@ -1664,10 +1664,25 @@ class Highs {
   }
   // The engine's model, current
   void lpToRust();
+  // The model's dimensions (without syncing the copy)
+  HighsInt lpDim(const int which) const;
+  HighsInt lpNumCol() const { return lpDim(0); }
+  HighsInt lpNumRow() const { return lpDim(1); }
+  HighsInt lpNumNz() const { return lpDim(2); }
+  // The parts of the model's LP the engine's model does not hold (the
+  // names and their hashes, the origin and objective names, the
+  // modifications)
+  HighsLp& lpCpp() { return model_cache_.lp_; }
+  const HighsLp& lpCpp() const { return model_cache_.lp_; }
 #else
   HighsModel model_;
   const HighsModel& model_r() const { return model_; }
   HighsModel& model_w() { return model_; }
+  HighsInt lpNumCol() const { return model_.lp_.num_col_; }
+  HighsInt lpNumRow() const { return model_.lp_.num_row_; }
+  HighsInt lpNumNz() const { return model_.lp_.a_matrix_.numNz(); }
+  HighsLp& lpCpp() { return model_.lp_; }
+  const HighsLp& lpCpp() const { return model_.lp_; }
 #endif
   std::vector<HighsLinearObjective> multi_linear_objective_;
 

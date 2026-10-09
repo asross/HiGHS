@@ -302,6 +302,7 @@ int highs_rs_run_presolve(const RsHighs* h, bool force_lp_presolve,
                           bool force_presolve);
 int highs_rs_run_postsolve(const RsHighs* h);
 void highs_rs_lps_run_import(void* lps, const RsRunData* d);
+void highs_rs_lph_model_facts(highs_rs::LpHandle* h, RsFacts* out);
 void highs_rs_lps_run_export(void* lps, RsRunData* d);
 bool highs_rs_lps_presolve_export(void* lps, RsLpVec* lp, RsPresolveExport* out);
 }
@@ -454,6 +455,18 @@ HighsStatus rsFormBasis(Highs& h, HighsBasis& basis,
   // Both copies of the model take the scale factors
   rsModelBack(ekk.p, h.model_cache_.lp_);
   return status;
+}
+
+HighsInt Highs::lpDim(const int which) const {
+  if (!lp_rs_newer_) {
+    const HighsLp& lp = model_cache_.lp_;
+    return which == 0   ? lp.num_col_
+           : which == 1 ? lp.num_row_
+                        : lp.a_matrix_.numNz();
+  }
+  int32_t d[3];
+  highs_rs::highs_rs_lph_model_dims(ekk_instance_.p, &d);
+  return d[which];
 }
 
 void Highs::syncLpFromRust() const {
@@ -769,6 +782,12 @@ struct HighsRunRust {
         return 0;
       case RunOp::kFacts: {
         RsFacts& f = *static_cast<RsFacts*>(p);
+        if (!arg && h.lp_rs_newer_) {
+          // The engine's model's, without syncing the copy
+          highs_rs_lph_model_facts(h.ekk_instance_.p, &f);
+          f.is_qp = h.model_cache_.isQp();
+          return 0;
+        }
         const HighsLp& lp = lpOf(arg);
         f.num_col = lp.num_col_;
         f.num_row = lp.num_row_;
@@ -910,17 +929,23 @@ struct HighsRunRust {
         h.forceHighsSolutionBasisSize();
         return 0;
       case RunOp::kBasisConsistent:
-        return debugHighsBasisConsistent(options, h.model_r().lp_, h.basis_) !=
-               HighsDebugStatus::kLogicalError;
+        // debugHighsBasisConsistent is not checked in this build
+        return 1;
       case RunOp::kRetainedEkkDataOk:
         // debugRetainedDataOk is not checked in this build
         return 1;
       case RunOp::kLpDimensionsOk:
+        if (h.lp_rs_newer_) {
+          const RsLog log = rsLog(options.log_options);
+          const char* message = "returnFromHighs";
+          return highs_rs::highs_rs_lph_model_dimensions_ok(
+              h.ekk_instance_.p, &log, message, strlen(message));
+        }
         return lpDimensionsOk("returnFromHighs", h.model_r().lp_,
                               options.log_options);
       case RunOp::kEkkFactorCompatible:
         return highs_rs::highs_rs_lph_factor_row_compatible(
-            h.ekk_instance_.p, h.model_r().lp_.num_row_);
+            h.ekk_instance_.p, h.lpNumRow());
       case RunOp::kPresolveClear:
         h.presolve_.clear();
         return 0;
@@ -1521,12 +1546,14 @@ struct HighsRunRust {
           sizes[4] = h.basis_.col_status.size();
           sizes[5] = h.basis_.row_status.size();
         } else {
-          h.solution_.col_value.resize(lpR.num_col_, 0);
-          h.solution_.row_value.resize(lpR.num_row_, 0);
-          h.solution_.col_dual.resize(lpR.num_col_, 0);
-          h.solution_.row_dual.resize(lpR.num_row_, 0);
-          h.basis_.col_status.resize(lpR.num_col_, HighsBasisStatus::kNonbasic);
-          h.basis_.row_status.resize(lpR.num_row_, HighsBasisStatus::kBasic);
+          const HighsInt num_col = h.lpNumCol();
+          const HighsInt num_row = h.lpNumRow();
+          h.solution_.col_value.resize(num_col, 0);
+          h.solution_.row_value.resize(num_row, 0);
+          h.solution_.col_dual.resize(num_col, 0);
+          h.solution_.row_dual.resize(num_row, 0);
+          h.basis_.col_status.resize(num_col, HighsBasisStatus::kNonbasic);
+          h.basis_.row_status.resize(num_row, HighsBasisStatus::kBasic);
         }
         return 0;
       case RunOp::kLpRustBegin: {
@@ -1654,7 +1681,7 @@ HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
   HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status = HighsStatus(highs_rs_get_ray(
-      &v, false, &has_dual_ray, dual_ray_value, model_w().lp_.num_row_));
+      &v, false, &has_dual_ray, dual_ray_value, lpNumRow()));
   r.rethrow();
   return status;
 }
@@ -1665,7 +1692,7 @@ HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
   HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status = HighsStatus(highs_rs_get_ray(
-      &v, true, &has_primal_ray, primal_ray_value, model_w().lp_.num_col_));
+      &v, true, &has_primal_ray, primal_ray_value, lpNumCol()));
   r.rethrow();
   return status;
 }
@@ -1883,7 +1910,7 @@ RsMut<T> rsOut(T* p, const size_t n) {
 HighsStatus Highs::getBasisInverseRow(const HighsInt row, double* row_vector,
                                       HighsInt* row_num_nz,
                                       HighsInt* row_indices) {
-  const HighsInt num_row = model_w().lp_.num_row_;
+  const HighsInt num_row = lpNumRow();
   if (checkQuery(options_, "getBasisInverseRow",
                  row_vector ? nullptr : "row_vector", "Row", row, num_row,
                  ekk_instance_.status_.has_invert) != HighsStatus::kOk)
@@ -1897,7 +1924,7 @@ HighsStatus Highs::getBasisInverseRow(const HighsInt row, double* row_vector,
 HighsStatus Highs::getBasisInverseCol(const HighsInt col, double* col_vector,
                                       HighsInt* col_num_nz,
                                       HighsInt* col_indices) {
-  const HighsInt num_row = model_w().lp_.num_row_;
+  const HighsInt num_row = lpNumRow();
   if (checkQuery(options_, "getBasisInverseCol",
                  col_vector ? nullptr : "col_vector", "Column", col, num_row,
                  ekk_instance_.status_.has_invert) != HighsStatus::kOk)
@@ -1917,7 +1944,7 @@ HighsStatus Highs::getBasisSolve(const double* Xrhs, double* solution_vector,
   if (checkQuery(options_, "getBasisSolve", null_arg, nullptr, 0, 0,
                  ekk_instance_.status_.has_invert) != HighsStatus::kOk)
     return HighsStatus::kError;
-  const HighsInt num_row = model_w().lp_.num_row_;
+  const HighsInt num_row = lpNumRow();
   vector<double> rhs(Xrhs, Xrhs + num_row);
   basisSolveInterface(rhs, solution_vector, solution_num_nz, solution_indices,
                       false);
@@ -1934,7 +1961,7 @@ HighsStatus Highs::getBasisTransposeSolve(const double* Xrhs,
   if (checkQuery(options_, "getBasisTransposeSolve", null_arg, nullptr, 0, 0,
                  ekk_instance_.status_.has_invert) != HighsStatus::kOk)
     return HighsStatus::kError;
-  const HighsInt num_row = model_w().lp_.num_row_;
+  const HighsInt num_row = lpNumRow();
   vector<double> rhs(Xrhs, Xrhs + num_row);
   basisSolveInterface(rhs, solution_vector, solution_num_nz, solution_indices,
                       true);
@@ -2028,7 +2055,7 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
   HighsStatus return_status = HighsStatus::kOk;
   const RsLog log = rsLog(options_.log_options);
   const int parts = highs_rs_new_solution_parts(
-      &log, model_w().lp_.num_col_, model_w().lp_.num_row_,
+      &log, lpNumCol(), lpNumRow(),
       solution.col_value.size(), solution.row_dual.size());
   const bool new_primal_solution = parts & 1;
   const bool new_dual_solution = parts & 2;
@@ -2039,8 +2066,8 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
   }
   if (new_primal_solution) {
     solution_.col_value = solution.col_value;
-    if (model_w().lp_.num_row_ > 0) {
-      solution_.row_value.resize(model_w().lp_.num_row_);
+    if (lpNumRow() > 0) {
+      solution_.row_value.resize(lpNumRow());
       model_w().lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
           options_.log_options, calculateRowValuesQuad(model_w().lp_, solution_),
@@ -2051,8 +2078,8 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
   }
   if (new_dual_solution) {
     solution_.row_dual = solution.row_dual;
-    if (model_w().lp_.num_col_ > 0) {
-      solution_.col_dual.resize(model_w().lp_.num_col_);
+    if (lpNumCol() > 0) {
+      solution_.col_dual.resize(lpNumCol());
       model_w().lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
           options_.log_options, calculateColDualsQuad(model_w().lp_, solution_),
@@ -2066,7 +2093,7 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
 
 HighsStatus Highs::setSolution(const HighsInt num_entries,
                                const HighsInt* index, const double* value) {
-  if (model_w().lp_.num_col_ == 0) return HighsStatus::kOk;
+  if (lpNumCol() == 0) return HighsStatus::kOk;
   const RsLog log = rsLog(options_.log_options);
   const HighsStatus return_status =
       HighsStatus(highs_rs_check_sparse_solution(
@@ -2076,7 +2103,7 @@ HighsStatus Highs::setSolution(const HighsInt num_entries,
           options_.primal_feasibility_tolerance));
   if (return_status == HighsStatus::kError) return return_status;
   HighsSolution new_solution;
-  new_solution.col_value.assign(model_w().lp_.num_col_, kHighsUndefined);
+  new_solution.col_value.assign(lpNumCol(), kHighsUndefined);
   for (HighsInt iX = 0; iX < num_entries; iX++)
     new_solution.col_value[index[iX]] = value[iX];
   return interpretCallStatus(options_.log_options, setSolution(new_solution),

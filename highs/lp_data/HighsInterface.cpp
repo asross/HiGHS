@@ -1582,8 +1582,9 @@ void Highs::appendBasicRowsToBasisInterface(const HighsInt ext_num_new_row) {
 
 #ifdef HIGHS_RUST
 // The model modification interfaces are Rust (rust/src/lp_data/
-// interface.rs): they edit the C++ LP and basis in place, and reach the
-// rest of the Highs object through ifaceOp
+// interface.rs): they edit the engine's model (whose C++ copy is then
+// stale) and the C++ basis in place, and reach the rest of the Highs
+// object through HighsIfaceRust::op
 namespace {
 struct RsIfaceOptions {
   RsLog log;
@@ -1596,7 +1597,7 @@ struct RsIfaceCall {
   void* ctx;
   int (*op)(void* ctx, int code, int arg, const void* p, int n);
   void* lps;
-  RsLpVec* lp;
+  highs_rs::LpHandle* handle;
   RsBasisVec* basis;
   RsIfaceOptions o;
   RsIndexCollection ic;
@@ -1620,17 +1621,19 @@ int highs_rs_iface_scale(RsIfaceCall* c, bool is_col, HighsInt ix,
 // The steps of the interfaces on the Highs object (a friend)
 struct HighsIfaceRust {
   Highs& h;
-  RsLpVec lp;
   RsBasisVec basis;
   RsIfaceCall call;
 
   HighsIfaceRust(Highs& highs, const HighsIndexCollection* ic) : h(highs) {
-    lp = rsLpVec(h.model_w().lp_);
+    // The engine's model is edited: the C++ copy is then stale (the ops
+    // below touch only what is C++'s: the names, the Hessian)
+    h.lpToRust();
+    h.lp_rs_newer_ = true;
     basis = rsBasisVec(h.basis_);
     call.ctx = this;
     call.op = op;
     call.lps = h.ekk_instance_.lps;
-    call.lp = &lp;
+    call.handle = h.ekk_instance_.p;
     call.basis = &basis;
     const HighsOptions& o = h.options_;
     call.o = {rsLog(o.log_options), o.infinite_cost, o.infinite_bound,
@@ -1638,15 +1641,20 @@ struct HighsIfaceRust {
               o.allowed_matrix_scale_factor};
     if (ic) call.ic = rsIndexCollection(*ic);
   }
-  // The scalars back into the C++ LP and basis
-  void back() {
-    rsLpVecBack(lp, h.model_w().lp_);
-    rsBasisVecBack(basis, h.basis_);
-  }
+  // The scalars back into the C++ basis
+  void back() { rsBasisVecBack(basis, h.basis_); }
+
+  // interface.rs: CSolutionValues
+  struct SolutionValues {
+    RsMut<double> col_value, row_value;
+    double primal_feasibility_tolerance;
+  };
 
   static int op(void* ctx, int code, int arg, const void* p, int n) {
     Highs& h = static_cast<HighsIfaceRust*>(ctx)->h;
-    HighsLp& lp = h.model_w().lp_;
+    // What the C++ copy holds that the engine's model does not
+    HighsLp& lp = h.model_cache_.lp_;
+    HighsHessian& hessian = h.model_cache_.hessian_;
     switch (code) {
       case 1: {
         std::vector<std::string>& names = arg ? lp.col_names_ : lp.row_names_;
@@ -1681,16 +1689,21 @@ struct HighsIfaceRust {
             h.model_status_ = HighsModelStatus::kNotset;
         }
         return 0;
-      case 5:
-        return h.feasibleWrtBounds(arg != 0);
-      case 6:
-        h.ekk_instance_.setNlaPointersForLpAndScale(lp);
-        return 0;
-      case 7:
-        highs_rs::highs_rs_lph_clear_shell(h.ekk_instance_.p);
-        return 0;
+      case 5: {
+        // feasibleWrtBounds: the solution, compared with the engine's
+        // model in Rust
+        if (h.info_.primal_solution_status != kSolutionStatusFeasible)
+          return 0;
+        SolutionValues& v =
+            *static_cast<SolutionValues*>(const_cast<void*>(p));
+        v.col_value = rsMut(h.solution_.col_value);
+        v.row_value = rsMut(h.solution_.row_value);
+        v.primal_feasibility_tolerance =
+            h.options_.primal_feasibility_tolerance;
+        return 1;
+      }
       case 8:
-        if (h.model_w().hessian_.dim_) completeHessian(arg, h.model_w().hessian_);
+        if (hessian.dim_) completeHessian(arg, hessian);
         return 0;
       case 9: {
         const RsIndexCollection& c = *static_cast<const RsIndexCollection*>(p);
@@ -1704,7 +1717,7 @@ struct HighsIfaceRust {
         ic.set_.assign(c.set.ptr, c.set.ptr + c.set.len);
         ic.is_mask_ = c.is_mask;
         ic.mask_.assign(c.mask.ptr, c.mask.ptr + c.mask.len);
-        h.model_w().hessian_.deleteCols(ic);
+        hessian.deleteCols(ic);
         return 0;
       }
     }
@@ -1846,8 +1859,8 @@ HighsStatus Highs::changeRowBoundsInterface(
 void Highs::changeCoefficientInterface(const HighsInt ext_row,
                                        const HighsInt ext_col,
                                        const double ext_new_value) {
-  assert(0 <= ext_row && ext_row < model_w().lp_.num_row_);
-  assert(0 <= ext_col && ext_col < model_w().lp_.num_col_);
+  assert(0 <= ext_row && ext_row < lpNumRow());
+  assert(0 <= ext_col && ext_col < lpNumCol());
   HighsIfaceRust r(*this, nullptr);
   highs_rs_iface_change_coefficient(&r.call, ext_row, ext_col, ext_new_value);
   r.back();
