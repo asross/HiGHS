@@ -304,25 +304,9 @@ void cbShrink(Cb c, const HighsInt* new_col, size_t nc, const HighsInt* new_row,
 }
 
 RsOptions rsOptions(const HighsOptions& options) {
-  return RsOptions{options.primal_feasibility_tolerance,
-                   options.dual_feasibility_tolerance,
-                   options.mip_feasibility_tolerance,
-                   options.small_matrix_value,
-                   options.time_limit,
-                   options.presolve_pivot_threshold,
-                   options.presolve_substitution_maxfillin,
-                   options.presolve_rule_test,
-                   options.presolve_rule_off,
-                   options.log_dev_level,
-                   options.random_seed,
-                   options.mip_lifting_for_probing,
-                   options.presolve == kHighsOffString,
-                   options.lp_presolve_requires_basis_postsolve,
-                   options.presolve_remove_slacks,
-                   options.output_flag,
-                   options.timeless_log,
-                   options.use_implied_bounds_from_presolve,
-                   options.presolve_rule_logging};
+  RsOptions o;
+  rsOptionsTemplate(options, 4, &o);
+  return o;
 }
 
 HighsInt cbDependentEquations(Cb c, size_t num_col, HighsInt num_row,

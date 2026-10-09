@@ -1317,13 +1317,9 @@ struct HighsRunRust {
       case RunOp::kSolveTemplate:
         rsSolveTemplate(options, p);
         return 0;
-      case RunOp::kUnconstrainedTemplate: {
-        RsUnconTemplate& t = *static_cast<RsUnconTemplate*>(p);
-        t.on = *options.log_options.output_flag;
-        t.primal_feasibility_tolerance = options.primal_feasibility_tolerance;
-        t.dual_feasibility_tolerance = options.dual_feasibility_tolerance;
+      case RunOp::kUnconstrainedTemplate:
+        rsOptionsTemplate(options, 5, p);
         return 0;
-      }
       case RunOp::kIpxTemplate:
         rsIpxHostTemplate(options, h.timer_, h.callback_, p);
         return 0;

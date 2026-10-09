@@ -145,53 +145,8 @@ highs_rs::LpsEnv HEkk::rsEnv(RustHost& host) const {
                                         : RsMut<double>{nullptr, 0};
   highs_rs::LpsOptions& o = env.opt;
   o = highs_rs::LpsOptions{};
-  if (options_) {
-    const HighsOptions& options = *options_;
-    o.primal_feasibility_tolerance = options.primal_feasibility_tolerance;
-    o.dual_feasibility_tolerance = options.dual_feasibility_tolerance;
-    o.time_limit = options.time_limit;
-    o.objective_bound = options.objective_bound;
-    o.dual_simplex_pivot_growth_tolerance =
-        options.dual_simplex_pivot_growth_tolerance;
-    o.small_matrix_value = options.small_matrix_value;
-    o.dual_steepest_edge_weight_error_tolerance =
-        options.dual_steepest_edge_weight_error_tolerance;
-    o.rebuild_refactor_solution_error_tolerance =
-        options.rebuild_refactor_solution_error_tolerance;
-    o.factor_pivot_tolerance = options.factor_pivot_tolerance;
-    o.factor_pivot_threshold = options.factor_pivot_threshold;
-    o.dual_simplex_cost_perturbation_multiplier =
-        options.dual_simplex_cost_perturbation_multiplier;
-    o.primal_simplex_bound_perturbation_multiplier =
-        options.primal_simplex_bound_perturbation_multiplier;
-    o.dual_steepest_edge_weight_log_error_threshold =
-        options.dual_steepest_edge_weight_log_error_threshold;
-    o.cost_scale_factor = options.cost_scale_factor;
-    const HighsLogOptions& log_options = options.log_options;
-    o.log_dev_level = *log_options.log_dev_level;
-    o.dev_level = *log_options.output_flag ? *log_options.log_dev_level : 0;
-    o.simplex_primal_edge_weight_strategy =
-        options.simplex_primal_edge_weight_strategy;
-    o.simplex_iteration_limit = options.simplex_iteration_limit;
-    o.simplex_update_limit = options.simplex_update_limit;
-    o.max_dual_simplex_cleanup_level = options.max_dual_simplex_cleanup_level;
-    o.max_dual_simplex_phase1_cleanup_level =
-        options.max_dual_simplex_phase1_cleanup_level;
-    o.simplex_dse_exact_init_max_rows = options.simplex_dse_exact_init_max_rows;
-    o.simplex_strategy = options.simplex_strategy;
-    o.simplex_min_concurrency = options.simplex_min_concurrency;
-    o.simplex_max_concurrency = options.simplex_max_concurrency;
-    o.simplex_dual_edge_weight_strategy =
-        options.simplex_dual_edge_weight_strategy;
-    o.simplex_price_strategy = options.simplex_price_strategy;
-    o.random_seed = options.random_seed;
-    o.output_flag = options.output_flag;
-    o.no_unnecessary_rebuild_refactor = options.no_unnecessary_rebuild_refactor;
-    o.allow_unbounded_or_infeasible = options.allow_unbounded_or_infeasible;
-    o.less_infeasible_dse_check = options.less_infeasible_DSE_check;
-    o.less_infeasible_dse_choose_row = options.less_infeasible_DSE_choose_row;
-    o.simplex_keep_random_vectors = options.simplex_keep_random_vectors;
-  }
+  // the option values the simplex reads, from Rust's typed copy
+  if (options_) rsOptionsTemplate(*options_, 0, &o);
   (void)host;
   env.host.ctx = const_cast<HEkk*>(this);
   env.host.log = RustHost::log;

@@ -577,6 +577,75 @@ options! {
     centring_ratio_tolerance: double = 100.0;
 }
 
+// ---- The C++ HighsOptions' typed copy
+
+thread_local! {
+    /// The typed copy of the last C++ HighsOptions synced on this thread
+    /// (its strings keep their buffers)
+    static SYNCED: std::cell::RefCell<Opts> = std::cell::RefCell::new(Opts::default());
+}
+
+/// What a template of [`highs_rs_opts_template`] is
+pub const TEMPLATE_LPS: i32 = 0;
+pub const TEMPLATE_KKT: i32 = 1;
+pub const TEMPLATE_LP: i32 = 2;
+pub const TEMPLATE_IPX: i32 = 3;
+pub const TEMPLATE_PRESOLVE: i32 = 4;
+pub const TEMPLATE_UNCON: i32 = 5;
+
+/// The option values a solver reads (`which`, a TEMPLATE_ code), of a C++
+/// HighsOptions: its records (in order) are synced into the thread's typed
+/// copy, from which the template is built into `out` (LpsOptions,
+/// CKktOptions, CLpOptions, CIpxOptions, the presolve's Options or the
+/// unconstrained solve's UnconTemplate). `log` and `log_options` are the
+/// C++ options' log, for the templates that carry them.
+///
+/// # Safety
+/// The records' views valid, `log` and `out` (of the template's type)
+/// valid
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_opts_template(
+    recs: *const COptionRecord,
+    n: usize,
+    which: i32,
+    log: *const Log,
+    log_options: *const std::ffi::c_void,
+    out: *mut std::ffi::c_void,
+) {
+    let recs = if n == 0 { &[][..] } else { std::slice::from_raw_parts(recs, n) };
+    SYNCED.with(|o| {
+        let mut o = o.borrow_mut();
+        o.sync(recs);
+        match which {
+            TEMPLATE_LPS => (out as *mut LpsOptions).write(o.lps()),
+            TEMPLATE_KKT => (out as *mut CKktOptions).write(o.kkt(*log)),
+            TEMPLATE_LP => (out as *mut CLpOptions).write(o.lp_options(*log)),
+            TEMPLATE_IPX => (out as *mut CIpxOptions).write(o.ipx(*log, log_options)),
+            TEMPLATE_PRESOLVE => (out as *mut crate::presolve::hpresolve::Options).write(o.presolve()),
+            _ => (out as *mut super::lp_run::UnconTemplate).write(super::lp_run::UnconTemplate {
+                on: o.output_flag,
+                primal_feasibility_tolerance: o.primal_feasibility_tolerance,
+                dual_feasibility_tolerance: o.dual_feasibility_tolerance,
+            }),
+        }
+    })
+}
+
+/// The number of C++ records whose value differs from the typed default
+/// (the defaults' check: logged to stderr), with the table's size check
+///
+/// # Safety
+/// The records' views valid
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_opts_default_diff(recs: *const COptionRecord, n: usize) -> i32 {
+    let recs = if n == 0 { &[][..] } else { std::slice::from_raw_parts(recs, n) };
+    let d = Opts::default().diff(recs);
+    for name in &d {
+        eprintln!("option default differs: {}", name);
+    }
+    d.len() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

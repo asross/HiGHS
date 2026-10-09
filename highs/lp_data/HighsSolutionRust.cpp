@@ -73,21 +73,12 @@ bool highs_rs_report_kkt_failures(const RsLp* lp, const RsKktOptions* o,
 
 static RsKktOptions rsKktOptions(const HighsOptions& options) {
   RsKktOptions o;
-  o.log = rsLog(options.log_options);
-  o.primal_feasibility_tolerance = options.primal_feasibility_tolerance;
-  o.dual_feasibility_tolerance = options.dual_feasibility_tolerance;
-  o.mip_feasibility_tolerance = options.mip_feasibility_tolerance;
-  o.primal_residual_tolerance = options.primal_residual_tolerance;
-  o.dual_residual_tolerance = options.dual_residual_tolerance;
-  o.optimality_tolerance = options.optimality_tolerance;
-  o.kkt_tolerance = options.kkt_tolerance;
-  o.log_dev_level = options.log_dev_level;
-  o.full_lp_kkt_check = options.full_lp_kkt_check;
+  rsOptionsTemplate(options, 1, &o);
   return o;
 }
 
 void rsKktOptionsInto(const HighsOptions& options, void* out) {
-  *static_cast<RsKktOptions*>(out) = rsKktOptions(options);
+  rsOptionsTemplate(options, 1, out);
 }
 
 void getKktFailures(const HighsOptions& options, const bool is_qp,

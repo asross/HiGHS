@@ -89,6 +89,29 @@ std::vector<RsOptionRecord> rsOptionRecords(
   return v;
 }
 
+}  // namespace
+
+extern "C" {
+void highs_rs_opts_template(const RsOptionRecord* recs, size_t n, int which,
+                            const RsLog* log, const void* log_options,
+                            void* out);
+int highs_rs_opts_default_diff(const RsOptionRecord* recs, size_t n);
+}
+
+void rsOptionsTemplate(const HighsOptions& options, int which, void* out) {
+  const std::vector<RsOptionRecord> recs = rsOptionRecords(options.records);
+  const RsLog log = rsLog(options.log_options);
+  highs_rs_opts_template(recs.data(), recs.size(), which, &log,
+                         &options.log_options, out);
+}
+
+HighsInt rsOptionsDefaultsDiffer(const HighsOptions& options) {
+  const std::vector<RsOptionRecord> recs = rsOptionRecords(options.records);
+  return highs_rs_opts_default_diff(recs.data(), recs.size());
+}
+
+namespace {
+
 // What highsOpenLogFile needs
 struct OptionCtx {
   HighsLogOptions* log_options;

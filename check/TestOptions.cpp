@@ -6,6 +6,9 @@
 #include "catch.hpp"
 #include "io/HMPSIO.h"
 #include "io/LoadOptions.h"
+#ifdef HIGHS_RUST
+#include "lp_data/HighsRust.h"
+#endif
 
 const bool dev_run = false;
 
@@ -581,3 +584,14 @@ TEST_CASE("string-option-case-insensitivity", "[highs_options]") {
   REQUIRE(highs.setOptionValue(kHipoSystemString, "NormalEQ") ==
           HighsStatus::kOk);
 }
+
+#ifdef HIGHS_RUST
+// The typed copy of the option values in Rust (rust/src/lp_data/opts.rs)
+// has the C++ records' defaults, names and order
+TEST_CASE("rust-option-defaults", "[highs_options]") {
+  HighsOptions options;
+  REQUIRE(rsOptionsDefaultsDiffer(options) == 0);
+  options.presolve = "off";
+  REQUIRE(rsOptionsDefaultsDiffer(options) == 1);
+}
+#endif

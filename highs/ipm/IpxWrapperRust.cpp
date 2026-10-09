@@ -145,27 +145,7 @@ namespace {
 double ipxTimerRead(void* ctx) { return static_cast<HighsTimer*>(ctx)->read(); }
 
 void ipxOptions(const HighsOptions& options, RsIpxOptions& o) {
-  o.log = rsLog(options.log_options);
-  o.log_options = &options.log_options;
-  o.output_flag = options.output_flag;
-  o.log_to_console = options.log_to_console;
-  o.timeless_log = options.timeless_log;
-  o.run_centring = options.run_centring;
-  o.log_dev_level = options.log_dev_level;
-  o.ipx_dualize_strategy = options.ipx_dualize_strategy;
-  o.highs_analysis_level = options.highs_analysis_level;
-  o.ipm_iteration_limit = options.ipm_iteration_limit;
-  o.run_crossover = options.run_crossover == kHighsOnString    ? 1
-                    : options.run_crossover == kHighsOffString ? 0
-                                                               : -1;
-  o.max_centring_steps = options.max_centring_steps;
-  o.primal_feasibility_tolerance = options.primal_feasibility_tolerance;
-  o.dual_feasibility_tolerance = options.dual_feasibility_tolerance;
-  o.ipm_optimality_tolerance = options.ipm_optimality_tolerance;
-  o.start_crossover_tolerance = options.start_crossover_tolerance;
-  o.kkt_tolerance = options.kkt_tolerance;
-  o.time_limit = options.time_limit;
-  o.centring_ratio_tolerance = options.centring_ratio_tolerance;
+  rsOptionsTemplate(options, 3, &o);
 }
 }  // namespace
 

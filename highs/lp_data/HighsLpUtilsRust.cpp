@@ -154,16 +154,7 @@ RsIndexCollection rsIndexCollection(const HighsIndexCollection& ic) {
 
 RsLpOptions rsLpOptions(const HighsOptions& options) {
   RsLpOptions o;
-  o.log = rsLog(options.log_options);
-  o.infinite_cost = options.infinite_cost;
-  o.infinite_bound = options.infinite_bound;
-  o.small_matrix_value = options.small_matrix_value;
-  o.large_matrix_value = options.large_matrix_value;
-  o.simplex_scale_strategy = options.simplex_scale_strategy;
-  o.allowed_matrix_scale_factor = options.allowed_matrix_scale_factor;
-  o.highs_analysis_level = options.highs_analysis_level;
-  o.log_dev_level = options.log_dev_level;
-  o.primal_feasibility_tolerance = options.primal_feasibility_tolerance;
+  rsOptionsTemplate(options, 2, &o);
   return o;
 }
 

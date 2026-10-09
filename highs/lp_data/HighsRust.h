@@ -209,6 +209,13 @@ void rsBasisVecBack(const RsBasisVec& v, HighsBasis& b);
 class HighsTimer;
 struct HighsCallback;
 void rsKktOptionsInto(const HighsOptions& options, void* out);
+// The option values a solver reads, built by Rust from a typed copy of the
+// options (rust/src/lp_data/opts.rs TEMPLATE_ codes: 0 the simplex's
+// LpsOptions, 1 RsKktOptions, 2 RsLpOptions, 3 the IPX options, 4 the
+// presolve's options, 5 the unconstrained solve's)
+void rsOptionsTemplate(const HighsOptions& options, int which, void* out);
+// The options whose values differ from the Rust defaults (0 if none)
+HighsInt rsOptionsDefaultsDiffer(const HighsOptions& options);
 void rsSolveTemplate(const HighsOptions& options, void* out);
 void rsIpxHostTemplate(const HighsOptions& options, HighsTimer& timer,
                        HighsCallback& callback, void* out);
