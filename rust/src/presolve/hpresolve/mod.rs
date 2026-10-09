@@ -28,7 +28,7 @@ mod parallel;
 mod record;
 mod reduce;
 mod rows;
-mod driver;
+pub(crate) mod driver;
 pub use driver::Input;
 mod enumeration;
 mod probing;

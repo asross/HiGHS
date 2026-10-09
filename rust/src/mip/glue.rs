@@ -59,6 +59,9 @@ pub mod source {
     pub const FEASIBILITY_JUMP: i32 = 6;
     pub const SUB_MIP: i32 = 7;
     pub const RANDOMIZED_ROUNDING: i32 = 9;
+    pub const SOLVE_LP: i32 = 10;
+    pub const EVALUATE_NODE: i32 = 11;
+    pub const UNBOUNDED: i32 = 12;
     pub const ZI_ROUND: i32 = 15;
 }
 
@@ -353,15 +356,15 @@ pub struct OrigModel {
     pub num_col: i32,
     pub num_row: i32,
     pub offset: f64,
-    pub col_cost: *const StdVec<f64>,
-    pub col_lower: *const StdVec<f64>,
-    pub col_upper: *const StdVec<f64>,
-    pub row_lower: *const StdVec<f64>,
-    pub row_upper: *const StdVec<f64>,
-    pub integrality: *const StdVec<u8>,
-    pub a_start: *const StdVec<i32>,
-    pub a_index: *const StdVec<i32>,
-    pub a_value: *const StdVec<f64>,
+    pub col_cost: *const Vec<f64>,
+    pub col_lower: *const Vec<f64>,
+    pub col_upper: *const Vec<f64>,
+    pub row_lower: *const Vec<f64>,
+    pub row_upper: *const Vec<f64>,
+    pub integrality: *const Vec<u8>,
+    pub a_start: *const Vec<i32>,
+    pub a_index: *const Vec<i32>,
+    pub a_value: *const Vec<f64>,
 }
 
 /// HighsMipSolver's solution fields
@@ -371,7 +374,7 @@ pub struct SolutionPtrs {
     pub bound_violation: *mut f64,
     pub integrality_violation: *mut f64,
     pub row_violation: *mut f64,
-    pub solution: *const StdVec<f64>,
+    pub solution: *const Vec<f64>,
 }
 
 /// HighsMipSolverData (and its HighsMipSolver), read in place. Filled by
@@ -391,15 +394,15 @@ pub struct MipData {
     pub concurrent_helper: bool,
     pub root_presolve_only: bool,
     pub offset: f64,
-    pub a_start: *const StdVec<i32>,
-    pub a_index: *const StdVec<i32>,
-    pub a_value: *const StdVec<f64>,
-    pub col_cost: *const StdVec<f64>,
-    pub col_lower: *const StdVec<f64>,
-    pub col_upper: *const StdVec<f64>,
-    pub row_lower: *const StdVec<f64>,
-    pub row_upper: *const StdVec<f64>,
-    pub integrality: *const StdVec<u8>,
+    pub a_start: *const Vec<i32>,
+    pub a_index: *const Vec<i32>,
+    pub a_value: *const Vec<f64>,
+    pub col_cost: *const Vec<f64>,
+    pub col_lower: *const Vec<f64>,
+    pub col_upper: *const Vec<f64>,
+    pub row_lower: *const Vec<f64>,
+    pub row_upper: *const Vec<f64>,
+    pub integrality: *const Vec<u8>,
     // HighsMipSolverData
     pub ar_start: *const StdVec<i32>,
     pub ar_index: *const StdVec<i32>,

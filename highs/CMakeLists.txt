@@ -51,6 +51,47 @@ if(HIGHS_RUST)
     simplex/HEkkDualMulti.cpp
     test_kkt/DevKkt.cpp
     test_kkt/KktCh2.cpp)
+  # The MIP solver is Rust (rust/src/mip, its objects rust/src/mip/host):
+  # mip/HighsMipHost.cpp is the Highs object's side (profiling, callback,
+  # improving solution file); the MIP presolve, its restarts and the
+  # postsolve of its solutions are Rust too, so only the LP presolve's
+  # wrapper (HPresolveRust.cpp, for PresolveComponent) is left
+  list(REMOVE_ITEM highs_sources
+    mip/HighsCliqueTable.cpp
+    mip/HighsConflictPool.cpp
+    mip/HighsCutGeneration.cpp
+    mip/HighsCutPool.cpp
+    mip/HighsDomain.cpp
+    mip/HighsDynamicRowMatrix.cpp
+    mip/HighsFeasibilityJump.cpp
+    mip/HighsGFkSolve.cpp
+    mip/HighsGraphLns.cpp
+    mip/HighsImplications.cpp
+    mip/HighsLpAggregator.cpp
+    mip/HighsLpRelaxation.cpp
+    mip/HighsMipSolver.cpp
+    mip/HighsMipSolverData.cpp
+    mip/HighsMipWorker.cpp
+    mip/HighsModkSeparator.cpp
+    mip/HighsNodeQueue.cpp
+    mip/HighsObjectiveFunction.cpp
+    mip/HighsPathSeparator.cpp
+    mip/HighsPrimalHeuristics.cpp
+    mip/HighsPseudocost.cpp
+    mip/HighsRedcostFixing.cpp
+    mip/HighsSearch.cpp
+    mip/HighsSeparation.cpp
+    mip/HighsSeparationRust.cpp
+    mip/HighsSeparator.cpp
+    mip/HighsTableauSeparator.cpp
+    mip/HighsTransformedLp.cpp
+    presolve/HighsSymmetry.cpp
+    presolve/HPresolve.cpp
+    presolve/HPresolveAnalysis.cpp
+    presolve/HPresolveTest.cpp)
+  # The task scheduler is Rust (rust/src/parallel): the C++ headers keep
+  # the thread count, thread id and interrupt check that call it
+  list(REMOVE_ITEM highs_sources parallel/HighsTaskExecutor.cpp)
   # The simplex solve is Rust (rust/src/simplex): the C++ dual and primal
   # simplex were only the fallback for the product form update, which
   # nothing sets up (it served the deprecated frozen bases)

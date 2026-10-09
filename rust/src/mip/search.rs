@@ -1800,7 +1800,7 @@ struct StrongBranch<'a> {
     fracints: &'a [FracInt],
 }
 
-mod ffi {
+pub(crate) mod ffi {
     use super::*;
     use crate::ffi::sl;
 

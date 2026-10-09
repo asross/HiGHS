@@ -8,7 +8,7 @@
 //! relaxation, the pools, the postsolve stack, the symmetries, the
 //! callback) are reached through CMipFns::op (codes from 300 below).
 
-use super::domain::{DomChg, Reason, StdVec, LOWER, UPPER};
+use super::domain::{DomChg, Reason, LOWER, UPPER};
 use super::glue::{self, fns, MipData};
 use super::mip_data::{op as mop, src, status, vec};
 use super::root::op as rop;
@@ -614,7 +614,7 @@ impl MipData {
             // SAFETY: the presolved model's row sides (model_ is
             // presolvedModel), changed in place as by the C++; no slice of
             // them is live
-            let (rl, ru) = unsafe { ((*(self.row_lower as *mut StdVec<f64>)).as_mut_slice(), (*(self.row_upper as *mut StdVec<f64>)).as_mut_slice()) };
+            let (rl, ru) = unsafe { ((*(self.row_lower as *mut Vec<f64>)).as_mut_slice(), (*(self.row_upper as *mut Vec<f64>)).as_mut_slice()) };
             for i in 0..num_row {
                 let mut maxabsval: f64 = 0.0;
                 let mut integral = true;

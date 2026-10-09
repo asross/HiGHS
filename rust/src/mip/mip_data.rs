@@ -142,7 +142,7 @@ fn assign<T: Copy>(v: &mut StdVec<T>, data: &[T]) {
 }
 
 impl MipVecs {
-    fn new() -> Self {
+    pub fn new() -> Self {
         fn e<T: Copy>() -> StdVec<T> {
             StdVec::from_vec(Vec::new())
         }

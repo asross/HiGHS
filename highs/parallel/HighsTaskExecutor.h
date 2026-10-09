@@ -17,7 +17,7 @@
 #include "parallel/HighsSplitDeque.h"
 
 extern "C" {
-void highs_rs_sched_initialize(int numThreads, bool (*run)(HighsTask*));
+void highs_rs_sched_initialize(int numThreads);
 void highs_rs_sched_shutdown(bool blocking);
 HighsSplitDeque* highs_rs_sched_this_deque();
 }
@@ -33,17 +33,11 @@ class HighsTaskExecutor {
   }
 
   static void initialize(int numThreads) {
-    highs_rs_sched_initialize(numThreads, &HighsTask::runStolen);
+    highs_rs_sched_initialize(numThreads);
   }
 
   static void shutdown(bool blocking = false) {
     highs_rs_sched_shutdown(blocking);
-  }
-
-  static void sync_stolen_task(HighsSplitDeque* localDeque,
-                               HighsTask* stolenTask) {
-    if (highs_rs_deque_sync_stolen(localDeque, stolenTask))
-      throw HighsTask::Interrupt();
   }
 };
 

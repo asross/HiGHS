@@ -8,6 +8,17 @@
 #ifndef HIGHS_TASK_H_
 #define HIGHS_TASK_H_
 
+#include "HConfig.h"
+
+#ifdef HIGHS_RUST
+// Tasks are Rust's (rust/src/parallel); a cancelled task's check
+// (HighsSplitDeque::checkInterrupt) throws this
+class HighsTask {
+ public:
+  class Interrupt {};
+};
+#else
+
 #include <atomic>
 #include <cassert>
 #include <cstring>
@@ -177,5 +188,7 @@ class HighsTask {
     return reinterpret_cast<HighsSplitDeque*>(state & kPtrMask);
   }
 };
+
+#endif  // HIGHS_RUST
 
 #endif

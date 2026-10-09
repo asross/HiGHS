@@ -7,7 +7,7 @@
 #![allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments)]
 
 pub mod cut_generation;
-mod ffi;
+pub(crate) mod ffi;
 pub mod gfk;
 pub mod integers;
 pub mod modk;
