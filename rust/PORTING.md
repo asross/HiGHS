@@ -42,6 +42,17 @@ the sole caller's path.
 Order: HFactor -> simplex (HEkk, HSimplexNla) -> presolve -> MIP -> top level;
 file readers in parallel. IPX, PDLP and QP last.
 
+## Known divergences from the C++ (deliberate)
+
+- **dualize (simplex_dualize_strategy on, not the default):** HEkk keeps the
+  dual steepest-edge weights of the dualized LP across undualize, and the
+  clean-up solve reads past the end of the weight vector (undefined
+  behaviour in C++, a panic in Rust). The Rust build marks the weights
+  invalid when dualizing and undualizing, so they are recomputed. Results:
+  correct statuses (refinery and vol1 are Infeasible; the C++ says Unknown),
+  other paths differ on 6 of 82 check instances with dualize and presolve
+  off.
+
 ## Rules for each step
 
 - **Same paths.** Ported code does the same floating-point operations in the

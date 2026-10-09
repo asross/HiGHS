@@ -603,6 +603,10 @@ HighsStatus HEkk::dualize() {
   lp_.num_col_ = dual_num_col;
   lp_.num_row_ = dual_num_row;
   status_.is_dualized = true;
+  // The LP's dimensions change, so the dual edge weights no longer fit it
+  // (the C++ HEkk kept them and read past the end of the weight vector on
+  // the clean-up solve after undualize)
+  status_.has_dual_steepest_edge_weights = false;
   status_.has_basis = false;
   status_.has_ar_matrix = false;
   status_.has_nla = false;
@@ -684,6 +688,10 @@ HighsStatus HEkk::undualize() {
   // Clear the data retained when solving dual LP
   clearEkkDualize();
   status_.is_dualized = false;
+  // The LP's dimensions change, so the dual edge weights no longer fit it
+  // (the C++ HEkk kept them and read past the end of the weight vector on
+  // the clean-up solve after undualize)
+  status_.has_dual_steepest_edge_weights = false;
   // Now solve with this basis. Should just be a case of reinverting
   // and re-solving for optimal primal and dual values, but
   // numerically marginal LPs will need clean-up
