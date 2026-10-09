@@ -105,6 +105,7 @@ void HighsLpRelaxation::LpRow::get(const HighsMipSolver& mipsolver,
   };
 }
 
+#ifndef HIGHS_RUST
 HighsInt HighsLpRelaxation::LpRow::getRowLen(
     const HighsMipSolver& mipsolver) const {
   switch (origin) {
@@ -118,6 +119,7 @@ HighsInt HighsLpRelaxation::LpRow::getRowLen(
   assert(false);
   return -1;
 }
+#endif
 
 bool HighsLpRelaxation::LpRow::isIntegral(
     const HighsMipSolver& mipsolver) const {
@@ -2195,13 +2197,9 @@ void HighsLpRelaxation::removeWorkerSpecificRows() {
   highs_rs::highs_rs_lprelax_op(rs_, 2, 0);
 }
 
-void HighsLpRelaxation::removeCuts() { highs_rs::highs_rs_lprelax_op(rs_, 3, 0); }
-
 void HighsLpRelaxation::performAging(bool deleteRows) {
   highs_rs::highs_rs_lprelax_op(rs_, 4, deleteRows);
 }
-
-void HighsLpRelaxation::resetAges() { highs_rs::highs_rs_lprelax_op(rs_, 5, 0); }
 
 void HighsLpRelaxation::notifyCutPoolsLpCopied(HighsInt n) {
   highs_rs::highs_rs_lprelax_op(rs_, 6, n);
@@ -2446,18 +2444,6 @@ HighsStatus HighsLpRelaxation::changeColsBounds(HighsInt from, HighsInt to,
                                                 const double* upper) {
   return HighsStatus(highs_rs::highs_rs_lph_change_col_bounds_interval(
       lp_, from, to, lower, upper));
-}
-
-HighsStatus HighsLpRelaxation::changeColBounds(HighsInt col, double lower,
-                                               double upper) {
-  return HighsStatus(
-      highs_rs::highs_rs_lph_change_col_bounds_set(lp_, 1, &col, &lower, &upper));
-}
-
-HighsStatus HighsLpRelaxation::changeColsCost(const HighsInt* mask,
-                                              const double* cost) {
-  return HighsStatus(
-      highs_rs::highs_rs_lph_change_col_costs_mask(lp_, mask, cost));
 }
 
 HighsStatus HighsLpRelaxation::putIterate() {

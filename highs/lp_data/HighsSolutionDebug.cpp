@@ -498,11 +498,6 @@ HighsDebugStatus debugCompareHighsInfoInteger(const string name,
   return HighsDebugStatus::kLogicalError;
 }
 #else
-// Debugging is not in Crestline: the checks are no-ops
-HighsDebugStatus debugHighsLpSolution(
-    const std::string& message, const HighsLpSolverObject& solver_object) {
-  return HighsDebugStatus::kNotChecked;
-}
 HighsDebugStatus debugHighsSolution(const string message,
                                     const HighsOptions& options,
                                     const HighsModel& model,
@@ -523,11 +518,6 @@ HighsDebugStatus debugHighsSolution(
     const HighsInfo& highs_info, const bool check_model_status_and_highs_info) {
   return HighsDebugStatus::kNotChecked;
 }
-void debugReportHighsSolution(const string message,
-                              const HighsLogOptions& log_options,
-                              const HighsInfo& highs_info,
-                              const HighsModelStatus model_status) {
-}
 HighsDebugStatus debugHighsBasisConsistent(const HighsOptions& options,
                                            const HighsLp& lp,
                                            const HighsBasis& basis) {
@@ -546,41 +536,6 @@ HighsDebugStatus debugPrimalSolutionRightSize(const HighsOptions& options,
 HighsDebugStatus debugDualSolutionRightSize(const HighsOptions& options,
                                             const HighsLp& lp,
                                             const HighsSolution& solution) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus debugAnalysePrimalDualErrors(
-    const HighsOptions& options, HighsPrimalDualErrors& primal_dual_errors) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus debugCompareHighsInfo(const HighsOptions& options,
-                                       const HighsInfo& highs_info0,
-                                       const HighsInfo& highs_info1) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus debugCompareHighsInfoObjective(const HighsOptions& options,
-                                                const HighsInfo& highs_info0,
-                                                const HighsInfo& highs_info1) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus debugCompareHighsInfoStatus(const HighsOptions& options,
-                                             const HighsInfo& highs_info0,
-                                             const HighsInfo& highs_info1) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus debugCompareHighsInfoInfeasibility(
-    const HighsOptions& options, const HighsInfo& highs_info0,
-    const HighsInfo& highs_info1) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus debugCompareHighsInfoDouble(const string name,
-                                             const HighsOptions& options,
-                                             const double v0, const double v1) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus debugCompareHighsInfoInteger(const string name,
-                                              const HighsOptions& options,
-                                              const HighsInt v0,
-                                              const HighsInt v1) {
   return HighsDebugStatus::kNotChecked;
 }
 #endif

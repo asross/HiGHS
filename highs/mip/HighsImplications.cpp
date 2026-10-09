@@ -1061,10 +1061,6 @@ HighsImplications::~HighsImplications() {
   highs_rs::highs_rs_implics_free(rs_);
 }
 
-HighsInt HighsImplications::getNumImplications() const {
-  return static_cast<HighsInt>(highs_rs::highs_rs_implics_get(rs_, 0));
-}
-
 bool HighsImplications::tooManyVarBounds() const {
   return highs_rs::highs_rs_implics_get(rs_, 1);
 }
@@ -1104,11 +1100,6 @@ void HighsImplications::addVLB(HighsInt col, HighsInt vlbcol, double vlbcoef,
                                     mipsolver.mipdata_->feastol);
 }
 
-void HighsImplications::columnTransformed(HighsInt col, double scale,
-                                          double constant) {
-  highs_rs::highs_rs_implics_column_transformed(rs_, col, scale, constant);
-}
-
 std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVb(
     bool vlb, HighsInt col, const double* col_value, const double* col_dual,
     size_t n, double& bound, const HighsDomain& globaldom) const {
@@ -1131,18 +1122,6 @@ static std::pair<HighsInt, HighsImplications::VarBound> implicsBestVb(
   return self.getBestVb(vlb, col, lpSolution.col_value.data(),
                         lpSolution.col_dual.data(),
                         lpSolution.col_value.size(), bound, globaldom);
-}
-
-std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVub(
-    HighsInt col, const HighsSolution& lpSolution, double& bestUb,
-    const HighsDomain& globaldom) const {
-  return implicsBestVb(*this, false, col, lpSolution, bestUb, globaldom);
-}
-
-std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVlb(
-    HighsInt col, const HighsSolution& lpSolution, double& bestLb,
-    const HighsDomain& globaldom) const {
-  return implicsBestVb(*this, true, col, lpSolution, bestLb, globaldom);
 }
 
 bool HighsImplications::runProbing(HighsInt col, HighsInt& numReductions) {
@@ -1205,22 +1184,6 @@ static void implicsCleanupVb(const HighsMipSolver& mipsolver, bool vlb,
       vbCol, &v, bound, allowBoundChanges, &redundant, &infeasible);
   vb.coef = v.coef;
   vb.constant = v.constant;
-}
-
-void HighsImplications::cleanupVlb(HighsInt col, HighsInt vlbCol,
-                                   HighsImplications::VarBound& vlb, double lb,
-                                   bool& redundant, bool& infeasible,
-                                   bool allowBoundChanges) const {
-  implicsCleanupVb(mipsolver, true, col, vlbCol, vlb, lb, redundant,
-                   infeasible, allowBoundChanges);
-}
-
-void HighsImplications::cleanupVub(HighsInt col, HighsInt vubCol,
-                                   HighsImplications::VarBound& vub, double ub,
-                                   bool& redundant, bool& infeasible,
-                                   bool allowBoundChanges) const {
-  implicsCleanupVb(mipsolver, false, col, vubCol, vub, ub, redundant,
-                   infeasible, allowBoundChanges);
 }
 
 void HighsImplications::applyImplications(HighsDomain& domain,

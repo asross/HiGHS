@@ -41,6 +41,7 @@ HighsSearch::HighsSearch(HighsMipWorker& mipworker, HighsPseudocost& pseudocost)
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 double HighsSearch::checkSol(const std::vector<double>& sol,
                              bool& integerfeasible) const {
   HighsCDouble objval = 0.0;
@@ -58,6 +59,7 @@ double HighsSearch::checkSol(const std::vector<double>& sol,
 
   return double(objval);
 }
+#endif
 
 #ifndef HIGHS_RUST
 bool HighsSearch::orbitsValidInChildNode(
@@ -80,10 +82,13 @@ bool HighsSearch::orbitsValidInChildNode(
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 double HighsSearch::getCutoffBound() const {
   return std::min(getUpperLimit(), upper_limit);
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsSearch::setRINSNeighbourhood(const std::vector<double>& basesol,
                                        const std::vector<double>& relaxsol) {
   for (HighsInt i = 0; i != mipsolver.numCol(); ++i) {
@@ -103,7 +108,9 @@ void HighsSearch::setRINSNeighbourhood(const std::vector<double>& basesol,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsSearch::setRENSNeighbourhood(const std::vector<double>& lpsol) {
   for (HighsInt i = 0; i != mipsolver.numCol(); ++i) {
     if (!mipsolver.isColInteger(i)) continue;
@@ -126,6 +133,7 @@ void HighsSearch::setRENSNeighbourhood(const std::vector<double>& lpsol) {
     }
   }
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HighsSearch::createNewNode() {
@@ -833,13 +841,17 @@ void HighsSearch::flushStatistics(HighsMipSolver& mipsolver) {
   sblpiterations = 0;
 }
 
+#ifndef HIGHS_RUST
 int64_t HighsSearch::getHeuristicLpIterations() const {
   return heurlpiterations + mipsolver.mipdata_->heuristic_lp_iterations;
 }
+#endif
 
+#ifndef HIGHS_RUST
 int64_t HighsSearch::getTotalLpIterations() const {
   return lpiterations + mipsolver.mipdata_->total_lp_iterations;
 }
+#endif
 
 #ifndef HIGHS_RUST
 int64_t HighsSearch::getLocalLpIterations() const { return lpiterations; }
@@ -849,9 +861,11 @@ int64_t& HighsSearch::getLocalNodes() { return nnodes; }
 int64_t& HighsSearch::getLocalLeaves() { return nleaves; }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 int64_t HighsSearch::getStrongBranchingLpIterations() const {
   return sblpiterations + mipsolver.mipdata_->sb_lp_iterations;
 }
+#endif
 
 void HighsSearch::resetLocalDomain() {
   this->lp->resetToGlobalDomain(getDomain());
@@ -1990,9 +2004,11 @@ HighsConflictPool& HighsSearch::getConflictPool() const {
 
 HighsCutPool& HighsSearch::getCutPool() const { return mipworker.getCutPool(); }
 
+#ifndef HIGHS_RUST
 const HighsNodeQueue& HighsSearch::getNodeQueue() const {
   return mipsolver.mipdata_->nodequeue;
 }
+#endif
 
 bool HighsSearch::checkLimits(int64_t nodeOffset) const {
   if (mipsolver.mipdata_->parallelLockActive()) {
@@ -2545,18 +2561,6 @@ int HighsSearch::run(int which, HighsInt i, int64_t n, HighsNodeQueue* q) {
 
 double HighsSearch::getCurrentEstimate() const {
   return highs_rs::highs_rs_search_value(rs_, 0);
-}
-
-double HighsSearch::getCurrentLowerBound() const {
-  return highs_rs::highs_rs_search_value(rs_, 1);
-}
-
-HighsInt HighsSearch::selectBranchingCandidate(int64_t maxSbIters,
-                                               double& downNodeLb,
-                                               double& upNodeLb) {
-  return highs_rs::highs_rs_search_select(
-      rs_, pseudocost.rust(), mipsolver.mipdata_->nodequeue.rust(),
-      maxSbIters, &downNodeLb, &upNodeLb);
 }
 
 void HighsSearch::installNode(HighsNodeQueue::OpenNode&& node) {

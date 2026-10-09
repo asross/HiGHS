@@ -255,54 +255,6 @@ void writeSolutionFile(FILE* file, const HighsOptions& options,
                             model.lp_.isMip(), solution.dual_valid);
 }
 
-void writeGlpsolSolution(FILE* file, const HighsOptions& options,
-                         const HighsModel& model, const HighsBasis& basis,
-                         const HighsSolution& solution,
-                         const HighsModelStatus model_status,
-                         const HighsInfo& info, const bool raw) {
-  writeSolutionFile(file, options, model, basis, solution, info, model_status,
-                    raw ? kSolutionStyleGlpsolRaw : kSolutionStyleGlpsolPretty);
-}
-
-void writeOldRawSolution(FILE* file, const HighsLogOptions& log_options,
-                         const HighsLp& lp, const HighsBasis& basis,
-                         const HighsSolution& solution) {
-  rsWriteSolution(file, log_options, lp, HighsHessian(), basis, solution,
-                  HighsInfo(), HighsModelStatus::kNotset, kSolutionStyleOldRaw,
-                  0);
-}
-
-void writeModelSolution(FILE* file, const HighsLogOptions& log_options,
-                        const HighsModel& model, const HighsSolution& solution,
-                        const HighsInfo& info, const bool sparse) {
-  rsWriteSolution(file, log_options, model.lp_, model.hessian_, HighsBasis(),
-                  solution, info, HighsModelStatus::kNotset,
-                  sparse ? kPartModelSolutionSparse : kPartModelSolution, 0);
-}
-
-void writeModelBoundSolution(
-    FILE* file, const HighsLogOptions& log_options, const bool columns,
-    const HighsInt dim, const std::vector<double>& lower,
-    const std::vector<double>& upper, const std::vector<std::string>& names,
-    const bool have_primal, const std::vector<double>& primal,
-    const bool have_dual, const std::vector<double>& dual,
-    const bool have_basis, const std::vector<HighsBasisStatus>& status,
-    const HighsVarType* integrality) {
-  assert(names.size() == static_cast<size_t>(dim));
-  std::vector<RsWStr> rs_names = rsWStrs(names);
-  const RsMut<double> p = rsMut(primal), d = rsMut(dual);
-  const RsMut<uint8_t> s = rsMut(status);
-  const RsMut<uint8_t> t = {
-      reinterpret_cast<uint8_t*>(const_cast<HighsVarType*>(integrality)),
-      size_t(dim)};
-  const RsOut out = rsOut(file, log_options);
-  highs_rs_write_model_bound_solution(
-      &out, columns, rsMut(lower), rsMut(upper),
-      {rs_names.data(), rs_names.size()}, have_primal ? &p : nullptr,
-      have_dual ? &d : nullptr, have_basis ? &s : nullptr,
-      integrality ? &t : nullptr);
-}
-
 void writeObjectiveValue(FILE* file, const HighsLogOptions& log_options,
                          const double objective_value) {
   const RsOut out = rsOut(file, log_options);

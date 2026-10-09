@@ -19,6 +19,7 @@
 // functions, so HFactor.h has #include <algorithm>
 using std::fabs;
 
+#ifndef HIGHS_RUST
 void RefactorInfo::clear() {
   this->use = false;
   this->build_synthetic_tick = 0.0;
@@ -26,6 +27,7 @@ void RefactorInfo::clear() {
   this->pivot_row.clear();
   this->pivot_type.clear();
 }
+#endif
 
 #ifndef HIGHS_RUST
 RefactorInfo HFactor::getRefactorInfo() const { return refactor_info_; }

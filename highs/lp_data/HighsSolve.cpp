@@ -718,9 +718,11 @@ bool useIpm(const std::string& solver) {
   return solver == kIpmString || solver == kHipoString || solver == kIpxString;
 }
 
+#ifndef HIGHS_RUST
 bool usePdlp(const std::string& solver) {
   return solver == kPdlpString || solver == kHiPdlpString;
 }
+#endif
 
 #ifndef HIGHS_RUST  // HiPO is not in Crestline
 // Decide whether to use the HiPO IPM solver

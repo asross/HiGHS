@@ -1651,26 +1651,6 @@ int highs_rs_apply_scaling_to_lp(RsLp* lp, bool is_col, HighsInt ix,
                                  double scale);
 }
 
-HighsStatus applyScalingToLpCol(HighsLp& lp, const HighsInt col,
-                                const double colScale) {
-  RsLp v = rsLp(lp);
-  return HighsStatus(highs_rs_apply_scaling_to_lp(&v, true, col, colScale));
-}
-
-HighsStatus applyScalingToLpRow(HighsLp& lp, const HighsInt row,
-                                const double rowScale) {
-  RsLp v = rsLp(lp);
-  return HighsStatus(highs_rs_apply_scaling_to_lp(&v, false, row, rowScale));
-}
-
-void unscaleSolution(HighsSolution& solution, const HighsScale& scale) {
-  assert(scale.has_scaling);
-  highs_rs_unscale_solution(
-      {const_cast<double*>(scale.col.data()), size_t(scale.num_col)},
-      {const_cast<double*>(scale.row.data()), size_t(scale.num_row)},
-      scale.cost, rsMut(solution.col_value), rsMut(solution.col_dual),
-      rsMut(solution.row_value), rsMut(solution.row_dual));
-}
 #endif
 
 #ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs, simplex/app.rs
@@ -1964,15 +1944,9 @@ HighsInt getNumInt(const HighsLp& lp) {
   return num_int;
 }
 #else
-HighsInt getNumInt(const HighsLp& lp) {
-  const RsLp v = rsLp(lp);
-  HighsInt num_int = 0;
-  for (size_t i = 0; i < v.integrality.len && i < size_t(lp.num_col_); i++)
-    num_int += v.integrality.ptr[i] == uint8_t(HighsVarType::kInteger);
-  return num_int;
-}
 #endif
 
+#ifndef HIGHS_RUST
 void getLpCosts(const HighsLp& lp, const HighsInt from_col,
                 const HighsInt to_col, double* XcolCost) {
   assert(0 <= from_col && from_col < lp.num_col_);
@@ -1981,7 +1955,9 @@ void getLpCosts(const HighsLp& lp, const HighsInt from_col,
   for (HighsInt col = from_col; col < to_col + 1; col++)
     XcolCost[col - from_col] = lp.col_cost_[col];
 }
+#endif
 
+#ifndef HIGHS_RUST
 void getLpColBounds(const HighsLp& lp, const HighsInt from_col,
                     const HighsInt to_col, double* XcolLower,
                     double* XcolUpper) {
@@ -1993,7 +1969,9 @@ void getLpColBounds(const HighsLp& lp, const HighsInt from_col,
     if (XcolUpper != nullptr) XcolUpper[col - from_col] = lp.col_upper_[col];
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 void getLpRowBounds(const HighsLp& lp, const HighsInt from_row,
                     const HighsInt to_row, double* XrowLower,
                     double* XrowUpper) {
@@ -2005,6 +1983,7 @@ void getLpRowBounds(const HighsLp& lp, const HighsInt from_row,
     if (XrowUpper != nullptr) XrowUpper[row - from_row] = lp.row_upper_[row];
   }
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
@@ -2303,10 +2282,6 @@ void reportLp(const HighsLogOptions& log_options, const HighsLp& lp,
                      int(report_level));
 }
 
-void reportLpBrief(const HighsLogOptions& log_options, const HighsLp& lp) {
-  reportLp(log_options, lp, HighsLogType::kInfo);
-}
-
 void reportMatrix(const HighsLogOptions& log_options,
                   const std::string& message, const HighsInt num_col,
                   const HighsInt num_nz, const HighsInt* start,
@@ -2316,8 +2291,6 @@ void reportMatrix(const HighsLogOptions& log_options,
                          start, index, value);
 }
 
-// Analysis only: left out of Crestline
-void analyseLp(const HighsLogOptions&, const HighsLp&) {}
 #endif
 
 #ifndef HIGHS_RUST
@@ -2917,15 +2890,6 @@ HighsStatus assessLpPrimalSolution(const std::string& message,
   return HighsStatus::kOk;
 }
 #else
-void assessColPrimalSolution(const HighsOptions& options, const double primal,
-                             const double lower, const double upper,
-                             const HighsVarType type, double& col_infeasibility,
-                             double& integer_infeasibility) {
-  highs_rs_assess_col_primal_solution(
-      options.primal_feasibility_tolerance, options.mip_feasibility_tolerance,
-      primal, lower, upper, uint8_t(type), &col_infeasibility,
-      &integer_infeasibility);
-}
 
 HighsStatus assessLpPrimalSolution(const std::string& message,
                                    const HighsOptions& options,
@@ -3431,13 +3395,6 @@ bool isLessInfeasibleDSECandidate(const HighsLogOptions& log_options,
   return LiDSE_candidate;
 }
 #else
-bool isLessInfeasibleDSECandidate(const HighsLogOptions& log_options,
-                                  const HighsLp& lp) {
-  const RsLog log = rsLog(log_options);
-  return highs_rs_is_less_infeasible_dse_candidate(
-      &log, lp.model_name_.c_str(), strlen(lp.model_name_.c_str()),
-      lp.num_col_, rsMut(lp.a_matrix_.start_), rsMut(lp.a_matrix_.value_));
-}
 #endif
 
 HighsLp withoutSemiVariables(const HighsLp& lp_, HighsSolution& solution,

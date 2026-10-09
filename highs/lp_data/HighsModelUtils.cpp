@@ -241,14 +241,6 @@ void writeLpObjective(FILE* file, const HighsLogOptions& log_options,
   writeObjectiveValue(file, log_options, (double)objective_value);
 }
 #else
-void writeModelObjective(FILE* file, const HighsLogOptions& log_options,
-                         const HighsModel& model,
-                         const std::vector<double>& primal_solution) {
-  HighsCDouble objective_value =
-      model.lp_.objectiveCDoubleValue(primal_solution);
-  objective_value += model.hessian_.objectiveCDoubleValue(primal_solution);
-  writeObjectiveValue(file, log_options, (double)objective_value);
-}
 
 void writeLpObjective(FILE* file, const HighsLogOptions& log_options,
                       const HighsLp& lp,
@@ -600,9 +592,6 @@ HighsStatus normaliseNames(const HighsLogOptions& log_options, bool column,
   return status;
 }
 
-HighsFileType getFileType(const std::string filename) {
-  return HighsFileType(highs_rs_file_type(filename.data(), filename.size()));
-}
 #endif
 
 #ifndef HIGHS_RUST

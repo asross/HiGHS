@@ -450,6 +450,7 @@ bool mipCallback(void* m, int type, const MipCallbackOut* out,
 }  // namespace highs_rs
 #endif
 
+#ifndef HIGHS_RUST
 std::string HighsMipSolverData::solutionSourceToString(
     const int solution_source, const bool code) const {
   if (solution_source == kSolutionSourceNone) {
@@ -529,6 +530,7 @@ std::string HighsMipSolverData::solutionSourceToString(
     return "None";
   }
 }
+#endif
 
 bool HighsMipSolverData::checkSolution(
     const std::vector<double>& solution) const {
@@ -626,14 +628,9 @@ bool HighsMipSolverData::trySolution(const std::vector<double>& solution,
 #endif  // HIGHS_RUST
 }
 
+#ifndef HIGHS_RUST
 bool HighsMipSolverData::solutionRowFeasible(
     const std::vector<double>& solution) const {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return highs_rs::highs_rs_mip_solution(highs_rs::mipFns(), &rsm, 1, solution.data(), solution.size(), 0);
-  }
-#else
   for (HighsInt i = 0; i != mipsolver.numRow(); ++i) {
     HighsCDouble c_double_rowactivity = HighsCDouble(0.0);
 
@@ -649,16 +646,11 @@ bool HighsMipSolverData::solutionRowFeasible(
     if (rowactivity < mipsolver.rowLower(i) - feastol) return false;
   }
   return true;
-#endif  // HIGHS_RUST
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsModelStatus HighsMipSolverData::trivialHeuristics() {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return HighsModelStatus(int(highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 2)));
-  }
-#else
   //  printf("\nHighsMipSolverData::trivialHeuristics() Number of continuous
   //  columns is %d\n",
   //	 int(continuous_cols.size()));
@@ -800,8 +792,8 @@ HighsModelStatus HighsMipSolverData::trivialHeuristics() {
     }
   }
   return HighsModelStatus::kNotset;
-#endif  // HIGHS_RUST
 }
+#endif
 
 #ifdef HIGHS_RUST
 // The IPM solve of the analytic centre, by an LP solver of the MIP
@@ -1056,15 +1048,10 @@ void HighsMipSolverData::finishSymmetryDetection(
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 double HighsMipSolverData::limitsToGap(const double use_lower_bound,
                                        const double use_upper_bound, double& lb,
                                        double& ub) const {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return highs_rs::highs_rs_mip_limits_to_gap(highs_rs::mipFns(), &rsm, use_lower_bound, use_upper_bound, &lb, &ub);
-  }
-#else
   double offset = mipsolver.model_->offset_;
   lb = use_lower_bound + offset;
   if (std::abs(lb) <= epsilon) lb = 0;
@@ -1080,17 +1067,12 @@ double HighsMipSolverData::limitsToGap(const double use_lower_bound,
       gap = (ub - lb) / fabs(ub);
   }
   return gap;
-#endif  // HIGHS_RUST
 }
+#endif
 
+#ifndef HIGHS_RUST
 double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
                                                 double mip_rel_gap) const {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return highs_rs::highs_rs_mip_new_upper_limit(highs_rs::mipFns(), &rsm, ub, mip_abs_gap, mip_rel_gap);
-  }
-#else
   double new_upper_limit;
   if (objectiveFunction.isIntegral()) {
     new_upper_limit =
@@ -1128,16 +1110,11 @@ double HighsMipSolverData::computeNewUpperLimit(double ub, double mip_abs_gap,
   }
 
   return new_upper_limit;
-#endif  // HIGHS_RUST
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool HighsMipSolverData::moreHeuristicsAllowed() const {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 0) != 0;
-  }
-#else
   // the quick graph-LNS search, early in the root node, has a budget of
   // its own
   const int64_t heur_lp_iterations =
@@ -1202,17 +1179,11 @@ bool HighsMipSolverData::moreHeuristicsAllowed() const {
   }
 
   return false;
-#endif  // HIGHS_RUST
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::removeFixedIndices() {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 3);
-    return;
-  }
-#else
   integral_cols.erase(
       std::remove_if(integral_cols.begin(), integral_cols.end(),
                      [&](HighsInt col) { return getDomain().isFixed(col); }),
@@ -1229,8 +1200,8 @@ void HighsMipSolverData::removeFixedIndices() {
       std::remove_if(continuous_cols.begin(), continuous_cols.end(),
                      [&](HighsInt col) { return getDomain().isFixed(col); }),
       continuous_cols.end());
-#endif  // HIGHS_RUST
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HighsMipSolverData::init() {
@@ -1645,15 +1616,10 @@ void HighsMipSolverData::runSetup() {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 double HighsMipSolverData::transformNewIntegerFeasibleSolution(
     const std::vector<double>& sol,
     const bool possibly_store_as_new_incumbent) {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return highs_rs::highs_rs_mip_transform(highs_rs::mipFns(), &rsm, sol.data(), sol.size(), possibly_store_as_new_incumbent);
-  }
-#else
   HighsSolution solution;
   solution.col_value = sol;
   solution.value_valid = true;
@@ -1800,22 +1766,17 @@ try_again:
 
   // return the objective value in the transformed space
   return transformed_solobj;
-#endif  // HIGHS_RUST
 }
+#endif
 
+#ifndef HIGHS_RUST
 double HighsMipSolverData::percentageInactiveIntegers() const {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return highs_rs::highs_rs_mip_query(highs_rs::mipFns(), &rsm, 1);
-  }
-#else
   return 100.0 *
          (1.0 - static_cast<double>(integer_cols.size() -
                                     cliquetable.getSubstitutions().size()) /
                     numintegercols);
-#endif  // HIGHS_RUST
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HighsMipSolverData::performRestart() {
@@ -2198,6 +2159,7 @@ static std::array<char, 22> convertToPrintString(double val,
   return printString;
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::printSolutionSourceKey() const {
   std::stringstream ss;
   // Last MipSolutionSource enum is kSolutionSourceCleanup - which is
@@ -2238,15 +2200,10 @@ void HighsMipSolverData::printSolutionSourceKey() const {
                  "%s%s\n", ss.str().c_str(), line < to_line - 1 ? ";" : "");
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::printDisplayLine(const int solution_source) {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    highs_rs::highs_rs_mip_print_display_line(highs_rs::mipFns(), &rsm, solution_source);
-    return;
-  }
-#else
   // MIP logging method
   //
   // Note that if the original problem is a maximization, the cost
@@ -2371,9 +2328,10 @@ void HighsMipSolverData::printDisplayLine(const int solution_source) {
   const bool interrupt = interruptFromCallbackWithData(
       kCallbackMipLogging, mipsolver.solution_objective_, "MIP logging");
   assert(!interrupt);
-#endif  // HIGHS_RUST
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool HighsMipSolverData::rootSeparationRound(
     HighsMipWorker& worker, HighsSeparation& sepa, HighsInt& ncuts,
     HighsLpRelaxation::Status& status) {
@@ -2387,12 +2345,8 @@ bool HighsMipSolverData::rootSeparationRound(
   status = evaluateRootLp(worker);
   if (status == HighsLpRelaxation::Status::kInfeasible) return true;
 
-#ifdef HIGHS_RUST
-  const std::vector<double> solvals = getLp().lpColValueVec();
-#else
   const std::vector<double>& solvals =
       getLp().getLpSolver().getSolution().col_value;
-#endif
 
   if (mipsolver.submip || incumbent.empty()) {
     heuristics.randomizedRounding(worker, solvals);
@@ -2405,15 +2359,11 @@ bool HighsMipSolverData::rootSeparationRound(
 
   return false;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsLpRelaxation::Status HighsMipSolverData::evaluateRootLp(
     HighsMipWorker& worker) {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    return HighsLpRelaxation::Status(highs_rs::highs_rs_mip_evaluate_root_lp(highs_rs::mipFns(), &rsm, &worker));
-  }
-#else
   do {
     getDomain().propagate();
 
@@ -2507,8 +2457,8 @@ HighsLpRelaxation::Status HighsMipSolverData::evaluateRootLp(
 
     if (getDomain().getChangedCols().empty()) return status;
   } while (true);
-#endif  // HIGHS_RUST
 }
+#endif
 
 static void clockOff(HighsProfiling* profiling) {
   if (!profiling->mip_) return;
@@ -2728,15 +2678,8 @@ void HighsMipSolverData::stopConcurrentLns() {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::evaluateRootNode(HighsMipWorker& worker) {
-#ifdef HIGHS_RUST
-  {
-    highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    highs_rs::highs_rs_mip_evaluate_root_node(highs_rs::mipFns(), &rsm,
-                                              &worker);
-    return;
-  }
-#else
   // not in a concurrent LNS helper, which only searches for solutions, nor
   // in a main solver that has one: the analytic centre (an IPX solve that
   // can take long, without checking whether the helper has closed the gap)
@@ -3371,8 +3314,8 @@ restart:
   }
   // End of HighsMipSolverData::evaluateRootNode()
   clockOff(profiling);
-#endif  // HIGHS_RUST
 }
+#endif
 
 bool HighsMipSolverData::checkLimits(int64_t nodeOffset) const {
 #ifdef HIGHS_RUST
@@ -3571,16 +3514,10 @@ void HighsMipSolverData::saveReportMipSolution(const double new_upper_limit) {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::limitsToBounds(double& dual_bound,
                                         double& primal_bound,
                                         double& mip_rel_gap) const {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    highs_rs::highs_rs_mip_limits_to_bounds(highs_rs::mipFns(), &rsm, &dual_bound, &primal_bound, &mip_rel_gap);
-    return;
-  }
-#else
   mip_rel_gap = limitsToGap(lower_bound, upper_bound, dual_bound, primal_bound);
   primal_bound =
       std::min(mipsolver.options_mip_->objective_bound, primal_bound);
@@ -3589,8 +3526,8 @@ void HighsMipSolverData::limitsToBounds(double& dual_bound,
     dual_bound = -dual_bound;
     primal_bound = -primal_bound;
   }
-#endif  // HIGHS_RUST
 }
+#endif
 
 void HighsMipSolverData::updateLowerBound(double new_lower_bound,
                                           const bool check_bound_change,
@@ -3732,10 +3669,12 @@ bool HighsMipSolverData::terminatorTerminated() const {
   return mipsolver.termination_status_ != HighsModelStatus::kNotset;
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::terminatorReport() const {
   if (this->terminatorActive())
     mipsolver.terminator_.report(mipsolver.options_mip_->log_options);
 }
+#endif
 
 static double possInfRelDiff(const double v0, const double v1,
                              const double den) {
@@ -3756,19 +3695,13 @@ static double possInfRelDiff(const double v0, const double v1,
   return rel_diff;
 }
 
+#ifndef HIGHS_RUST
 void HighsMipSolverData::updatePrimalDualIntegral(const double from_lower_bound,
                                                   const double to_lower_bound,
                                                   const double from_upper_bound,
                                                   const double to_upper_bound,
                                                   const bool check_bound_change,
                                                   const bool check_prev_data) {
-#ifdef HIGHS_RUST
-  {
-    const highs_rs::MipData rsm = highs_rs::mipData(mipsolver);
-    highs_rs::highs_rs_mip_update_pdi(highs_rs::mipFns(), &rsm, from_lower_bound, to_lower_bound, from_upper_bound, to_upper_bound, check_bound_change, check_prev_data);
-    return;
-  }
-#else
   // Parameters to updatePrimalDualIntegral are lower and upper bounds
   // before/after a change
   //
@@ -3876,10 +3809,12 @@ void HighsMipSolverData::updatePrimalDualIntegral(const double from_lower_bound,
   pdi.prev_lb = to_lb;
   pdi.prev_ub = to_ub;
   pdi.prev_gap = to_gap;
-#endif  // HIGHS_RUST
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsPrimaDualIntegral::initialise() { this->value = -kHighsInf; }
+#endif
 
 void HighsTerminator::clear() {
   this->num_instance = 0;
@@ -3895,7 +3830,9 @@ void HighsTerminator::initialise(HighsInt num_instance_, HighsInt my_instance_,
   this->record = record_;
 }
 
+#ifndef HIGHS_RUST
 HighsInt HighsTerminator::concurrency() const { return this->num_instance; }
+#endif
 
 void HighsTerminator::terminate() {
   assert(this->record);
@@ -3912,6 +3849,7 @@ HighsModelStatus HighsTerminator::terminationStatus() const {
   return HighsModelStatus::kNotset;
 }
 
+#ifndef HIGHS_RUST
 void HighsTerminator::report(const HighsLogOptions log_options) const {
   highsLogUser(log_options, HighsLogType::kInfo, "\nTerminator:        ");
   for (HighsInt instance = 0; instance < this->num_instance; instance++)
@@ -3919,3 +3857,4 @@ void HighsTerminator::report(const HighsLogOptions log_options) const {
                  int(this->record[instance]));
   highsLogUser(log_options, HighsLogType::kInfo, "\n");
 }
+#endif

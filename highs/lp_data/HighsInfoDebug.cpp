@@ -182,7 +182,4 @@ HighsDebugStatus debugInfo(const HighsOptions& options, const HighsLp& lp,
                            const HighsModelStatus model_status) {
   return HighsDebugStatus::kNotChecked;
 }
-HighsDebugStatus debugNoInfo(const HighsInfo& info) {
-  return HighsDebugStatus::kNotChecked;
-}
 #endif

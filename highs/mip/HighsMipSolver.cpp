@@ -586,10 +586,6 @@ void HighsMipSolver::run() {
   highs_rs::highs_rs_mip_run(highs_rs::mipFns(), &m);
 }
 
-void HighsMipSolver::cleanupSolve() {
-  const highs_rs::MipData m = highs_rs::mipData(*this);
-  highs_rs::highs_rs_mip_cleanup_solve(highs_rs::mipFns(), &m);
-}
 #else
 void HighsMipSolver::run() {
   modelstatus_ = HighsModelStatus::kNotset;
@@ -1655,6 +1651,7 @@ void HighsMipSolver::cleanupSolve() {
 
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsMipSolver::solvingReport(const std::string& solutionstatus) const {
   std::array<char, 128> gapString =
       getGapString(gap_, primal_bound_, options_mip_);
@@ -1743,6 +1740,7 @@ void HighsMipSolver::solvingReport(const std::string& solutionstatus) const {
                  (long long unsigned)mipdata_->sepa_lp_iterations,
                  (long long unsigned)mipdata_->heuristic_lp_iterations);
 }
+#endif
 
 // Only called in Highs::runPresolve
 void HighsMipSolver::runMipPresolve(const HighsInt presolve_reduction_limit) {
@@ -1792,6 +1790,7 @@ void HighsMipSolver::callbackGetCutPool() const {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 std::array<char, 128> getGapString(const double gap_,
                                    const double primal_bound_,
                                    const HighsOptions* options_mip_) {
@@ -1826,6 +1825,7 @@ std::array<char, 128> getGapString(const double gap_,
 
   return gapString;
 }
+#endif
 
 bool HighsMipSolver::solutionFeasible(const HighsLp* lp,
                                       const std::vector<double>& col_value,
@@ -1905,11 +1905,13 @@ bool HighsMipSolver::solutionFeasible(const HighsLp* lp,
   return feasible;
 }
 
+#ifndef HIGHS_RUST
 std::vector<HighsModelStatus> HighsMipSolver::initialiseTerminatorRecord(
     HighsInt num_instance) const {
   std::vector<HighsModelStatus> record(num_instance, HighsModelStatus::kNotset);
   return record;
 }
+#endif
 
 void HighsMipSolver::initialiseTerminator(HighsInt num_instance_,
                                           HighsInt my_instance_,

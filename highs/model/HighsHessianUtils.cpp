@@ -646,11 +646,6 @@ HighsStatus assessHessianDimensions(const HighsOptions& options,
   return rsHessianCall(1, options, hessian);
 }
 
-void completeHessianDiagonal(const HighsOptions& options,
-                             HighsHessian& hessian) {
-  rsHessianCall(5, options, hessian);
-}
-
 bool okHessianDiagonal(const HighsOptions& options, HighsHessian& hessian,
                        const ObjSense sense) {
   const RsLog log = rsLog(options.log_options);
@@ -661,19 +656,6 @@ bool okHessianDiagonal(const HighsOptions& options, HighsHessian& hessian,
 HighsStatus extractTriangularHessian(const HighsOptions& options,
                                      HighsHessian& hessian) {
   return rsHessianCall(3, options, hessian);
-}
-
-void triangularToSquareHessian(const HighsHessian& hessian,
-                               vector<HighsInt>& start, vector<HighsInt>& index,
-                               vector<double>& value) {
-  RsVec<HighsInt> s = rsVec(start), i = rsVec(index);
-  RsVec<double> v = rsVec(value);
-  highs_rs_triangular_to_square_hessian(rsHessianView(hessian), &s, &i, &v);
-}
-
-HighsStatus normaliseHessian(const HighsOptions& options,
-                             HighsHessian& hessian) {
-  return rsHessianCall(4, options, hessian);
 }
 
 void completeHessian(const HighsInt full_dim, HighsHessian& hessian) {

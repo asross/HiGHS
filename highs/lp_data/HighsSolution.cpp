@@ -1059,6 +1059,7 @@ bool getComplementarityViolations(const HighsLp& lp,
 }
 #endif
 
+#ifndef HIGHS_RUST
 void lpNoBasisKktCheck(HighsModelStatus& model_status, HighsInfo& info,
                        const HighsLp& lp, const HighsSolution& solution,
                        const HighsOptions& options,
@@ -1066,6 +1067,7 @@ void lpNoBasisKktCheck(HighsModelStatus& model_status, HighsInfo& info,
   HighsBasis basis;
   lpKktCheck(model_status, info, lp, solution, basis, options, message);
 }
+#endif
 
 // For a basic solution of an LP that is re-solved often (as the MIP
 // solver's LP relaxation is), when only the absolute primal and dual
@@ -2104,6 +2106,7 @@ void resetModelStatusAndHighsInfo(HighsLpSolverObject& solver_object) {
 }
 #endif  // HIGHS_RUST: rust/src/lp_data/form_basis.rs
 
+#ifndef HIGHS_RUST
 void resetModelStatusAndHighsInfo(HighsModelStatus& model_status,
                                   HighsInfo& highs_info) {
   model_status = HighsModelStatus::kNotset;
@@ -2112,6 +2115,7 @@ void resetModelStatusAndHighsInfo(HighsModelStatus& model_status,
   highs_info.dual_solution_status = kSolutionStatusNone;
   highs_info.invalidateKkt();
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsSolutionRust.cpp, rust/src/lp_data/basis.rs)
@@ -2132,41 +2136,55 @@ bool isBasisConsistent(const HighsLp& lp, const HighsBasis& basis) {
 
 #endif
 
+#ifndef HIGHS_RUST
 bool isColPrimalSolutionRightSize(const HighsLp& lp,
                                   const HighsSolution& solution) {
   return solution.col_value.size() == static_cast<size_t>(lp.num_col_);
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool isRowPrimalSolutionRightSize(const HighsLp& lp,
                                   const HighsSolution& solution) {
   return solution.row_value.size() == static_cast<size_t>(lp.num_row_);
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool isPrimalSolutionRightSize(const HighsLp& lp,
                                const HighsSolution& solution) {
   return isColPrimalSolutionRightSize(lp, solution) &&
          isRowPrimalSolutionRightSize(lp, solution);
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool isColDualSolutionRightSize(const HighsLp& lp,
                                 const HighsSolution& solution) {
   return solution.col_dual.size() == static_cast<size_t>(lp.num_col_);
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool isRowDualSolutionRightSize(const HighsLp& lp,
                                 const HighsSolution& solution) {
   return solution.row_dual.size() == static_cast<size_t>(lp.num_row_);
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool isDualSolutionRightSize(const HighsLp& lp, const HighsSolution& solution) {
   return isColDualSolutionRightSize(lp, solution) &&
          isRowDualSolutionRightSize(lp, solution);
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool isSolutionRightSize(const HighsLp& lp, const HighsSolution& solution) {
   return isPrimalSolutionRightSize(lp, solution) &&
          isDualSolutionRightSize(lp, solution);
 }
+#endif
 
 bool isBasisRightSize(const HighsLp& lp, const HighsBasis& basis) {
   return basis.col_status.size() == static_cast<size_t>(lp.num_col_) &&

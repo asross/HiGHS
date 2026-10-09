@@ -328,6 +328,7 @@ void highsFprintfString(FILE* file, const HighsLogOptions& log_options_,
   }
 }
 
+#ifndef HIGHS_RUST
 std::string getFilenameExt(const std::string& filename) {
   std::string name = filename;
   std::size_t found = name.find_last_of(".");
@@ -338,6 +339,7 @@ std::string getFilenameExt(const std::string& filename) {
   }
   return name;
 }
+#endif
 
 void highsReportDevInfo(const HighsLogOptions* log_options,
                         const std::string& line) {
@@ -352,6 +354,7 @@ void highsOpenLogFile(HighsOptions& options, const std::string& log_file) {
   highsOpenLogFile(options.log_options, options.records, log_file);
 }
 
+#ifndef HIGHS_RUST
 void highsReportLogOptions(const HighsLogOptions& log_options_) {
   printf("\nHighs log options\n");
   if (log_options_.log_stream == NULL) {
@@ -366,6 +369,7 @@ void highsReportLogOptions(const HighsLogOptions& log_options_) {
   printf("   log_dev_level = %" HIGHSINT_FORMAT "\n\n",
          *log_options_.log_dev_level);
 }
+#endif
 
 std::string highsFormatToString(const char* format, ...) {
   va_list argptr;
@@ -414,6 +418,7 @@ const std::string highsInsertMdEscapes(const std::string& from_string) {
   return to_string;
 }
 
+#ifndef HIGHS_RUST
 const std::string highsInsertMdId(const std::string& from_string) {
   std::string to_string = "";
   const char* underscore = "_";
@@ -429,6 +434,7 @@ const std::string highsInsertMdId(const std::string& from_string) {
   }
   return to_string;
 }
+#endif
 
 void HighsLogOptions::clear() {
   this->log_stream = nullptr;

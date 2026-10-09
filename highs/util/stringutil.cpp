@@ -73,43 +73,58 @@ void tolower(std::string& str) {
                  [](unsigned char c) { return std::tolower(c); });
 }
 
+#ifndef HIGHS_RUST
 void toupper(std::string& str) {
   std::transform(str.begin(), str.end(), str.begin(),
                  [](unsigned char c) { return std::toupper(c); });
 }
+#endif
 
+#ifndef HIGHS_RUST
 std::string& ltrim(std::string& str, const std::string& chars) {
   str.erase(0, str.find_first_not_of(chars));
   return str;
 }
+#endif
 
+#ifndef HIGHS_RUST
 std::string& rtrim(std::string& str, const std::string& chars) {
   str.erase(str.find_last_not_of(chars) + 1);
   return str;
 }
+#endif
 
+#ifndef HIGHS_RUST
 std::string& trim(std::string& str, const std::string& chars) {
   return ltrim(rtrim(str, chars), chars);
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool is_empty(char c, const std::string& chars) {
   size_t pos = chars.find_first_of(c);
   if (pos == std::string::npos || pos == chars.size()) return false;
   return true;
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool is_empty(std::string& str, const std::string& chars) {
   size_t pos = str.find_first_not_of(chars);
   if (pos == std::string::npos || pos == str.size()) return true;
   return false;
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool is_end(std::string& str, size_t end, const std::string& chars) {
   size_t pos = str.find_first_not_of(chars, end);
   if (pos == std::string::npos || pos == str.size()) return true;
   return false;
 }
+#endif
 
+#ifndef HIGHS_RUST
 size_t first_word_end(std::string& str, size_t start) {
   const std::string chars = "\t\n\v\f\r ";
   size_t next_word_start = str.find_first_not_of(chars, start);
@@ -118,7 +133,9 @@ size_t first_word_end(std::string& str, size_t start) {
     return str.size();
   return next_word_end;
 }
+#endif
 
+#ifndef HIGHS_RUST
 std::string first_word(std::string& str, size_t start) {
   // If start is (at least) the length of str, then next_word_start is
   // negative, so there's no word, so return ""
@@ -129,3 +146,4 @@ std::string first_word(std::string& str, size_t start) {
   assert(next_word_start != std::string::npos);
   return str.substr(next_word_start, next_word_end - next_word_start);
 }
+#endif

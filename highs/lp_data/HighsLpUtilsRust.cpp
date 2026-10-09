@@ -181,37 +181,6 @@ bool lpDimensionsOk(const std::string& message, const HighsLp& lp,
   return highs_rs_lp_dimensions_ok(&log, message.data(), message.size(), &v);
 }
 
-HighsStatus assessCosts(const HighsOptions& options, const HighsInt ml_col_os,
-                        const HighsIndexCollection& index_collection,
-                        std::vector<double>& cost, bool& has_infinite_cost,
-                        const double infinite_cost) {
-  assert(ok(index_collection));
-  const RsLpOptions o = rsLpOptions(options);
-  const RsIndexCollection ic = rsIndexCollection(index_collection);
-  return HighsStatus(highs_rs_assess_costs(&o, ml_col_os, &ic, rsMut(cost),
-                                           &has_infinite_cost, infinite_cost));
-}
-
-HighsStatus assessBounds(const HighsOptions& options, const char* type,
-                         const HighsInt ml_ix_os,
-                         const HighsIndexCollection& index_collection,
-                         std::vector<double>& lower,
-                         std::vector<double>& upper,
-                         const double infinite_bound,
-                         const HighsVarType* integrality) {
-  assert(ok(index_collection));
-  const RsLpOptions o = rsLpOptions(options);
-  const RsIndexCollection ic = rsIndexCollection(index_collection);
-  // The integrality is indexed like lower and upper
-  RsMut<uint8_t> rs_integrality = {
-      reinterpret_cast<uint8_t*>(const_cast<HighsVarType*>(integrality)),
-      integrality ? lower.size() : 0};
-  const std::string kind(type);
-  return HighsStatus(highs_rs_assess_bounds(
-      &o, kind.data(), kind.size(), ml_ix_os, &ic, rsMut(lower), rsMut(upper),
-      infinite_bound, rs_integrality));
-}
-
 HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
   RsLp v = rsLp(lp);
   const RsLpOptions o = rsLpOptions(options);
@@ -244,19 +213,6 @@ HighsStatus assessMatrix(
       partitioned, rsMut(matrix_start), rsMut(matrix_p_end),
       rsMut(matrix_index), rsMut(matrix_value), small_matrix_value,
       large_matrix_value, sum_duplicates));
-}
-
-HighsStatus assessMatrixDimensions(const HighsLogOptions& log_options,
-                                   const HighsInt num_vec,
-                                   const bool partitioned,
-                                   const std::vector<HighsInt>& matrix_start,
-                                   const std::vector<HighsInt>& matrix_p_end,
-                                   const std::vector<HighsInt>& matrix_index,
-                                   const std::vector<double>& matrix_value) {
-  const RsLog log = rsLog(log_options);
-  return HighsStatus(highs_rs_assess_matrix_dimensions(
-      &log, num_vec, partitioned, rsMut(matrix_start), rsMut(matrix_p_end),
-      matrix_index.size(), matrix_value.size()));
 }
 
 extern "C" void highs_rs_report_presolve_reductions(const RsLog* log, bool on,
@@ -302,15 +258,6 @@ void highs_rs_calculate_col_duals_quad(RsMut<HighsInt> start,
 
 
 
-
-void getLpMatrixCoefficient(const HighsLp& lp, const HighsInt Xrow,
-                            const HighsInt Xcol, double* val) {
-  assert(0 <= Xrow && Xrow < lp.num_row_);
-  assert(0 <= Xcol && Xcol < lp.num_col_);
-  const HighsSparseMatrix& a = lp.a_matrix_;
-  *val = highs_rs_get_coefficient(rsMut(a.start_), rsMut(a.index_),
-                                  rsMut(a.value_), Xcol, Xrow);
-}
 
 HighsStatus calculateColDualsQuad(const HighsLp& lp, HighsSolution& solution) {
   const bool correct_size = int(solution.row_dual.size()) == lp.num_row_;

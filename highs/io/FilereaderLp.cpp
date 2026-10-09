@@ -413,6 +413,7 @@ FilereaderRetcode FilereaderLp::readModelFromFile(const HighsOptions& options,
 }
 #endif
 
+#ifndef HIGHS_RUST
 void FilereaderLp::writeToFile(FILE* file, const char* format, ...) {
   va_list argptr;
   va_start(argptr, format);
@@ -429,12 +430,16 @@ void FilereaderLp::writeToFile(FILE* file, const char* format, ...) {
     this->linelength += tokenlength;
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 void FilereaderLp::writeToFileLineEnd(FILE* file) {
   fprintf(file, "\n");
   this->linelength = 0;
 }
+#endif
 
+#ifndef HIGHS_RUST
 void FilereaderLp::writeToFileValue(FILE* file, const double value,
                                     const bool force_plus) {
   // As for writeModelAsMps
@@ -444,11 +449,15 @@ void FilereaderLp::writeToFileValue(FILE* file, const double value,
     this->writeToFile(file, " %.15g", value);
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 void FilereaderLp::writeToFileVar(FILE* file, const std::string var_name) {
   this->writeToFile(file, " %s", var_name.c_str());
 }
+#endif
 
+#ifndef HIGHS_RUST
 void FilereaderLp::writeToFileMatrixRow(FILE* file, const HighsInt iRow,
                                         const HighsSparseMatrix& ar_matrix,
                                         const std::vector<string>& col_names) {
@@ -462,6 +471,7 @@ void FilereaderLp::writeToFileMatrixRow(FILE* file, const HighsInt iRow,
     this->writeToFileVar(file, col_names[iCol]);
   }
 }
+#endif
 
 #ifndef HIGHS_RUST
 HighsStatus FilereaderLp::writeModelToFile(const HighsOptions& options,

@@ -110,22 +110,6 @@ void getPrimalDualGlpsolErrors(const HighsOptions& options, const HighsLp& lp,
   highs_rs_get_primal_dual_glpsol_errors(&o, &v, &s, &primal_dual_errors);
 }
 
-bool getComplementarityViolations(const HighsLp& lp,
-                                  const HighsSolution& solution,
-                                  const double optimality_tolerance,
-                                  HighsInt& num_complementarity_violation,
-                                  double& max_complementarity_violation) {
-  num_complementarity_violation = kHighsIllegalComplementarityCount;
-  max_complementarity_violation = kHighsIllegalComplementarityViolation;
-  if (!solution.dual_valid) return false;
-  const RsLp v = rsLp(lp);
-  const RsSolution s = rsSolution(solution);
-  highs_rs_get_complementarity_violations(&v, &s, optimality_tolerance,
-                                          &num_complementarity_violation,
-                                          &max_complementarity_violation);
-  return true;
-}
-
 bool computeDualObjectiveValue(const double* gradient, const HighsLp& lp,
                                const HighsSolution& solution,
                                double& dual_objective_value) {
@@ -244,27 +228,6 @@ static RsSolutionOut rsSolutionOut(HighsSolution& solution,
   out.row_status =
       basis ? rsStatus(basis->row_status) : RsMut<uint8_t>{nullptr, 0};
   return out;
-}
-
-HighsStatus ipxSolutionToHighsSolution(
-    const HighsOptions& options, const HighsLp& lp,
-    const std::vector<double>& rhs, const std::vector<char>& constraint_type,
-    const HighsInt ipx_num_col, const HighsInt ipx_num_row,
-    const std::vector<double>& ipx_x, const std::vector<double>& ipx_slack_vars,
-    const std::vector<double>& ipx_y, const std::vector<double>& ipx_zl,
-    const std::vector<double>& ipx_zu, HighsSolution& highs_solution) {
-  highs_solution.col_value.resize(lp.num_col_);
-  highs_solution.row_value.resize(lp.num_row_);
-  highs_solution.col_dual.resize(lp.num_col_);
-  highs_solution.row_dual.resize(lp.num_row_);
-  const RsLp v = rsLp(lp);
-  const RsSolutionOut out = rsSolutionOut(highs_solution, nullptr);
-  highs_rs_ipx_solution_to_highs_solution(
-      &v, rsMut(rhs), ipx_num_row, rsMut(ipx_x), rsMut(ipx_slack_vars),
-      rsMut(ipx_y), rsMut(ipx_zl), rsMut(ipx_zu), &out);
-  highs_solution.value_valid = true;
-  highs_solution.dual_valid = true;
-  return HighsStatus::kOk;
 }
 
 HighsStatus ipxBasicSolutionToHighsBasicSolution(

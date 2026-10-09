@@ -20,13 +20,16 @@ void getUserParamsFromOptions(const HighsOptions& options, HighsTimer& timer,
 void analysePdlpSolution(const HighsOptions& options, const HighsLp& lp,
                          const HighsSolution& highs_solution);
 
+#ifndef HIGHS_RUST
 HighsStatus solveLpCupdlp(HighsLpSolverObject& solver_object) {
   return solveLpCupdlp(solver_object.options_, solver_object.timer_,
                        solver_object.lp_, solver_object.basis_,
                        solver_object.solution_, solver_object.model_status_,
                        solver_object.highs_info_, solver_object.callback_);
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus solveLpCupdlp(const HighsOptions& options, HighsTimer& timer,
                           const HighsLp& lp, HighsBasis& highs_basis,
                           HighsSolution& highs_solution,
@@ -276,6 +279,7 @@ HighsStatus solveLpCupdlp(const HighsOptions& options, HighsTimer& timer,
 #endif
   return retcode == RETCODE_OK ? HighsStatus::kOk : HighsStatus::kError;
 }
+#endif
 
 int formulateLP_highs(const cupdlp_int local_log_level, const HighsLp& lp,
                       double** cost, int* nCols, int* nRows, int* nnz,

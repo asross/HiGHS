@@ -62,33 +62,6 @@ void maxheapsort(HighsInt* heap_v, HighsInt* heap_i, HighsInt n) {
 void maxheapsort(double* heap_v, HighsInt* heap_i, HighsInt n) {
   highs_rs_heap_double(heap_v, heap_i, 0, n, 0);
 }
-void buildMaxheap(HighsInt* heap_v, HighsInt n) {
-  highs_rs_heap_int(heap_v, nullptr, 0, n, 1);
-}
-void buildMaxheap(HighsInt* heap_v, HighsInt* heap_i, HighsInt n) {
-  highs_rs_heap_int(heap_v, heap_i, 0, n, 1);
-}
-void buildMaxheap(double* heap_v, HighsInt* heap_i, HighsInt n) {
-  highs_rs_heap_double(heap_v, heap_i, 0, n, 1);
-}
-void maxHeapsort(HighsInt* heap_v, HighsInt n) {
-  highs_rs_heap_int(heap_v, nullptr, 0, n, 2);
-}
-void maxHeapsort(HighsInt* heap_v, HighsInt* heap_i, HighsInt n) {
-  highs_rs_heap_int(heap_v, heap_i, 0, n, 2);
-}
-void maxHeapsort(double* heap_v, HighsInt* heap_i, HighsInt n) {
-  highs_rs_heap_double(heap_v, heap_i, 0, n, 2);
-}
-void maxHeapify(HighsInt* heap_v, HighsInt i, HighsInt n) {
-  highs_rs_heap_int(heap_v, nullptr, i, n, 3);
-}
-void maxHeapify(HighsInt* heap_v, HighsInt* heap_i, HighsInt i, HighsInt n) {
-  highs_rs_heap_int(heap_v, heap_i, i, n, 3);
-}
-void maxHeapify(double* heap_v, HighsInt* heap_i, HighsInt i, HighsInt n) {
-  highs_rs_heap_double(heap_v, heap_i, i, n, 3);
-}
 
 bool increasingSetOk(const vector<HighsInt>& set,
                      const HighsInt set_entry_lower,

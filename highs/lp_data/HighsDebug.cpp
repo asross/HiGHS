@@ -13,6 +13,7 @@
 #include <algorithm>  // For std::max
 #include <cassert>    // For std::max
 
+#ifndef HIGHS_RUST
 HighsStatus debugDebugToHighsStatus(const HighsDebugStatus debug_status) {
   switch (debug_status) {
     case HighsDebugStatus::kNotChecked:
@@ -30,13 +31,17 @@ HighsStatus debugDebugToHighsStatus(const HighsDebugStatus debug_status) {
       return HighsStatus::kOk;
   }
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsDebugStatus debugWorseStatus(const HighsDebugStatus status0,
                                   const HighsDebugStatus status1) {
   return static_cast<HighsDebugStatus>(
       std::max((HighsInt)status0, (HighsInt)status1));
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool debugVectorRightSize(const std::vector<double>& v,
                           const HighsInt right_size) {
   const HighsInt v_size = v.size();
@@ -44,7 +49,9 @@ bool debugVectorRightSize(const std::vector<double>& v,
   assert(is_right_size);
   return is_right_size;
 }
+#endif
 
+#ifndef HIGHS_RUST
 bool debugVectorRightSize(const std::vector<HighsInt>& v,
                           const HighsInt right_size) {
   const HighsInt v_size = v.size();
@@ -52,3 +59,4 @@ bool debugVectorRightSize(const std::vector<HighsInt>& v,
   assert(is_right_size);
   return is_right_size;
 }
+#endif

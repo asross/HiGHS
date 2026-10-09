@@ -256,54 +256,11 @@ int highs_rs_write_info(void* file,
 
 // HighsOptions.cpp
 
-bool optionOffChooseOnOk(const HighsLogOptions& report_log_options,
-                         const string& name, const string& value) {
-  const RsOptionHost host = rsOptionHost(report_log_options);
-  return highs_rs_option_value_ok(&host, 0, name.data(), name.size(),
-                                  value.data(), value.size());
-}
-
-bool optionOffOnOk(const HighsLogOptions& report_log_options,
-                   const string& name, const string& value) {
-  const RsOptionHost host = rsOptionHost(report_log_options);
-  return highs_rs_option_value_ok(&host, 1, name.data(), name.size(),
-                                  value.data(), value.size());
-}
-
 static bool valueOk(const HighsLogOptions& report_log_options, int which,
                     const string& value) {
   const RsOptionHost host = rsOptionHost(report_log_options);
   return highs_rs_option_value_ok(&host, which, nullptr, 0, value.data(),
                                   value.size());
-}
-
-bool optionSolverOk(const HighsLogOptions& report_log_options,
-                    const string& value) {
-  return valueOk(report_log_options, 2, value);
-}
-bool optionMipLpSolverOk(const HighsLogOptions& report_log_options,
-                         const string& value) {
-  return valueOk(report_log_options, 3, value);
-}
-bool optionMipIpmSolverOk(const HighsLogOptions& report_log_options,
-                          const string& value) {
-  return valueOk(report_log_options, 4, value);
-}
-bool optionHipoParallelTypeOk(const HighsLogOptions& report_log_options,
-                              const string& value) {
-  return valueOk(report_log_options, 5, value);
-}
-bool optionHipoSystemOk(const HighsLogOptions& report_log_options,
-                        const string& value) {
-  return valueOk(report_log_options, 6, value);
-}
-bool optionHipoOrderingOk(const HighsLogOptions& report_log_options,
-                          const string& value) {
-  return valueOk(report_log_options, 7, value);
-}
-
-bool boolFromString(std::string value, bool& bool_value) {
-  return highs_rs_bool_from_string(value.data(), value.size(), &bool_value);
 }
 
 OptionStatus getOptionIndex(const HighsLogOptions& report_log_options,
@@ -322,45 +279,6 @@ OptionStatus checkOptions(const HighsLogOptions& report_log_options,
   const auto recs = rsOptionRecords(option_records);
   return OptionStatus(
       highs_rs_check_options(&log, recs.data(), recs.size()));
-}
-
-OptionStatus checkOption(const HighsLogOptions& report_log_options,
-                         const OptionRecordInt& option) {
-  const RsLog log = rsLog(report_log_options);
-  const RsOptionRecord rec = rsOptionRecord(option);
-  return OptionStatus(highs_rs_check_option(&log, &rec));
-}
-
-OptionStatus checkOption(const HighsLogOptions& report_log_options,
-                         const OptionRecordDouble& option) {
-  const RsLog log = rsLog(report_log_options);
-  const RsOptionRecord rec = rsOptionRecord(option);
-  return OptionStatus(highs_rs_check_option(&log, &rec));
-}
-
-OptionStatus checkOptionValue(const HighsLogOptions& report_log_options,
-                              OptionRecordInt& option, const HighsInt value) {
-  const RsLog log = rsLog(report_log_options);
-  const RsOptionRecord rec = rsOptionRecord(option);
-  return OptionStatus(
-      highs_rs_check_option_value_number(&log, &rec, value, 0));
-}
-
-OptionStatus checkOptionValue(const HighsLogOptions& report_log_options,
-                              OptionRecordDouble& option, const double value) {
-  const RsLog log = rsLog(report_log_options);
-  const RsOptionRecord rec = rsOptionRecord(option);
-  return OptionStatus(
-      highs_rs_check_option_value_number(&log, &rec, 0, value));
-}
-
-OptionStatus checkOptionValue(const HighsLogOptions& report_log_options,
-                              OptionRecordString& option,
-                              const std::string& value) {
-  const RsOptionHost host = rsOptionHost(report_log_options);
-  const RsOptionRecord rec = rsOptionRecord(option);
-  return OptionStatus(highs_rs_check_option_value_string(
-      &host, &rec, value.data(), value.size()));
 }
 
 static OptionStatus setByName(const HighsLogOptions& report_log_options,
@@ -449,11 +367,6 @@ OptionStatus setLocalOptionValue(const HighsLogOptions& report_log_options,
                                  OptionRecordString& option,
                                  const std::string& value) {
   return setRecord(report_log_options, option, false, 0, 0, &value);
-}
-
-void possibleLowerCaseOptionValue(const std::string& name, std::string& value) {
-  highs_rs_possible_lower_case(name.data(), name.size(), &value[0],
-                               value.size());
 }
 
 OptionStatus passLocalOptions(const HighsLogOptions& report_log_options,
@@ -567,48 +480,6 @@ static void reportOne(FILE* file, const HighsLogOptions& log_options,
          file_type);
 }
 
-void reportOption(FILE* file, const HighsLogOptions& log_options,
-                  const OptionRecordBool& option,
-                  const bool report_only_deviations,
-                  const HighsFileType file_type) {
-  reportOne(file, log_options, option, report_only_deviations, file_type);
-}
-void reportOption(FILE* file, const HighsLogOptions& log_options,
-                  const OptionRecordInt& option,
-                  const bool report_only_deviations,
-                  const HighsFileType file_type) {
-  reportOne(file, log_options, option, report_only_deviations, file_type);
-}
-void reportOption(FILE* file, const HighsLogOptions& log_options,
-                  const OptionRecordDouble& option,
-                  const bool report_only_deviations,
-                  const HighsFileType file_type) {
-  reportOne(file, log_options, option, report_only_deviations, file_type);
-}
-void reportOption(FILE* file, const HighsLogOptions& log_options,
-                  const OptionRecordString& option,
-                  const bool report_only_deviations,
-                  const HighsFileType file_type) {
-  reportOne(file, log_options, option, report_only_deviations, file_type);
-}
-
-void warnSolverInvalid(const HighsOptions& options,
-                       const std::string& problem_type) {
-  const RsLog log = rsLog(options.log_options);
-  highs_rs_warn_solver_invalid(&log, options.solver.data(),
-                               options.solver.size(), problem_type.data(),
-                               problem_type.size());
-}
-bool solverValidForLp(const std::string& solver) {
-  return highs_rs_solver_valid(solver.data(), solver.size(), 0);
-}
-bool solverValidForMip(const std::string& solver) {
-  return highs_rs_solver_valid(solver.data(), solver.size(), 1);
-}
-bool solverValidForQp(const std::string& solver) {
-  return highs_rs_solver_valid(solver.data(), solver.size(), 2);
-}
-
 // LoadOptions.cpp
 
 HighsLoadOptionsStatus loadOptionsFromFile(
@@ -710,30 +581,10 @@ HighsStatus writeInfoToFile(FILE* file, const bool valid,
                                          int(file_type)));
 }
 
-void reportInfo(FILE* file, const std::vector<InfoRecord*>& info_records,
-                const HighsFileType file_type) {
-  const auto recs = rsInfoRecords(info_records);
-  highs_rs_write_info(file, writeFile, false, true, recs.data(), recs.size(),
-                      int(file_type));
-}
-
 static void reportInfoRecord(FILE* file, const InfoRecord& info,
                              const HighsFileType file_type) {
   const RsInfoRecord rec = rsInfoRecord(info);
   highs_rs_write_info(file, writeFile, false, true, &rec, 1, int(file_type));
-}
-
-void reportInfo(FILE* file, const InfoRecordInt64& info,
-                const HighsFileType file_type) {
-  reportInfoRecord(file, info, file_type);
-}
-void reportInfo(FILE* file, const InfoRecordInt& info,
-                const HighsFileType file_type) {
-  reportInfoRecord(file, info, file_type);
-}
-void reportInfo(FILE* file, const InfoRecordDouble& info,
-                const HighsFileType file_type) {
-  reportInfoRecord(file, info, file_type);
 }
 
 #endif
