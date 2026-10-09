@@ -10,6 +10,38 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-09, the MIP's LP solves on Rust LP solvers (LpHandle)
+
+`perf.py <rust-port HIGHS_RUST highs (dac397718c)> <this build's highs>
+--reps 3` (quiet M1): the LP relaxations, the IPX race, the IPM basis, the
+analytic centre and the repair LP run on `LpHandle`s (no C++ `Highs`
+inside the MIP: no copy of the solution, basis and info into and out of
+the Highs object per LP solve, no C++ option or HEkk shell steps), and the
+Highs object's option templates are built by Rust from a typed copy. All
+64 cases same path; no measurable change.
+
+| Group | Geomean before -> after |
+|---|---|
+| MIP | 1.001 |
+| LP dual simplex | 1.001 |
+| LP primal simplex | 1.004 |
+| IPM (IPX) | 0.999 |
+| PDLP | 0.999 |
+| Read model (time_limit 0) | 1.002 |
+| **All** | **1.001** |
+
+Against the pure C++ build (same session), every case same path:
+
+| Group | Geomean Rust / C++ |
+|---|---|
+| MIP | 0.859 |
+| LP dual simplex | 0.752 |
+| LP primal simplex | 0.938 |
+| IPM (IPX) | 0.929 |
+| PDLP | 0.964 |
+| Read model (time_limit 0) | 0.384 |
+| **All** | **0.776** |
+
 ## 2026-10-09, the solved LP, its run and LP presolve on Rust data
 
 `perf.py <rust-port HIGHS_RUST highs (811de0eb90)> <this build's highs>
