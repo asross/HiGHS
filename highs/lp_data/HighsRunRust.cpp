@@ -213,7 +213,6 @@ enum class RunOp {
   kSimplexShell,
   kSetInterrupt,
   kPresolveOptions,
-  kDependentEquations,
   kAssessSmallValues,
   kLpOptions,
 };

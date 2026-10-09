@@ -470,9 +470,6 @@ pub enum Op {
     /// The LP presolve's option values into p (lp_presolve.rs:
     /// PresolveOptions)
     PresolveOptions,
-    /// The factorization of the presolve's dependent equations (p:
-    /// lp_presolve.rs DependentEquations)
-    DependentEquations,
     /// assessSmallValues of the matrix values in p (an RsMut)
     AssessSmallValues,
     /// The CLpOptions into p

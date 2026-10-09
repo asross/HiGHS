@@ -387,7 +387,6 @@ pub struct LpHandle {
     user_basis: Option<Basis>,
     user_model: Option<Lp>,
     /// The variables with no pivot of the presolve's dependent equations
-    dependent_ints: Vec<i32>,
     /// A C++ Highs object's engine: its log, clock and callbacks
     host: Option<CHost>,
     /// A Highs object's run changed the model's matrix (the undualized
@@ -448,7 +447,6 @@ impl LpHandle {
             task_interrupted: false,
             user_basis: None,
             user_model: None,
-            dependent_ints: Vec::new(),
             host: None,
             model_matrix_back: false,
         });
@@ -1662,14 +1660,6 @@ impl LpHandle {
             };
             // SAFETY: the run's PresolveOptions
             unsafe { (p as *mut PresolveOptions).write(o) };
-            return 0;
-        }
-        if is!(DependentEquations) {
-            let mut ints = std::mem::take(&mut self.dependent_ints);
-            let me = &*self;
-            // SAFETY: the run's DependentEquations
-            unsafe { super::lp_presolve::dependent_equations(p, &mut ints, || me.clock_read()) };
-            self.dependent_ints = ints;
             return 0;
         }
         if is!(AssessSmallValues) {

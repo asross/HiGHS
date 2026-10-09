@@ -81,18 +81,6 @@ pub struct Host {
     /// transformable columns to the postsolve stack
     pub flush: extern "C" fn(Ctx, *const u8, usize, *const u8, *const usize, usize, *const i32, usize),
     pub shrink: extern "C" fn(Ctx, *const i32, usize, *const i32, usize),
-    pub dependent_equations: extern "C" fn(
-        Ctx,
-        usize,
-        i32,
-        *const i32,
-        *const i32,
-        *const f64,
-        usize,
-        f64,
-        *mut f64,
-        *mut CSlice<i32>,
-    ) -> i32,
     pub profiling: extern "C" fn(Ctx, bool, i32),
     pub probing_prepare: extern "C" fn(Ctx, i32, *mut bool) -> bool,
     pub mip_env: extern "C" fn(Ctx, *mut MipEnv),
@@ -164,7 +152,10 @@ impl Host {
     pub(crate) fn shrink(&self, new_col: &[i32], new_row: &[i32]) {
         (self.shrink)(self.ctx, new_col.as_ptr(), new_col.len(), new_row.as_ptr(), new_row.len());
     }
-    /// (build return, time taken, var_with_no_pivot)
+    /// The factorization of the dependent equations' columns
+    /// (removeDependentEquations' HFactor: setup with the default pivot
+    /// threshold and tolerance, the time limit, build), timed by the
+    /// run clock: (build return, time taken, var_with_no_pivot)
     pub(crate) fn dependent_equations(
         &self,
         num_col: usize,
@@ -174,21 +165,23 @@ impl Host {
         value: &[f64],
         time_limit: f64,
     ) -> (i32, f64, Vec<i32>) {
-        let mut time_taken = 0.0;
-        let mut v = CSlice::empty();
-        let r = (self.dependent_equations)(
-            self.ctx,
-            num_col,
-            num_row,
-            start.as_ptr(),
-            index.as_ptr(),
-            value.as_ptr(),
-            value.len(),
-            time_limit,
-            &mut time_taken,
-            &mut v,
-        );
-        (r, time_taken, v.to_vec())
+        use crate::factor::{AMatrix, HFactor};
+        if num_col == 0 {
+            return (0, 0.0, Vec::new());
+        }
+        let n = num_col as i32;
+        let a = AMatrix { num_col: n, start, index, value };
+        let mut factor = HFactor::default();
+        // kUpdateMethodFt
+        factor.setup(n, num_row, n, start, 1);
+        let mut basic_index: Vec<i32> = (0..n).collect();
+        // HFactor::setTimeLimit
+        let time_limit = if time_limit < 0.0 { f64::INFINITY } else { time_limit };
+        let mut time_taken = -self.timer_read();
+        // kDefaultPivotThreshold, kDefaultPivotTolerance
+        let r = factor.build_with_refactor_info(0.1, 1e-10, time_limit, &a, &mut basic_index);
+        time_taken += self.timer_read();
+        (r, time_taken, factor.var_with_no_pivot)
     }
     pub(crate) fn profiling(&self, start: bool, clock: i32) {
         (self.profiling)(self.ctx, start, clock)

@@ -124,22 +124,6 @@ pub(crate) struct PresolveOptions {
     pub(crate) reduction_limit: i32,
 }
 
-/// The arguments of the dependent equations' factorization
-/// (HighsRunRust.cpp: kDependentEquations)
-#[repr(C)]
-pub(crate) struct DependentEquations {
-    num_col: usize,
-    num_row: i32,
-    start: *const i32,
-    index: *const i32,
-    value: *const f64,
-    nnz: usize,
-    time_limit: f64,
-    time_taken: f64,
-    var_with_no_pivot: CSlice<i32>,
-    build_return: i32,
-}
-
 fn mode<'a>(ctx: *mut c_void) -> &'a LpMode<'a> {
     // SAFETY: the host's context is the run
     unsafe { &*(ctx as *const LpMode) }
@@ -261,73 +245,6 @@ extern "C" fn h_shrink(ctx: *mut c_void, new_col: *const i32, nc: usize, new_row
     let lp = &mut d.reduced.g;
     lp.a.num_col = lp.num_col;
     lp.a.num_row = lp.num_row;
-}
-
-#[allow(clippy::too_many_arguments)]
-extern "C" fn h_dependent_equations(
-    ctx: *mut c_void,
-    num_col: usize,
-    num_row: i32,
-    start: *const i32,
-    index: *const i32,
-    value: *const f64,
-    nnz: usize,
-    time_limit: f64,
-    time_taken: *mut f64,
-    out: *mut CSlice<i32>,
-) -> i32 {
-    let mut d = DependentEquations {
-        num_col,
-        num_row,
-        start,
-        index,
-        value,
-        nnz,
-        time_limit,
-        time_taken: 0.0,
-        var_with_no_pivot: CSlice { ptr: std::ptr::null(), len: 0 },
-        build_return: 0,
-    };
-    mode(ctx).fwd(Op::DependentEquations, 0, &mut d as *mut DependentEquations as *mut c_void, b"");
-    // SAFETY: the presolve's outputs
-    unsafe {
-        *time_taken = d.time_taken;
-        *out = d.var_with_no_pivot;
-    }
-    d.build_return
-}
-
-/// rsDependentEquations on Rust data: the factorization of the dependent
-/// equations' columns (HFactor::setup with the default pivot threshold
-/// and tolerance, the time limit, build), timed by `read` (the run clock);
-/// the variables with no pivot go to `ints`, which `p` then views
-///
-/// # Safety
-/// `p` a DependentEquations whose arrays are valid
-pub(crate) unsafe fn dependent_equations(p: *mut c_void, ints: &mut Vec<i32>, read: impl Fn() -> f64) {
-    use crate::factor::{AMatrix, HFactor};
-    let d = &mut *(p as *mut DependentEquations);
-    let num_col = d.num_col as i32;
-    ints.clear();
-    if num_col > 0 {
-        let start = sl(d.start, d.num_col + 1);
-        let a = AMatrix { num_col, start, index: sl(d.index, d.nnz), value: sl(d.value, d.nnz) };
-        let mut factor = HFactor::default();
-        // kUpdateMethodFt
-        factor.setup(num_col, d.num_row, num_col, start, 1);
-        let mut basic_index: Vec<i32> = (0..num_col).collect();
-        // HFactor::setTimeLimit
-        let time_limit = if d.time_limit < 0.0 { f64::INFINITY } else { d.time_limit };
-        d.time_taken = -read();
-        // kDefaultPivotThreshold, kDefaultPivotTolerance
-        d.build_return = factor.build_with_refactor_info(0.1, 1e-10, time_limit, &a, &mut basic_index);
-        d.time_taken += read();
-        ints.extend_from_slice(&factor.var_with_no_pivot);
-    } else {
-        d.time_taken = 0.0;
-        d.build_return = 0;
-    }
-    d.var_with_no_pivot = CSlice { ptr: ints.as_ptr(), len: ints.len() };
 }
 
 // The MIP callbacks: never called for an LP
@@ -507,7 +424,6 @@ impl LpMode<'_> {
             set_matrix: h_set_matrix,
             flush: h_flush,
             shrink: h_shrink,
-            dependent_equations: h_dependent_equations,
             profiling: h_profiling,
             probing_prepare: h_probing_prepare,
             mip_env: h_mip_env,

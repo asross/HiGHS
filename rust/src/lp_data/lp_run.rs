@@ -249,7 +249,7 @@ const ABORT: i64 = i64::MIN;
 /// restores), and the model (the handle's copy of the Highs object's LP,
 /// whose scale factors the simplex sets)
 fn is_handle_step(op: i32, arg: i64) -> bool {
-    const STEPS: [Op; 19] = [
+    const STEPS: [Op; 18] = [
         Op::SetEkkLpName,
         Op::EkkClear,
         Op::EkkInvalidate,
@@ -265,7 +265,6 @@ fn is_handle_step(op: i32, arg: i64) -> bool {
         Op::SimplexTemplate,
         Op::SimplexShell,
         Op::PresolveOptions,
-        Op::DependentEquations,
         Op::LpOptions,
         Op::EkkFactorCompatible,
         Op::RetainedEkkDataOk,

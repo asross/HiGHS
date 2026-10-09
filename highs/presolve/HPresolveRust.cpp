@@ -11,7 +11,7 @@
  * stack's index maps to Rust, which presolves and writes the model back.
  * The callbacks below are what the Rust calls in C++: logging, the timer,
  * the HighsLp and postsolve stack
- * updates, the dependent equations' HFactor, and the parts of the MIP solver
+ * updates, and the parts of the MIP solver
  * that are C++: the setup of the domain and clique table for probing,
  * HighsImplications::runProbing's C++ glue and its lifting opportunities,
  * the cut pool and the views of the domain and clique table the Rust
@@ -33,39 +33,12 @@
 #include "mip/HighsObjectiveFunction.h"
 #include "mip/MipTimer.h"
 #include "presolve/HighsPostsolveStack.h"
-#include "util/HFactor.h"
 
 static_assert(sizeof(HighsInt) == 4, "the Rust port uses 32-bit HighsInt");
 static_assert(sizeof(HighsVarType) == 1, "integrality is read as bytes");
 static_assert(sizeof(HighsSubstitution) == 24, "HighsSubstitution layout");
 
 namespace presolve {
-
-// The factorization of the dependent equations (HPresolve's
-// removeDependentEquations): the build return, its time, the variables
-// with no pivot in `ints`
-HighsInt rsDependentEquations(HighsTimer& timer, std::vector<HighsInt>& ints,
-                              size_t num_col, HighsInt num_row,
-                              const HighsInt* start, const HighsInt* index,
-                              const double* value, size_t nnz,
-                              double time_limit, double* time_taken) {
-  HighsSparseMatrix matrix;
-  matrix.num_col_ = num_col;
-  matrix.num_row_ = num_row;
-  matrix.start_.assign(start, start + num_col + 1);
-  matrix.index_.assign(index, index + nnz);
-  matrix.value_.assign(value, value + nnz);
-  std::vector<HighsInt> colSet(matrix.num_col_);
-  std::iota(colSet.begin(), colSet.end(), 0);
-  HFactor factor;
-  factor.setup(matrix, colSet);
-  factor.setTimeLimit(time_limit);
-  *time_taken = -timer.read();
-  HighsInt build_return = factor.build();
-  *time_taken += timer.read();
-  ints = factor.var_with_no_pivot;
-  return build_return;
-}
 
 namespace {
 
@@ -190,9 +163,6 @@ struct RsHost {
   void (*flush)(Cb, const char*, size_t, const uint8_t*, const size_t*, size_t,
                 const HighsInt*, size_t);
   void (*shrink)(Cb, const HighsInt*, size_t, const HighsInt*, size_t);
-  HighsInt (*dependent_equations)(Cb, size_t, HighsInt, const HighsInt*,
-                                  const HighsInt*, const double*, size_t,
-                                  double, double*, RsSlice<HighsInt>*);
   void (*profiling)(Cb, bool, HighsInt);
   bool (*probing_prepare)(Cb, HighsInt, bool*);
   void (*mip_env)(Cb, RsMipEnv*);
@@ -307,19 +277,6 @@ RsOptions rsOptions(const HighsOptions& options) {
   RsOptions o;
   rsOptionsTemplate(options, 4, &o);
   return o;
-}
-
-HighsInt cbDependentEquations(Cb c, size_t num_col, HighsInt num_row,
-                              const HighsInt* start, const HighsInt* index,
-                              const double* value, size_t nnz,
-                              double time_limit, double* time_taken,
-                              RsSlice<HighsInt>* var_with_no_pivot) {
-  Ctx& x = C(c);
-  const HighsInt build_return =
-      rsDependentEquations(*x.timer, x.ints, num_col, num_row, start, index,
-                           value, nnz, time_limit, time_taken);
-  *var_with_no_pivot = {x.ints.data(), x.ints.size()};
-  return build_return;
 }
 
 void cbProfiling(Cb c, bool start, HighsInt clock) {
@@ -509,7 +466,6 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
               cbSetMatrix,
               cbFlush,
               cbShrink,
-              cbDependentEquations,
               cbProfiling,
               cbProbingPrepare,
               cbMipEnv,
