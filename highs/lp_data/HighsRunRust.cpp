@@ -1022,7 +1022,7 @@ struct HighsRunRust {
         // the MIP solver is Rust's (rust/src/mip/host)
         h.profiling_->start(kSubSolverMip);
         mip_solver.reset(new HighsMipRun(h.callback_, options,
-                                         has_semi_variables ? mip_lp : lp,
+                                         has_semi_variables ? mip_lp : lpR,
                                          h.solution_, h.profiling_));
         h.profiling_->stop(kSubSolverMip);
         HighsMipRun& solver = *mip_solver;
