@@ -7,15 +7,13 @@
 //! that new work wakes, and the leapfrogging sync of stolen tasks.
 //!
 //! The memory orderings, the spin and sleep thresholds and the random
-//! victim choice are the C++'s. The C++ keeps its header API (spawn, sync,
-//! TaskGroup, for_each are templates that place the callable in a task
-//! slot): a task slot has the C++ HighsTask layout (56 bytes of callable,
-//! then the stealer word), and a stolen task is run through the function
-//! given at initialization (`RunFn`, the C++ calls the callable and catches
-//! HighsTask::Interrupt, returning true then). Where the C++ throws
-//! HighsTask::Interrupt from the scheduler (checkInterrupt, a sync whose
-//! leapfrogging ran a cancelled task), the Rust functions return true and
-//! the C++ header throws.
+//! victim choice are the C++'s. A task slot has the C++ HighsTask layout
+//! (56 bytes of callable, then the stealer word); the callable is a Rust
+//! closure (`spawn_on`, `TaskGroup`: the C++ spawn, sync and TaskGroup
+//! templates). Where the C++ throws HighsTask::Interrupt from the scheduler
+//! (checkInterrupt, a sync whose leapfrogging ran a cancelled task), the
+//! Rust functions return true; the C++ left (the IPX's interrupt check)
+//! asks for the thread id, the number of workers and the interrupt check.
 //!
 //! Results never depend on the scheduling: the tasks of the solvers write
 //! disjoint data or are reduced in a fixed order.
@@ -56,14 +54,9 @@ const FINISHED_FLAG: usize = 1;
 const CANCEL_FLAG: usize = 2;
 const PTR_MASK: usize = !(FINISHED_FLAG | CANCEL_FLAG);
 
-/// Runs a stolen task's callable; true if it was interrupted
-/// (HighsTask::Interrupt)
-pub type RunFn = unsafe extern "C" fn(*mut Task) -> bool;
-
-static RUN_FN: AtomicUsize = AtomicUsize::new(0);
-
-/// A task slot (HighsTask): the callable, placed by the C++, and the
-/// stealer word (the stealing deque, with the finished and cancel flags)
+/// A task slot (HighsTask): the callable (a Rust closure, `spawn_on`) and
+/// the stealer word (the stealing deque, with the finished and cancel
+/// flags)
 #[repr(C, align(64))]
 pub struct Task {
     data: UnsafeCell<[u64; 7]>,
@@ -71,24 +64,18 @@ pub struct Task {
 }
 
 impl Task {
+    /// Runs the task's closure; true if it was interrupted (a Rust task
+    /// returns early instead)
     fn call(&self) -> bool {
         // SAFETY: the slot was filled by its owner before it was published
         let d = unsafe { &*self.data.get() };
-        if d[0] == RUST_TASK {
-            // SAFETY: a Rust task (spawn): its runner and closure
-            unsafe {
-                let f: unsafe fn(*const u64) = std::mem::transmute::<usize, unsafe fn(*const u64)>(d[1] as usize);
-                f(d.as_ptr().add(2));
-            }
-            return false;
-        }
-        let f = RUN_FN.load(Relaxed);
-        // SAFETY: the function set at initialization; the slot holds a
-        // callable placed by its owner before it was published
+        debug_assert_eq!(d[0], RUST_TASK);
+        // SAFETY: a Rust task (spawn_on): its runner and closure
         unsafe {
-            let f: RunFn = std::mem::transmute::<usize, RunFn>(f);
-            f(self as *const Task as *mut Task)
+            let f: unsafe fn(*const u64) = std::mem::transmute::<usize, unsafe fn(*const u64)>(d[1] as usize);
+            f(d.as_ptr().add(2));
         }
+        false
     }
 
     fn mark_as_finished(&self, stealer: *const Deque) -> *const Deque {
@@ -937,22 +924,8 @@ fn run_worker(worker_id: i32, ex: Arc<Executor>) {
 }
 
 /// HighsTaskExecutor::initialize: an executor with `num_threads` workers
-/// (the calling thread is worker 0) unless the thread has one; `run` runs a
-/// stolen task
-pub fn initialize(num_threads: i32, run: RunFn) {
-    RUN_FN.store(run as usize, Relaxed);
-    EXECUTOR_HANDLE.with(|h| {
-        let mut h = h.borrow_mut();
-        if h.ptr.is_none() {
-            h.is_main = true;
-            h.ptr = Some(Executor::new(num_threads));
-        }
-    });
-}
-
-/// initialize_scheduler(num_threads) on a thread Rust made (the helper
-/// of the IPX race, the concurrent LNS helper), with the run function the
-/// C++ registered if any (Rust tasks need none)
+/// (the calling thread is worker 0) unless the thread has one (the Highs
+/// object's thread, the helper of the IPX race, the concurrent LNS helper)
 pub fn initialize_thread(num_threads: i32) {
     EXECUTOR_HANDLE.with(|h| {
         let mut h = h.borrow_mut();
@@ -1110,11 +1083,9 @@ pub fn this_worker_deque() -> *mut Deque {
 pub mod ffi {
     use super::*;
 
-    /// # Safety
-    /// `run` runs the callable of a task slot
     #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_sched_initialize(num_threads: i32, run: RunFn) {
-        initialize(num_threads, run)
+    pub extern "C" fn highs_rs_sched_initialize(num_threads: i32) {
+        initialize_thread(num_threads)
     }
 
     #[no_mangle]
@@ -1128,64 +1099,19 @@ pub mod ffi {
     }
 
     /// # Safety
-    /// `d` the calling thread's deque (for all the deque functions)
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_deque_push_slot(d: *mut Deque) -> *mut Task {
-        (*d).push_slot()
-    }
-
-    /// # Safety
-    /// as push_slot, after the slot was filled
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_deque_push_publish(d: *mut Deque) {
-        (*d).push_publish()
-    }
-
-    /// # Safety
-    /// as push_slot
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_deque_pop(d: *mut Deque, task: *mut *mut Task) -> i32 {
-        let (s, t) = (*d).pop();
-        *task = t;
-        s as i32
-    }
-
-    /// # Safety
-    /// as push_slot; `t` the popped stolen task
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_deque_sync_stolen(d: *mut Deque, t: *mut Task) -> bool {
-        (*d).sync_stolen_task(t)
-    }
-
-    /// # Safety
-    /// as push_slot
+    /// `d` the calling thread's deque
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_deque_check_interrupt(d: *mut Deque) -> bool {
         (*d).check_interrupt()
     }
 
     /// # Safety
-    /// as push_slot
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_deque_cancel_task(d: *mut Deque, i: i32) {
-        (*d).cancel_task(i)
-    }
-
-    /// # Safety
-    /// as push_slot
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_deque_set_root_task(d: *mut Deque, t: *mut Task) -> *mut Task {
-        (*d).set_root_task(t)
-    }
-
-    /// # Safety
-    /// `d` a deque; which: 0 owner id, 1 number of workers, 2 current head
+    /// `d` a deque; which: 0 owner id, 1 number of workers
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_deque_info(d: *const Deque, which: i32) -> i32 {
         match which {
             0 => (*d).owner_id(),
-            1 => (*d).num_workers(),
-            _ => (*d).current_head(),
+            _ => (*d).num_workers(),
         }
     }
 }
@@ -1195,45 +1121,6 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicI64;
 
-    // A Rust "callable" for the tests: the slot's first word is a function
-    // pointer, the second its argument
-    unsafe extern "C" fn run_test_task(t: *mut Task) -> bool {
-        let d = &*(*t).data.get();
-        let f: fn(usize) = std::mem::transmute::<u64, fn(usize)>(d[0]);
-        f(d[1] as usize);
-        false
-    }
-
-    fn spawn(d: &Deque, f: fn(usize), arg: usize) {
-        let t = d.push_slot();
-        if t.is_null() {
-            f(arg);
-            return;
-        }
-        // SAFETY: the slot reserved for this owner
-        unsafe {
-            let data = &mut *(*t).data.get();
-            data[0] = f as usize as u64;
-            data[1] = arg as u64;
-        }
-        d.push_publish();
-    }
-
-    fn sync(d: &Deque) {
-        let (s, t) = d.pop();
-        match s {
-            Status::Empty => panic!("sync without a task"),
-            Status::Overflown => {}
-            Status::Stolen => assert!(!d.sync_stolen_task(t)),
-            // SAFETY: the owner's own task
-            Status::Work => unsafe {
-                if (*t).stealer.load(Relaxed) == 0 {
-                    run_test_task(t);
-                }
-            },
-        }
-    }
-
     static SUM: AtomicI64 = AtomicI64::new(0);
 
     fn fib_task(n: usize) {
@@ -1241,18 +1128,16 @@ mod tests {
             SUM.fetch_add(n as i64, Relaxed);
             return;
         }
-        let d = this_worker_deque();
-        // SAFETY: the calling worker's deque
-        let d = unsafe { &*d };
-        spawn(d, fib_task, n - 1);
+        let tg = TaskGroup::new();
+        tg.spawn(move || fib_task(n - 1));
         fib_task(n - 2);
-        sync(d);
+        tg.sync();
     }
 
     #[test]
     fn fib_on_four_threads() {
         std::thread::spawn(|| {
-            initialize(4, run_test_task);
+            initialize_thread(4);
             assert_eq!(this_worker_deque().is_null(), false);
             // SAFETY: the main worker's deque
             assert_eq!(unsafe { (*this_worker_deque()).num_workers() }, 4);
@@ -1288,6 +1173,36 @@ mod tests {
             }
             assert_eq!(TOTAL.load(Relaxed), 64);
             assert!(out.iter().enumerate().all(|(i, &v)| v == (i * i) as i64));
+            shutdown(true);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// check/TestHighsParallel.cpp's CancelNestedTasks: task groups dropped
+    /// with their tasks unfinished, nested
+    #[test]
+    fn cancel_nested_tasks() {
+        fn lose_time() {
+            let mut total = 0u64;
+            for i in 0..1000u64 {
+                total = total.wrapping_add(i * i * i);
+            }
+            std::hint::black_box(total);
+        }
+        fn nested() {
+            let tg = TaskGroup::new();
+            tg.spawn(lose_time);
+            tg.spawn(lose_time);
+        }
+        std::thread::spawn(|| {
+            initialize_thread(4);
+            for _ in 0..1000 {
+                let tg = TaskGroup::new();
+                tg.spawn(nested);
+                tg.spawn(nested);
+                lose_time();
+            }
             shutdown(true);
         })
         .join()

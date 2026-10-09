@@ -98,6 +98,9 @@ if ((NOT FAST_BUILD OR ALL_TESTS) AND NOT (BUILD_EXTRA_UNIT_ONLY))
       # HSet is only used by the C++ primal simplex, which is not built
       # (rust/src/util/hset.rs is the Rust one)
       list(REMOVE_ITEM TEST_SOURCES TestHSet.cpp)
+      # The task scheduler is Rust's and its C++ templates are not built
+      # (rust/src/parallel's tests: Fibonacci, task groups, nested cancel)
+      list(REMOVE_ITEM TEST_SOURCES TestHighsParallel.cpp)
   endif()
 
   set(OPT_LEVEL_CHANGED OFF)

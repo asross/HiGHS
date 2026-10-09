@@ -41,6 +41,8 @@ inline int thread_num() {
   return HighsTaskExecutor::getThisWorkerDeque()->getOwnerId();
 }
 
+#ifndef HIGHS_RUST
+// (the task templates: Rust's under HIGHS_RUST, rust/src/parallel)
 template <typename F>
 void spawn(HighsSplitDeque* localDeque, F&& f) {
   localDeque->push(std::forward<F>(f));
@@ -136,6 +138,7 @@ void for_each(HighsInt start, HighsInt end, F&& f, HighsInt grainSize = 1) {
     tg.taskWait();
   }
 }
+#endif
 
 }  // namespace parallel
 

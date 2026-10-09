@@ -11,61 +11,20 @@
 #include "HConfig.h"
 
 #ifdef HIGHS_RUST
-// The split deque is Rust's (rust/src/parallel): the C++ places a task's
-// callable in the slot the Rust deque gives, and throws
-// HighsTask::Interrupt where the Rust functions return true
-#include <utility>
-
+// The split deque is Rust's (rust/src/parallel): the C++ asks for the
+// thread's id and the number of workers, and throws HighsTask::Interrupt
+// where the Rust check returns true
 #include "parallel/HighsTask.h"
-#include "util/HighsInt.h"
-
-// (for users of the annotations, e.g. check/TestHighsParallel.cpp)
-#ifdef __has_feature
-#if __has_feature(thread_sanitizer)
-#define TSAN_ENABLED
-#endif
-#endif
-#ifdef __SANITIZE_THREAD__
-#define TSAN_ENABLED
-#endif
-#ifdef TSAN_ENABLED
-#define TSAN_ANNOTATE_HAPPENS_BEFORE(addr) \
-  AnnotateHappensBefore(__FILE__, __LINE__, (void*)(addr))
-#define TSAN_ANNOTATE_HAPPENS_AFTER(addr) \
-  AnnotateHappensAfter(__FILE__, __LINE__, (void*)(addr))
-extern "C" void AnnotateHappensBefore(const char* f, int l, void* addr);
-extern "C" void AnnotateHappensAfter(const char* f, int l, void* addr);
-#else
-#define TSAN_ANNOTATE_HAPPENS_BEFORE(addr)
-#define TSAN_ANNOTATE_HAPPENS_AFTER(addr)
-#endif
 
 class HighsSplitDeque;
 
 extern "C" {
-HighsTask* highs_rs_deque_push_slot(HighsSplitDeque* d);
-void highs_rs_deque_push_publish(HighsSplitDeque* d);
-int highs_rs_deque_pop(HighsSplitDeque* d, HighsTask** task);
-bool highs_rs_deque_sync_stolen(HighsSplitDeque* d, HighsTask* task);
 bool highs_rs_deque_check_interrupt(HighsSplitDeque* d);
-void highs_rs_deque_cancel_task(HighsSplitDeque* d, HighsInt i);
-HighsTask* highs_rs_deque_set_root_task(HighsSplitDeque* d, HighsTask* t);
 int highs_rs_deque_info(const HighsSplitDeque* d, int which);
 }
 
 class HighsSplitDeque {
  public:
-  enum Constants {
-    kTaskArraySize = 8192,
-  };
-
-  enum class Status {
-    kEmpty,
-    kStolen,
-    kWork,
-    kOverflown,
-  };
-
   HighsSplitDeque() = delete;
   HighsSplitDeque(const HighsSplitDeque&) = delete;
 
@@ -73,37 +32,9 @@ class HighsSplitDeque {
     if (highs_rs_deque_check_interrupt(this)) throw HighsTask::Interrupt();
   }
 
-  void cancelTask(HighsInt taskIndex) {
-    highs_rs_deque_cancel_task(this, taskIndex);
-  }
-
-  HighsTask* setRootTask(HighsTask* newRoot) {
-    return highs_rs_deque_set_root_task(this, newRoot);
-  }
-
-  template <typename F>
-  void push(F&& f) {
-    HighsTask* task = highs_rs_deque_push_slot(this);
-    if (task == nullptr) {
-      // the deque overflowed: the task runs now
-      f();
-      return;
-    }
-    task->setTaskData(std::forward<F>(f));
-    highs_rs_deque_push_publish(this);
-  }
-
-  std::pair<Status, HighsTask*> pop() {
-    HighsTask* task;
-    int status = highs_rs_deque_pop(this, &task);
-    return std::make_pair(Status(status), task);
-  }
-
   int getOwnerId() const { return highs_rs_deque_info(this, 0); }
 
   int getNumWorkers() const { return highs_rs_deque_info(this, 1); }
-
-  int getCurrentHead() const { return highs_rs_deque_info(this, 2); }
 };
 
 #else

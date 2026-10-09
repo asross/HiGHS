@@ -88,6 +88,9 @@ if(HIGHS_RUST)
     presolve/HPresolve.cpp
     presolve/HPresolveAnalysis.cpp
     presolve/HPresolveTest.cpp)
+  # The task scheduler is Rust (rust/src/parallel): the C++ headers keep
+  # the thread count, thread id and interrupt check that call it
+  list(REMOVE_ITEM highs_sources parallel/HighsTaskExecutor.cpp)
   # The simplex solve is Rust (rust/src/simplex): the C++ dual and primal
   # simplex were only the fallback for the product form update, which
   # nothing sets up (it served the deprecated frozen bases)
