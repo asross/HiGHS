@@ -307,6 +307,66 @@ void highs_rs_lps_run_export(void* lps, RsRunData* d);
 bool highs_rs_lps_presolve_export(void* lps, RsLpVec* lp, RsPresolveExport* out);
 }
 
+namespace {
+// top.rs: CTopData, the Highs object's data in place
+struct RsTopData {
+  RsRunData run;
+  HighsRunDataStruct* run_data;
+  HighsPresolveStatus* presolve_status;
+  bool* called_return;
+  RsHessian hessian;
+  void* profiling;
+};
+// top.rs: PresolveRecords
+struct RsPresolveRecords {
+  int postsolve_status;
+  HighsInt n_cols_removed, n_rows_removed, n_nnz_removed;
+  double presolve_time, postsolve_time;
+};
+// top.rs: what changed for the C++ copies
+enum : uint32_t {
+  kXModel = 1,
+  kXHessian = 2,
+  kXClearIis = 4,
+  kXClearDerived = 8,
+  kXPresolveClear = 16,
+  kXPresolve = 32,
+  kXSaved = 64,
+  kXPresolveRecords = 128,
+  kXClearPresolve = 256,
+  kXPresolvedModel = 512,
+  kXClearModel = 1024,
+  kXTakeModel = 2048,
+  kXPresolveMip = 4096,
+};
+}  // namespace
+
+extern "C" {
+void highs_rs_lph_top_import(highs_rs::LpHandle* p, const RsTopData* d);
+uint32_t highs_rs_lph_top_changed(highs_rs::LpHandle* p);
+void highs_rs_lph_top_export(highs_rs::LpHandle* p, RsTopData* d);
+RsPresolveRecords highs_rs_lph_top_records(highs_rs::LpHandle* p);
+size_t highs_rs_lph_top_saved(highs_rs::LpHandle* p, size_t k,
+                              double* objective, size_t* n);
+void highs_rs_lph_top_clear_saved(highs_rs::LpHandle* p);
+int highs_rs_lph_called_optimize_model(highs_rs::LpHandle* p,
+                                       bool* interrupted);
+void highs_rs_lph_top_hessian(highs_rs::LpHandle* p, RsHessian* h);
+int highs_rs_lph_top_presolved_which(highs_rs::LpHandle* p);
+int highs_rs_lph_top_presolve(highs_rs::LpHandle* p, bool* interrupted);
+int highs_rs_lph_top_postsolve(highs_rs::LpHandle* p, const RsSolution* s,
+                               const RsBasisVec* b, const char* origin,
+                               size_t origin_len, bool* interrupted);
+int highs_rs_lph_top_crossover(highs_rs::LpHandle* p, const RsSolution* s,
+                               bool* interrupted);
+int highs_rs_lph_top_set_basis(highs_rs::LpHandle* p, const RsBasisVec* b,
+                               const char* basis_origin, size_t basis_origin_len,
+                               const char* origin, size_t origin_len);
+int highs_rs_lph_top_pass_model(highs_rs::LpHandle* p, int which,
+                                const RsLp* lp, const char* name,
+                                size_t name_len, const RsHessian* hessian);
+}
+
 // ---- The simplex engine of a Highs object (lp_handle.rs on a host)
 
 // The profiling steps of a simplex solve on a HighsProfiling (code 1
@@ -357,6 +417,11 @@ void rsSimplexProfiling(void* profiling_p, int code,
   }
 }
 
+// The top level's host functions (rust/src/lp_data/top.rs CTop), after
+// HighsRunRust below
+static int64_t rsTopOp(void* ctx, int code, int64_t arg, void* p);
+static double rsTopClock(void* ctx, int which, int action);
+
 highs_rs::LphHost rsEngineHost(Highs* highs) {
   // The profiling steps of the engine's (and the MIP's) simplex solves
   highs_rs::highs_rs_lph_register(rsSimplexProfiling);
@@ -394,6 +459,8 @@ highs_rs::LphHost rsEngineHost(Highs* highs) {
     }
     return HighsInt{0};
   };
+  host.top_op = rsTopOp;
+  host.clock = rsTopClock;
   return host;
 }
 
@@ -613,15 +680,27 @@ struct HighsRunRust {
   HighsHessian* user_hessian = nullptr;
   HighsModel read_model;
   HighsBasis read_basis;
+
+  // A call on the engine with the Highs object's data synced in and out
+  template <typename F>
+  HighsStatus topCall(F f) {
+    topIn();
+    bool interrupted = false;
+    const HighsStatus status = HighsStatus(f(&interrupted));
+    topOut();
+    if (interrupted) throw HighsTask::Interrupt();
+    return status;
+  }
   FILE* write_file = nullptr;
   // The presolve data of the LP run on Rust data into presolve_ (its
   // reduced LP's other members, from the model, are kept: the names follow
   // the index maps)
-  void presolveExport() {
+  HighsPresolveStatus presolveExport() {
     HighsLp& lp = h.presolve_.data_.reduced_lp_;
     RsLpVec v = rsLpVec(lp);
     RsPresolveExport e;
-    if (!highs_rs_lps_presolve_export(h.ekk_instance_.lps, &v, &e)) return;
+    if (!highs_rs_lps_presolve_export(h.ekk_instance_.lps, &v, &e))
+      return HighsPresolveStatus::kNotPresolved;
     rsLpVecBack(v, lp);
     if (lp.col_names_.size() > 0) {
       std::vector<std::string> names(e.num_col);
@@ -651,6 +730,7 @@ struct HighsRunRust {
       }
       h.presolve_log_ = h.presolve_.getPresolveLog();
     }
+    return HighsPresolveStatus(e.status);
   }
 
   // The Highs object's data for the LP run on Rust data
@@ -672,6 +752,209 @@ struct HighsRunRust {
     d.info = static_cast<HighsInfoStruct*>(&h.info_);
     d.model_status = &h.model_status_;
     return d;
+  }
+
+  // ---- The top level on the engine (rust/src/lp_data/top.rs)
+
+  RsTopData topData(RsBasisVec& basis) {
+    RsTopData d;
+    d.run = runData(basis);
+    d.run_data = static_cast<HighsRunDataStruct*>(&h.run_data_);
+    d.presolve_status = &h.model_presolve_status_;
+    d.called_return = &h.called_return_from_optimize_model;
+    d.hessian = rsHessian(h.model_cache_.hessian_);
+    d.profiling = h.profiling_;
+    return d;
+  }
+
+  // The Highs object's options, model, solution, basis, info, model
+  // status, run data and Hessian into its engine before a call
+  void topIn() {
+    highs_rs::LpHandle* e = h.ekk_instance_.p;
+    if (h.options_cpp_newer_) {
+      rsSyncOptions(e, h.options_);
+      h.options_cpp_newer_ = false;
+    } else if (kRsCheckSync) {
+      HighsLogOptions no_log;
+      if (rsHighsOptions(e, 5, no_log, h.options_, "", 0, false, 0, 0,
+                         nullptr, nullptr))
+        std::abort();
+    }
+    h.lpToRust();
+    RsBasisVec basis;
+    const RsTopData d = topData(basis);
+    highs_rs_lph_top_import(e, &d);
+  }
+
+  // The engine's data back into the Highs object's copies after a call
+  void topOut() {
+    highs_rs::LpHandle* e = h.ekk_instance_.p;
+    RsBasisVec basis;
+    RsTopData d = topData(basis);
+    const uint32_t changed = highs_rs_lph_top_changed(e);
+    // The option values the run changed (and restored but for these)
+    HighsLogOptions no_log;
+    rsHighsOptions(e, 4, no_log, h.options_, "", 0, false, 0, 0, nullptr,
+                   nullptr);
+    // What the engine cleared, then its data
+    if (changed & kXClearModel) {
+      h.model_cache_.clear();
+      h.multi_linear_objective_.clear();
+      h.saved_objective_and_solution_.clear();
+    }
+    if (changed & kXClearIis) {
+      h.clearIis();
+      h.invalidateRanging();
+    }
+    if (changed & kXClearDerived) {
+      h.clearPresolve();
+      h.clearStandardFormLp();
+    }
+    if (changed & kXClearPresolve) h.clearPresolve();
+    highs_rs_lph_top_export(e, &d);
+    rsBasisVecBack(basis, h.basis_);
+    if (changed & kXTakeModel) {
+      // The passed model's names and the members the engine's model does
+      // not hold
+      h.model_cache_.lp_ = std::move(user_model->lp_);
+      h.model_cache_.lp_.origin_name_ = "Original";
+    }
+    if (changed & kXModel) {
+      h.lpFromRust();
+      highs_rs::highs_rs_lph_take_matrix_back(e);
+    } else {
+      // The scale factors the simplex gave the model (and its matrix)
+      rsModelBack(e, h.model_cache_.lp_);
+    }
+    if (changed & kXHessian) {
+      RsHessian v = rsHessian(h.model_cache_.hessian_);
+      highs_rs_lph_top_hessian(e, &v);
+    }
+    if (changed & kXPresolveClear) h.presolve_.clear();
+    if (changed & kXPresolve) {
+      h.presolve_.init(h.model_r().lp_, h.timer_);
+      h.presolve_.options_ = &h.options_;
+      const HighsPresolveStatus status = presolveExport();
+      if (changed & kXPresolveMip) {
+        h.presolve_.presolve_status_ = status;
+        h.presolve_log_ = h.presolve_.getPresolveLog();
+      }
+    }
+    if (changed & kXPresolveRecords) {
+      const RsPresolveRecords r = highs_rs_lph_top_records(e);
+      h.presolve_.postsolve_status_ = HighsPostsolveStatus(r.postsolve_status);
+      h.presolve_.info_.n_cols_removed = r.n_cols_removed;
+      h.presolve_.info_.n_rows_removed = r.n_rows_removed;
+      h.presolve_.info_.n_nnz_removed = r.n_nnz_removed;
+      h.presolve_.info_.presolve_time = r.presolve_time;
+      h.presolve_.info_.postsolve_time = r.postsolve_time;
+    }
+    if (changed & kXPresolvedModel) {
+      if (highs_rs_lph_top_presolved_which(e) == 0) {
+        h.presolved_model_ = h.model_r();
+      } else {
+        h.presolved_model_.lp_ = h.presolve_.getReducedProblem();
+        h.presolved_model_.lp_.setMatrixDimensions();
+      }
+    }
+    if (changed & kXSaved) {
+      std::vector<HighsObjectiveSolution>& saved =
+          h.saved_objective_and_solution_;
+      saved.clear();
+      double objective;
+      size_t n;
+      const size_t num = highs_rs_lph_top_saved(e, SIZE_MAX, &objective, &n);
+      for (size_t k = 0; k < num; ++k) {
+        HighsObjectiveSolution record;
+        const double* v = reinterpret_cast<const double*>(
+            highs_rs_lph_top_saved(e, k, &record.objective, &n));
+        record.col_value.assign(v, v + n);
+        saved.push_back(std::move(record));
+      }
+    }
+  }
+
+  // The top level's steps on C++ objects (top.rs H_*)
+  int64_t topOp(int code, int64_t arg, void* p) {
+    switch (code) {
+      case 1: {
+        const bool already = h.profiling_ != nullptr;
+        if (!already) h.initializeProfiling(new HighsProfiling);
+        *static_cast<void**>(p) = h.profiling_;
+        return already;
+      }
+      case 2:
+        if (!arg) {
+          HighsProfiling* profiling = h.profiling_;
+          h.reportProfiling();
+          h.clearProfiling();
+          delete profiling;
+        }
+        return 0;
+      case 3:
+        if (h.profiling_) h.resetProfiling();
+        return 0;
+      case 4:
+        return int64_t(h.initializeMultiThreading());
+      case 5:
+        if (h.profiling_) {
+          const HighsInt k = (arg >> 1) ? kSubSolverQpAsm : kSubSolverMip;
+          if (arg & 1)
+            h.profiling_->start(k);
+          else
+            h.profiling_->stop(k);
+        }
+        return 0;
+      case 6:
+        if (arg & 1) {
+          if (arg & 4) h.lpFromRust();
+          *static_cast<void**>(p) = highsMipHostNew(
+              h.callback_, h.options_, h.model_r().lp_, (arg & 2) != 0);
+        } else {
+          highsMipHostFree(p);
+        }
+        return 0;
+      case 7: {
+        const RsMut<double>& v = *static_cast<const RsMut<double>*>(p);
+        const std::vector<double> values(v.ptr, v.ptr + v.len);
+        analyseVectorValues(&h.options_.log_options, "Small values in matrix",
+                            HighsInt(values.size()), values, false, "");
+        return 0;
+      }
+      case 9: {
+        const bool already = h.profiling_ != nullptr;
+        if (!already) h.initializeSingleThreadedProfiling(new HighsProfiling);
+        *static_cast<void**>(p) = h.profiling_;
+        return already;
+      }
+      case 10:
+        if (!arg) {
+          HighsProfiling* profiling = h.profiling_;
+          h.clearProfiling();
+          delete profiling;
+        }
+        return 0;
+      case 11:
+        h.logHeader();
+        return 0;
+      case 12:
+        if (h.options_.write_matrix_image)
+          writeLpMatrixPicToFile(h.options_, "LpMatrix", h.model_r().lp_);
+        if (h.options_.write_hessian_image)
+          writeHessianPicToFile(h.options_, "Hessian", h.model_cache_.hessian_);
+        return 0;
+      case 8: {
+        static thread_local std::unique_ptr<RsNameList> col, row;
+        col.reset(new RsNameList(h.lpCpp().col_names_));
+        row.reset(new RsNameList(h.lpCpp().row_names_));
+        RsMut<RsName>* out = static_cast<RsMut<RsName>*>(p);
+        out[0] = col->view();
+        out[1] = row->view();
+        return 0;
+      }
+    }
+    assert(false);
+    return 0;
   }
 
   static int64_t op(void* ctx, int which, int64_t arg, void* p,
@@ -1634,6 +1917,16 @@ struct HighsRunRust {
   }
 };
 
+static int64_t rsTopOp(void* ctx, int code, int64_t arg, void* p) {
+  HighsRunRust r(*static_cast<Highs*>(ctx));
+  return r.topOp(code, arg, p);
+}
+
+static double rsTopClock(void* ctx, int which, int action) {
+  HighsRunRust r(*static_cast<Highs*>(ctx));
+  return HighsRunRust::clock(&r, which, action);
+}
+
 extern "C" {
 int highs_rs_call_solve_mip(const RsHighs* h);
 int highs_rs_check_optimality(const RsHighs* h, const char* solver_type,
@@ -1693,19 +1986,17 @@ HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
 
 HighsStatus Highs::presolve() {
   HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_presolve(&v));
-  r.rethrow();
-  return status;
+  return r.topCall([&](bool* interrupted) {
+    return highs_rs_lph_top_presolve(ekk_instance_.p, interrupted);
+  });
 }
 
 HighsStatus Highs::crossover(const HighsSolution& user_solution) {
   HighsRunRust r(*this);
-  r.user_solution = &user_solution;
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_crossover(&v));
-  r.rethrow();
-  return status;
+  const RsSolution s = rsSolution(user_solution);
+  return r.topCall([&](bool* interrupted) {
+    return highs_rs_lph_top_crossover(ekk_instance_.p, &s, interrupted);
+  });
 }
 
 extern "C" int highs_rs_call_run_postsolve(const RsHighs* h);
@@ -1764,19 +2055,22 @@ void Highs::forceHighsSolutionBasisSize() {
 HighsStatus Highs::passModel(HighsModel model) {
   HighsRunRust r(*this);
   r.user_model = &model;
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_pass_model(&v, 0));
-  r.rethrow();
-  return status;
+  const RsLp lp = rsLp(model.lp_);
+  const RsHessian hessian = rsHessian(model.hessian_);
+  return r.topCall([&](bool*) {
+    return highs_rs_lph_top_pass_model(ekk_instance_.p, 0, &lp,
+                                       model.lp_.model_name_.data(),
+                                       model.lp_.model_name_.size(), &hessian);
+  });
 }
 
 HighsStatus Highs::passHessian(HighsHessian hessian_) {
   HighsRunRust r(*this);
-  r.user_hessian = &hessian_;
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_pass_model(&v, 1));
-  r.rethrow();
-  return status;
+  const RsHessian hessian = rsHessian(hessian_);
+  return r.topCall([&](bool*) {
+    return highs_rs_lph_top_pass_model(ekk_instance_.p, 1, nullptr, nullptr, 0,
+                                       &hessian);
+  });
 }
 
 bool Highs::aFormatOk(const HighsInt num_nz, const HighsInt format) {
@@ -1794,11 +2088,12 @@ extern "C" int highs_rs_set_basis(const RsHighs* h, bool alien,
 HighsStatus Highs::setBasis(const HighsBasis& basis,
                             const std::string& origin) {
   HighsRunRust r(*this);
-  r.user_basis = &basis;
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(
-      highs_rs_set_basis(&v, basis.alien, origin.data(), origin.size()));
-  r.rethrow();
+  const RsBasisVec b = rsBasisVec(const_cast<HighsBasis&>(basis));
+  const HighsStatus status = r.topCall([&](bool*) {
+    return highs_rs_lph_top_set_basis(
+        ekk_instance_.p, &b, basis.debug_origin_name.data(),
+        basis.debug_origin_name.size(), origin.data(), origin.size());
+  });
   assert(basis_.debug_origin_name != "");
   assert(!basis_.alien || status != HighsStatus::kOk);
   return status;
@@ -1807,20 +2102,21 @@ HighsStatus Highs::setBasis(const HighsBasis& basis,
 HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
                                     const HighsBasis& basis) {
   HighsRunRust r(*this);
-  r.user_solution = &solution;
-  r.user_basis = &basis;
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_call_run_postsolve(&v));
-  r.rethrow();
-  return status;
+  const RsSolution s = rsSolution(solution);
+  const RsBasisVec b = rsBasisVec(const_cast<HighsBasis&>(basis));
+  return r.topCall([&](bool* interrupted) {
+    return highs_rs_lph_top_postsolve(
+        ekk_instance_.p, &s, &b, basis.debug_origin_name.data(),
+        basis.debug_origin_name.size(), interrupted);
+  });
 }
 
 HighsStatus Highs::calledOptimizeModel() {
+  // The run is the engine's (rust/src/lp_data/top.rs)
   HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_called_optimize_model(&v));
-  r.rethrow();
-  return status;
+  return r.topCall([&](bool* interrupted) {
+    return highs_rs_lph_called_optimize_model(ekk_instance_.p, interrupted);
+  });
 }
 
 HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,

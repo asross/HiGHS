@@ -335,6 +335,7 @@ struct HighsIisRust {
         return 0;
       case IisOp::kRestoreOptions:
         h.options_ = *saved_options;
+        h.options_cpp_newer_ = true;
         return 0;
       case IisOp::kEnsureColwise:
         if (!h.model_r().lp_.a_matrix_.isColwise())
@@ -355,6 +356,7 @@ struct HighsIisRust {
         }
       case IisOp::kSetOutputFlag:
         options.output_flag = a.i != 0;
+        h.options_cpp_newer_ = true;
         return 0;
       case IisOp::kInvalidateSolverData:
         h.invalidateSolverData();

@@ -301,10 +301,14 @@ impl Lp {
         t.import(v, model_name);
         let (a, b) = (&self.g, &t.g);
         let mut d = Vec::new();
+        let verbose = std::env::var("HIGHS_RS_CHECK_SYNC").is_ok_and(|v| v == "2");
         macro_rules! cmp {
             ($($f:ident).+) => {
                 if a.$($f).+ != b.$($f).+ {
                     d.push(stringify!($($f).+));
+                    if verbose {
+                        eprintln!("{}: engine {:?} C++ {:?}", stringify!($($f).+), a.$($f).+, b.$($f).+);
+                    }
                 }
             };
         }

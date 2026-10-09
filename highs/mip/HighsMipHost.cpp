@@ -18,6 +18,7 @@
 #include <string>
 
 #include "lp_data/HighsLpHandle.h"
+#include "lp_data/HighsLpUtils.h"
 #include "lp_data/HighsModelUtils.h"
 #include "lp_data/HighsRust.h"
 #include "mip/MipTimer.h"
@@ -122,6 +123,9 @@ struct MipHost {
   const HighsOptions* options;
   const HighsLp* lp;
   FILE* improving;
+  // The LP of a model with semi-variables (its names for the improving
+  // solution file)
+  HighsLp semi_lp;
 };
 
 // The clock ids of the clock indices of the Rust solver (root.rs and
@@ -358,6 +362,21 @@ HighsMipRun::HighsMipRun(HighsCallback& callback, const HighsOptions& options,
   }
   highs_rs_mip_out_free(out);
 }
+
+void* highsMipHostNew(HighsCallback& callback, const HighsOptions& options,
+                      const HighsLp& lp, const bool semi) {
+  highs_rs_mip_register(&kHighsFns);
+  MipHost* host = new MipHost{&callback, &options, &lp, nullptr, HighsLp()};
+  if (semi) {
+    HighsSolution solution;
+    host->semi_lp = withoutSemiVariables(lp, solution,
+                                         options.primal_feasibility_tolerance);
+    host->lp = &host->semi_lp;
+  }
+  return host;
+}
+
+void highsMipHostFree(void* host) { delete static_cast<MipHost*>(host); }
 
 HighsPresolveStatus highsMipPresolve(HighsCallback& callback,
                                      const HighsOptions& options,

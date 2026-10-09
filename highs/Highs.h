@@ -1649,6 +1649,15 @@ class Highs {
   HighsModel model_cache_;
   // The copy has changes the engine's model lacks
   bool lp_cpp_newer_ = true;
+  // options_ (the mirror of the engine's option values, the store) has
+  // values written by C++ that the engine lacks
+  bool options_cpp_newer_ = false;
+  // The engine's option values take the mirror's if it is newer
+  void optionsToRust() {
+    if (!options_cpp_newer_) return;
+    rsSyncOptions(ekk_instance_.p, options_);
+    options_cpp_newer_ = false;
+  }
   const HighsModel& model_r() const { return model_cache_; }
   HighsModel& model_w() {
     lp_cpp_newer_ = true;

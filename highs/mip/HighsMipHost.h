@@ -48,6 +48,13 @@ struct HighsMipRun {
   std::vector<HighsObjectiveSolution> saved_objective_and_solution_;
 };
 
+/// The MIP solver's host of a Highs object's engine (rust/src/lp_data/top.rs:
+/// HighsFns' context): its callback, options and model (with
+/// semi-variables, the LP withoutSemiVariables makes), made and freed
+void* highsMipHostNew(HighsCallback& callback, const HighsOptions& options,
+                      const HighsLp& lp, const bool semi);
+void highsMipHostFree(void* host);
+
 /// runMipPresolve: the presolved model and postsolve stack (the model's
 /// other members, and its names through the index maps), and the presolve
 /// status

@@ -43,6 +43,9 @@ use crate::util::fma::ClangFma;
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
+#[path = "top.rs"]
+pub(crate) mod top;
+
 // HighsBasisStatus
 const BASIC: u8 = 1;
 const NONBASIC: u8 = 4;
@@ -247,6 +250,8 @@ pub struct CHost {
     pub simplex_interrupt: unsafe extern "C" fn(*mut c_void, i32) -> bool,
     /// The IPM interrupt callback (ipx::LpSolver's user interrupt hook)
     pub ipm_interrupt: unsafe extern "C" fn(*mut c_void, crate::ipx::Int) -> crate::ipx::Int,
+    /// The top level's host functions (top.rs)
+    pub top: top::CTop,
 }
 
 /// HighsSimplexStats (lp_data/HStruct.h)
@@ -392,6 +397,8 @@ pub struct LpHandle {
     /// A Highs object's run changed the model's matrix (the undualized
     /// LP's, lpBack): C++ takes it back at the run's end
     pub model_matrix_back: bool,
+    /// A Highs object's top level (top.rs)
+    pub(crate) top: Option<Box<top::Top>>,
 }
 
 // SAFETY: a handle is used by one thread at a time (the race's IPX handle
@@ -449,6 +456,7 @@ impl LpHandle {
             user_model: None,
             host: None,
             model_matrix_back: false,
+            top: None,
         });
         h.run_data.invalidate();
         let o = &h.opts;
@@ -466,6 +474,7 @@ impl LpHandle {
     /// The engine of a C++ Highs object (HEkk's place in it)
     pub fn new_host(host: CHost) -> Box<LpHandle> {
         let mut h = LpHandle::new();
+        h.top = Some(Box::new(top::Top::new(host.top)));
         h.host = Some(host);
         h
     }
@@ -598,6 +607,10 @@ impl LpHandle {
         self.invalidate_basis();
         // invalidateEkk: HEkk::invalidate (and the simplex stats)
         self.ekk_invalidate();
+        // clearIis (and the ranging's invalidation) of a Highs object
+        if let Some(t) = self.top.as_mut() {
+            t.changed |= top::X_CLEAR_IIS;
+        }
     }
 
     /// Highs::clearDerivedModelProperties: the presolve data and the ray
@@ -606,6 +619,10 @@ impl LpHandle {
         self.presolve_status = super::run::PS_NOT_PRESOLVED;
         self.lps.run.presolve = Default::default();
         self.lps.clear_ray_records();
+        // and a Highs object's presolved model and standard form LP
+        if let Some(t) = self.top.as_mut() {
+            t.changed |= top::X_CLEAR_DERIVED;
+        }
     }
 
     /// HEkk::clear on the shell's side (clearCpp)
@@ -1300,6 +1317,11 @@ impl LpHandle {
     // ---- The steps of the run on this handle (handle_op)
 
     fn op(&mut self, op: i32, arg: i64, p: *mut c_void, msg: &[u8]) -> i64 {
+        if self.top.is_some() {
+            if let Some(r) = self.top_op(op, arg, p, msg) {
+                return r;
+            }
+        }
         macro_rules! is {
             ($o:ident) => {
                 op == Op::$o as i32
@@ -2067,7 +2089,12 @@ unsafe extern "C" fn handle_op(ctx: *mut c_void, op: i32, arg: i64, p: *mut c_vo
 }
 
 unsafe extern "C" fn handle_clock(ctx: *mut c_void, which: i32, action: i32) -> f64 {
-    let t = &mut (*(ctx as *mut LpHandle)).timer;
+    let h = &mut *(ctx as *mut LpHandle);
+    if h.top.is_some() {
+        // A Highs object's clocks are its HighsTimer's
+        return h.top_clock(which, action);
+    }
+    let t = &mut h.timer;
     let c = which as usize;
     match action {
         0 => t.read(c),

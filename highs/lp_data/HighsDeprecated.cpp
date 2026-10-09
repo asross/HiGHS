@@ -108,12 +108,18 @@ const HighsOptions& Highs::getHighsOptions() const {
 HighsStatus Highs::setHighsLogfile(FILE* logfile) {
   deprecationMessage("setHighsLogfile", "None");
   options_.output_flag = false;
+#ifdef HIGHS_RUST
+  options_cpp_newer_ = true;
+#endif
   return HighsStatus::kOk;
 }
 
 HighsStatus Highs::setHighsOutput(FILE* output) {
   deprecationMessage("setHighsOutput", "None");
   options_.output_flag = false;
+#ifdef HIGHS_RUST
+  options_cpp_newer_ = true;
+#endif
   return HighsStatus::kOk;
 }
 

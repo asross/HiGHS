@@ -144,6 +144,49 @@ HighsStatus Highs::releaseMemory() {
   return returnFromHighs(return_status);
 }
 
+#ifdef HIGHS_RUST
+// The option values are the engine's (rust/src/lp_data/options.rs
+// highs_rs_lph_options), options_ their mirror
+HighsStatus Highs::setOptionValue(const std::string& option, const bool value) {
+  optionsToRust();
+  if (rsHighsOptions(ekk_instance_.p, 0, options_.log_options, options_,
+                     option, 0, value, 0, 0, nullptr,
+                     nullptr) == int(OptionStatus::kOk))
+    return optionChangeAction();
+  return HighsStatus::kError;
+}
+
+HighsStatus Highs::setOptionValue(const std::string& option,
+                                  const HighsInt value) {
+  optionsToRust();
+  if (rsHighsOptions(ekk_instance_.p, 0, options_.log_options, options_,
+                     option, 1, false, value, 0, nullptr,
+                     nullptr) == int(OptionStatus::kOk))
+    return optionChangeAction();
+  return HighsStatus::kError;
+}
+
+HighsStatus Highs::setOptionValue(const std::string& option,
+                                  const double value) {
+  optionsToRust();
+  if (rsHighsOptions(ekk_instance_.p, 0, options_.log_options, options_,
+                     option, 2, false, 0, value, nullptr,
+                     nullptr) == int(OptionStatus::kOk))
+    return optionChangeAction();
+  return HighsStatus::kError;
+}
+
+HighsStatus Highs::setOptionValue(const std::string& option,
+                                  const std::string& value) {
+  HighsLogOptions report_log_options = options_.log_options;
+  optionsToRust();
+  if (rsHighsOptions(ekk_instance_.p, 0, report_log_options, options_, option,
+                     3, false, 0, 0, &value,
+                     nullptr) == int(OptionStatus::kOk))
+    return optionChangeAction();
+  return HighsStatus::kError;
+}
+#else
 HighsStatus Highs::setOptionValue(const std::string& option, const bool value) {
   if (setLocalOptionValue(options_.log_options, option, options_.records,
                           value) == OptionStatus::kOk)
@@ -175,14 +218,19 @@ HighsStatus Highs::setOptionValue(const std::string& option,
     return optionChangeAction();
   return HighsStatus::kError;
 }
+#endif
 
 HighsStatus Highs::setOptionValue(const std::string& option,
                                   const char* value) {
+#ifdef HIGHS_RUST
+  return setOptionValue(option, std::string(value));
+#else
   HighsLogOptions report_log_options = options_.log_options;
   if (setLocalOptionValue(report_log_options, option, options_.log_options,
                           options_.records, value) == OptionStatus::kOk)
     return optionChangeAction();
   return HighsStatus::kError;
+#endif
 }
 
 HighsStatus Highs::readOptions(const std::string& filename) {
@@ -192,7 +240,15 @@ HighsStatus Highs::readOptions(const std::string& filename) {
     return HighsStatus::kWarning;
   }
   HighsLogOptions report_log_options = options_.log_options;
+#ifdef HIGHS_RUST
+  optionsToRust();
+  switch (HighsLoadOptionsStatus(rsHighsOptions(ekk_instance_.p, 3,
+                                                report_log_options, options_,
+                                                "", 3, false, 0, 0, &filename,
+                                                nullptr))) {
+#else
   switch (loadOptionsFromFile(report_log_options, options_, filename)) {
+#endif
     case HighsLoadOptionsStatus::kError:
     case HighsLoadOptionsStatus::kEmpty:
       return HighsStatus::kError;
@@ -203,14 +259,28 @@ HighsStatus Highs::readOptions(const std::string& filename) {
 }
 
 HighsStatus Highs::passOptions(const HighsOptions& options) {
+#ifdef HIGHS_RUST
+  optionsToRust();
+  if (rsHighsOptions(ekk_instance_.p, 1, options_.log_options, options_, "", 0,
+                     false, 0, 0, nullptr,
+                     &options) == int(OptionStatus::kOk))
+#else
   if (passLocalOptions(options_.log_options, options, options_) ==
       OptionStatus::kOk)
+#endif
     return optionChangeAction();
   return HighsStatus::kError;
 }
 
 HighsStatus Highs::resetOptions() {
+#ifdef HIGHS_RUST
+  HighsLogOptions no_log;
+  optionsToRust();
+  rsHighsOptions(ekk_instance_.p, 2, no_log, options_, "", 0, false, 0, 0,
+                 nullptr, nullptr);
+#else
   resetLocalOptions(options_.records);
+#endif
   return optionChangeAction();
 }
 
@@ -5214,6 +5284,10 @@ HighsStatus Highs::crossover(const HighsSolution& user_solution) {
 
 HighsStatus Highs::openLogFile(const std::string& log_file) {
   highsOpenLogFile(options_.log_options, options_.records, log_file);
+#ifdef HIGHS_RUST
+  // The log_file record of the mirror changed
+  options_cpp_newer_ = true;
+#endif
   return HighsStatus::kOk;
 }
 
