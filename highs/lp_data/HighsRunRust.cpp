@@ -753,7 +753,12 @@ struct HighsRunRust {
       case RunOp::kHandleInfCost:
         return st(h.handleInfCost());
       case RunOp::kExactResizeModel:
-        h.exactResizeModel();
+        // Both copies of the model (HighsLp::exactResize changes no
+        // values of a model whose vectors have its dimensions)
+        h.model_cache_.lp_.exactResize();
+        h.model_cache_.hessian_.exactResize();
+        if (!h.lp_cpp_newer_)
+          highs_rs::highs_rs_lph_exact_resize_model(h.ekk_instance_.p);
         return 0;
       case RunOp::kCompleteSolution:
         return st(h.completeSolutionFromDiscreteAssignment());
@@ -1042,7 +1047,7 @@ struct HighsRunRust {
         }
         return 0;
       case RunOp::kKktFailures:
-        getKktFailures(options, h.model_w(), h.solution_, h.basis_, h.info_);
+        getKktFailures(options, h.model_r(), h.solution_, h.basis_, h.info_);
         return 0;
       case RunOp::kMipFinish:
         mip_solver.reset();
@@ -1212,7 +1217,7 @@ struct HighsRunRust {
         return 0;
       }
       case RunOp::kNeedsMods:
-        return h.model_w().needsMods(options.infinite_cost);
+        return h.model_r().needsMods(options.infinite_cost);
       case RunOp::kReportModelStats:
         h.reportModelStats();
         return 0;
@@ -1236,7 +1241,7 @@ struct HighsRunRust {
         return 0;
       case RunOp::kPresolvedModel:
         if (arg == 0) {
-          h.presolved_model_ = h.model_w();
+          h.presolved_model_ = h.model_r();
         } else {
           h.presolved_model_.lp_ = h.presolve_.getReducedProblem();
           h.presolved_model_.lp_.setMatrixDimensions();
@@ -1300,7 +1305,7 @@ struct HighsRunRust {
         if (arg)
           h.info_.objective_function_value =
               computeObjectiveValue(lpR, h.solution_);
-        assert(!h.model_w().isQp());
+        assert(!h.model_r().isQp());
         getKktFailures(options, false, lpR, lpR.col_cost_, h.solution_, h.info_,
                        true);
         return 0;
@@ -1595,23 +1600,23 @@ struct HighsRunRust {
     HighsOptions& options_ = h.options_;
     bool error = false;
     if (h.solution_.value_valid &&
-        debugPrimalSolutionRightSize(options_, h.model_w().lp_, h.solution_) ==
+        debugPrimalSolutionRightSize(options_, h.model_r().lp_, h.solution_) ==
             HighsDebugStatus::kLogicalError)
       error = true;
     if (h.solution_.dual_valid &&
-        debugDualSolutionRightSize(options_, h.model_w().lp_, h.solution_) ==
+        debugDualSolutionRightSize(options_, h.model_r().lp_, h.solution_) ==
             HighsDebugStatus::kLogicalError)
       error = true;
     if (h.basis_.valid &&
-        debugBasisRightSize(options_, h.model_w().lp_, h.basis_) ==
+        debugBasisRightSize(options_, h.model_r().lp_, h.basis_) ==
             HighsDebugStatus::kLogicalError)
       error = true;
     if (h.solution_.value_valid &&
-        debugHighsSolution("Return from optimizeModel()", options_, h.model_w(),
+        debugHighsSolution("Return from optimizeModel()", options_, h.model_r(),
                            h.solution_, h.basis_, h.model_status_,
                            h.info_) == HighsDebugStatus::kLogicalError)
       error = true;
-    if (debugInfo(options_, h.model_w().lp_, h.basis_, h.solution_, h.info_,
+    if (debugInfo(options_, h.model_r().lp_, h.basis_, h.solution_, h.info_,
                   h.model_status_) == HighsDebugStatus::kLogicalError)
       error = true;
     return error;
@@ -1645,7 +1650,7 @@ HighsStatus Highs::checkOptimality(const std::string& solver_type) {
 }
 
 HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
-  assert(model_w().isMip() && solution_.value_valid);
+  assert(model_r().isMip() && solution_.value_valid);
   HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status = HighsStatus(highs_rs_complete_solution(&v));
@@ -1655,7 +1660,7 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
 
 HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
                                        double* dual_ray_value) {
-  assert(!model_w().lp_.is_moved_);
+  assert(!model_r().lp_.is_moved_);
   HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status = HighsStatus(highs_rs_get_ray(
@@ -1666,7 +1671,7 @@ HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
 
 HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
                                          double* primal_ray_value) {
-  assert(!model_w().lp_.is_moved_);
+  assert(!model_r().lp_.is_moved_);
   HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status = HighsStatus(highs_rs_get_ray(
@@ -1949,8 +1954,8 @@ HighsStatus Highs::getBasisTransposeSolve(const double* Xrhs,
 HighsStatus Highs::getReducedRow(const HighsInt row, double* row_vector,
                                  HighsInt* row_num_nz, HighsInt* row_indices,
                                  const double* pass_basis_inverse_row_vector) {
-  HighsLp& lp = model_w().lp_;
-  lp.ensureColwise();
+  if (!model_r().lp_.a_matrix_.isColwise()) model_w().lp_.ensureColwise();
+  const HighsLp& lp = model_r().lp_;
   if (checkQuery(options_, "getReducedRow",
                  row_vector ? nullptr : "row_vector", "Row", row, lp.num_row_,
                  ekk_instance_.status_.has_invert) != HighsStatus::kOk)
@@ -1978,8 +1983,8 @@ HighsStatus Highs::getReducedRow(const HighsInt row, double* row_vector,
 HighsStatus Highs::getReducedColumn(const HighsInt col, double* col_vector,
                                     HighsInt* col_num_nz,
                                     HighsInt* col_indices) {
-  HighsLp& lp = model_w().lp_;
-  lp.ensureColwise();
+  if (!model_r().lp_.a_matrix_.isColwise()) model_w().lp_.ensureColwise();
+  const HighsLp& lp = model_r().lp_;
   if (checkQuery(options_, "getReducedColumn",
                  col_vector ? nullptr : "col_vector", "Column", col,
                  lp.num_col_,
@@ -1998,7 +2003,7 @@ HighsStatus Highs::basisSolveInterface(const vector<double>& rhs,
                                        HighsInt* solution_num_nz,
                                        HighsInt* solution_indices,
                                        bool transpose) {
-  HighsLp& lp = model_w().lp_;
+  const HighsLp& lp = model_r().lp_;
   const HighsInt num_row = lp.num_row_;
   if (num_row == 0) return HighsStatus::kOk;
   assert(ekk_instance_.status_.has_invert);
@@ -2046,9 +2051,10 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
     solution_.col_value = solution.col_value;
     if (lpNumRow() > 0) {
       solution_.row_value.resize(lpNumRow());
-      model_w().lp_.a_matrix_.ensureColwise();
+      if (!model_r().lp_.a_matrix_.isColwise())
+        model_w().lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
-          options_.log_options, calculateRowValuesQuad(model_w().lp_, solution_),
+          options_.log_options, calculateRowValuesQuad(model_r().lp_, solution_),
           return_status, "calculateRowValuesQuad");
       if (return_status == HighsStatus::kError) return return_status;
     }
@@ -2058,9 +2064,10 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
     solution_.row_dual = solution.row_dual;
     if (lpNumCol() > 0) {
       solution_.col_dual.resize(lpNumCol());
-      model_w().lp_.a_matrix_.ensureColwise();
+      if (!model_r().lp_.a_matrix_.isColwise())
+        model_w().lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
-          options_.log_options, calculateColDualsQuad(model_w().lp_, solution_),
+          options_.log_options, calculateColDualsQuad(model_r().lp_, solution_),
           return_status, "calculateColDuals");
       if (return_status == HighsStatus::kError) return return_status;
     }
@@ -2077,7 +2084,7 @@ HighsStatus Highs::setSolution(const HighsInt num_entries,
       HighsStatus(highs_rs_check_sparse_solution(
           &log, {const_cast<HighsInt*>(index), size_t(num_entries)},
           {const_cast<double*>(value), size_t(num_entries)},
-          rsMut(model_w().lp_.col_lower_), rsMut(model_w().lp_.col_upper_),
+          rsMut(model_r().lp_.col_lower_), rsMut(model_r().lp_.col_upper_),
           options_.primal_feasibility_tolerance));
   if (return_status == HighsStatus::kError) return return_status;
   HighsSolution new_solution;
@@ -2099,7 +2106,7 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
   HighsStatus return_status = HighsStatus::kOk;
   if (!data.user_objective_scale && !data.user_bound_scale)
     return HighsStatus::kOk;
-  const HighsLp& lp = this->model_w().lp_;
+  const HighsLp& lp = this->model_r().lp_;
   const bool primal = info_.primal_solution_status != kSolutionStatusNone;
   const bool dual = info_.dual_solution_status != kSolutionStatusNone;
   auto part = [](std::vector<double>& v, const bool use, const HighsInt n) {
@@ -2114,8 +2121,8 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
       info_.objective_function_value, lp.offset_);
   if (!update_kkt) return return_status;
   info_.objective_function_value = objective_function_value;
-  getKktFailures(options_, model_w(), solution_, basis_, info_);
-  return reportKktFailures(model_w().lp_, options_, info_,
+  getKktFailures(options_, model_r(), solution_, basis_, info_);
+  return reportKktFailures(model_r().lp_, options_, info_,
                            "After removing user scaling")
              ? HighsStatus::kWarning
              : return_status;
@@ -2215,7 +2222,7 @@ void Highs::restoreInfCost(HighsStatus& return_status) {
 }
 
 HighsStatus Highs::basisForSolution() {
-  HighsLp& lp = model_w().lp_;
+  const HighsLp& lp = model_r().lp_;
   assert(!lp.isMip() || options_.solve_relaxation);
   assert(solution_.value_valid);
   invalidateBasis();

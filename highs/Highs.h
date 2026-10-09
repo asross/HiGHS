@@ -1476,8 +1476,8 @@ class Highs {
   }
   void writeAllClocks() { this->timer_.writeAllClocks(); }
   HighsStatus clearModelNames() {
-    this->model_w().lp_.col_names_.clear();
-    this->model_w().lp_.row_names_.clear();
+    this->lpCpp().col_names_.clear();
+    this->lpCpp().row_names_.clear();
     return HighsStatus::kOk;
   }
 

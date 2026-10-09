@@ -750,7 +750,7 @@ HighsStatus Highs::passLinearObjectives(
 
 HighsStatus Highs::addLinearObjective(
     const HighsLinearObjective& linear_objective, const HighsInt iObj) {
-  if (model_w().isQp()) {
+  if (model_r().isQp()) {
     highsLogUser(options_.log_options, HighsLogType::kError,
                  "Cannot define additional linear objective for QP\n");
     return HighsStatus::kError;
@@ -1200,8 +1200,8 @@ HighsStatus Highs::optimizeHighs() {
 
 HighsStatus Highs::optimizeLp() {
   // Solve what's in the HighsLp instance Highs::model_.lp_
-  assert(!this->model_w().isQp());
-  assert(!this->model_w().lp_.hasSemiVariables());
+  assert(!this->model_r().isQp());
+  assert(!this->model_r().lp_.hasSemiVariables());
   assert(!this->multi_linear_objective_.size());
   return this->calledOptimizeModel();
 }
@@ -2207,7 +2207,7 @@ HighsStatus Highs::getDualRaySparse(bool& has_dual_ray,
                                     HVector& row_ep_buffer) {
   has_dual_ray = ekk_instance_.dualRayIndex() != kNoRayIndex;
   if (has_dual_ray) {
-    ekk_instance_.setNlaPointersForLpAndScale(model_w().lp_);
+    ekk_instance_.setNlaPointersForLpAndScale(model_r().lp_);
     row_ep_buffer.clear();
     row_ep_buffer.count = 1;
     row_ep_buffer.packFlag = true;
@@ -2231,7 +2231,7 @@ HighsStatus Highs::getDualUnboundednessDirection(
     if (status != HighsStatus::kOk || !has_dual_unboundedness_direction)
       return HighsStatus::kError;
     std::vector<double> dual_unboundedness_direction;
-    this->model_w().lp_.a_matrix_.productTransposeQuad(
+    this->model_r().lp_.a_matrix_.productTransposeQuad(
         dual_unboundedness_direction, dual_ray_value);
     for (HighsInt iCol = 0; iCol < lpNumCol(); iCol++)
       dual_unboundedness_direction_value[iCol] =
@@ -2331,7 +2331,7 @@ HighsStatus Highs::getBasicVariables(HighsInt* basic_variables) {
 
 HighsStatus Highs::getBasisInverseRowSparse(const HighsInt row,
                                             HVector& row_ep_buffer) {
-  ekk_instance_.setNlaPointersForLpAndScale(model_w().lp_);
+  ekk_instance_.setNlaPointersForLpAndScale(model_r().lp_);
   row_ep_buffer.clear();
   row_ep_buffer.count = 1;
   row_ep_buffer.index[0] = row;
@@ -2911,7 +2911,7 @@ HighsStatus Highs::getIterate() {
   HighsStatus call_status = ekk_instance_.getIterate();
   if (call_status != HighsStatus::kOk) return call_status;
   // Get the corresponding HiGHS basis
-  basis_ = ekk_instance_.getHighsBasis(model_w().lp_);
+  basis_ = ekk_instance_.getHighsBasis(model_r().lp_);
   // Clear everything else
   invalidateModelStatusSolutionAndInfo();
   return returnFromHighs(HighsStatus::kOk);
@@ -2983,7 +2983,7 @@ HighsStatus Highs::addRows(const HighsInt num_new_row,
 
 HighsStatus Highs::changeObjectiveSense(const ObjSense sense) {
   if ((sense == ObjSense::kMinimize) !=
-      (model_w().lp_.sense_ == ObjSense::kMinimize)) {
+      (model_r().lp_.sense_ == ObjSense::kMinimize)) {
     model_w().lp_.sense_ = sense;
     // Nontrivial change
     clearDerivedModelProperties();
@@ -2994,7 +2994,7 @@ HighsStatus Highs::changeObjectiveSense(const ObjSense sense) {
 
 HighsStatus Highs::changeObjectiveOffset(const double offset) {
   // Update the objective value
-  info_.objective_function_value += (offset - model_w().lp_.offset_);
+  info_.objective_function_value += (offset - model_r().lp_.offset_);
   model_w().lp_.offset_ = offset;
   presolved_model_.lp_.offset_ += offset;
   return returnFromHighs(HighsStatus::kOk);
@@ -3730,7 +3730,7 @@ HighsStatus Highs::writeSolution(const std::string& filename,
   return_status = interpretCallStatus(options_.log_options, call_status,
                                       return_status, "openWriteFile");
   if (return_status == HighsStatus::kError) return return_status;
-  call_status = normaliseNames(this->options_.log_options, this->model_w().lp_);
+  call_status = normaliseNames(this->options_.log_options, this->lpCpp());
   return_status = interpretCallStatus(options_.log_options, call_status,
                                       return_status, "normaliseNames");
   assert(call_status != HighsStatus::kError);
@@ -3739,16 +3739,16 @@ HighsStatus Highs::writeSolution(const std::string& filename,
   if (filename != "")
     highsLogUser(options_.log_options, HighsLogType::kInfo,
                  "Writing the solution to %s\n", filename.c_str());
-  writeSolutionFile(file, options_, model_w(), basis_, solution_, info_,
+  writeSolutionFile(file, options_, model_r(), basis_, solution_, info_,
                     model_status_, style);
   if (style == kSolutionStyleSparse)
     return returnFromWriteSolution(file, return_status);
   if (style == kSolutionStyleRaw) {
     fprintf(file, "\n# Basis\n");
-    writeBasisFile(file, options_, model_w().lp_, basis_);
+    writeBasisFile(file, options_, model_r().lp_, basis_);
   }
   if (options_.ranging == kHighsOnString) {
-    if (model_w().isMip() || model_w().isQp()) {
+    if (model_r().isMip() || model_r().isQp()) {
       highsLogUser(options_.log_options, HighsLogType::kError,
                    "Cannot determine ranging information for MIP or QP\n");
       return_status = HighsStatus::kError;
@@ -3760,7 +3760,7 @@ HighsStatus Highs::writeSolution(const std::string& filename,
     if (return_status == HighsStatus::kError)
       return returnFromWriteSolution(file, return_status);
     fprintf(file, "\n# Ranging\n");
-    writeRangingFile(file, model_w().lp_, info_.objective_function_value, basis_,
+    writeRangingFile(file, model_r().lp_, info_.objective_function_value, basis_,
                      solution_, ranging_, style);
   }
   return returnFromWriteSolution(file, return_status);
@@ -3768,7 +3768,7 @@ HighsStatus Highs::writeSolution(const std::string& filename,
 
 HighsStatus Highs::readSolution(const std::string& filename,
                                 const HighsInt style) {
-  return readSolutionFile(filename, options_, model_w().lp_, basis_, solution_,
+  return readSolutionFile(filename, options_, lpCpp(), basis_, solution_,
                           style);
 }
 
@@ -5274,7 +5274,7 @@ void Highs::initializeProfiling(HighsProfiling* profiling) {
   const bool mip = sub_solver && kHighsAnalysisLevelMipTime &
                                      this->options_.highs_analysis_level;
   profiling->initialize(this->timer_, sub_solver, mip);
-  profiling->model_name_ = this->model_w().lp_.model_name_;
+  profiling->model_name_ = this->model_r().lp_.model_name_;
   this->setProfiling(profiling);
 }
 

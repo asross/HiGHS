@@ -63,8 +63,9 @@ HighsStatus Highs::computeIllConditioning(
     HighsIllConditioning& ill_conditioning, const bool constraint,
     const HighsInt method, const double ill_conditioning_bound) {
   ill_conditioning.clear();
-  HighsLp& incumbent_lp = this->model_w().lp_;
-  incumbent_lp.a_matrix_.ensureColwise();
+  if (!this->model_r().lp_.a_matrix_.isColwise())
+    this->model_w().lp_.a_matrix_.ensureColwise();
+  const HighsLp& incumbent_lp = this->model_r().lp_;
   const std::vector<const char*> col_names =
       illCondNames(incumbent_lp.col_names_);
   const std::vector<const char*> row_names =

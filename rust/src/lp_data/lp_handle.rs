@@ -2823,6 +2823,12 @@ pub mod ffi {
         d.is_empty()
     }
 
+    /// HighsLp::exactResize of the model
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_exact_resize_model(p: *mut LpHandle) {
+        h(p).exact_resize_model();
+    }
+
     /// Whether the run rebuilt the model's matrix (an undualized LP's),
     /// which the Highs object takes back with the scale factors
     #[no_mangle]

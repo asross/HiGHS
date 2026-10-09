@@ -243,6 +243,7 @@ void highs_rs_lph_export_model(LpHandle* h, RsLpVec* lp, const char** name,
 bool highs_rs_lph_model_matches(LpHandle* h, const RsLp* lp, const char* name,
                                 size_t len);
 bool highs_rs_lph_take_matrix_back(LpHandle* h);
+void highs_rs_lph_exact_resize_model(LpHandle* h);
 void highs_rs_lph_ekk_clear(LpHandle* h);
 void highs_rs_lph_ekk_invalidate(LpHandle* h);
 void highs_rs_lph_update_status(LpHandle* h, int action);
