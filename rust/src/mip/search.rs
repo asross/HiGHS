@@ -147,20 +147,13 @@ pub struct CSearchFns {
     pub lp_resolve: unsafe extern "C" fn(*mut c_void) -> i32,
     /// the current LP relaxation (Rust; the fallback LP while one is swapped in)
     pub lp_rust: unsafe extern "C" fn(*mut c_void) -> *mut LpRelax,
-    /// whether the LP solver's model status is kObjectiveBound
-    pub lp_query: unsafe extern "C" fn(*mut c_void, i32, i32) -> bool,
-    /// 0 getSolution().col_value, 1 getSolution().col_dual, 2 the LP
-    /// solver's solution's col_value (data, length)
-    pub lp_solution: unsafe extern "C" fn(*mut c_void, i32, *mut i32) -> *const f64,
     /// storeBasis (get false, returns null) / getStoredBasis (get true)
     pub lp_store_basis: unsafe extern "C" fn(*mut c_void, bool) -> *mut c_void,
     /// setStoredBasis (taking the box)
     pub lp_set_stored_basis: unsafe extern "C" fn(*mut c_void, *mut c_void),
     pub lp_recover_basis: unsafe extern "C" fn(*mut c_void),
-    /// the number of rows of a basis box, and of the LP (0 numRows(), 1
-    /// getLp().num_row_)
+    /// the number of rows of a basis box
     pub basis_rows: unsafe extern "C" fn(*mut c_void) -> i32,
-    pub lp_rows: unsafe extern "C" fn(*mut c_void, i32) -> i32,
     pub lp_perform_aging: unsafe extern "C" fn(*mut c_void),
     pub lp_degenerate_duals: unsafe extern "C" fn(*mut c_void, f64),
     pub lp_degeneracy: unsafe extern "C" fn(*mut c_void) -> f64,
@@ -462,17 +455,25 @@ impl Search {
             2 => lp_relaxation::unscaled_dual_feasible(status),
             3 => status == lp_relaxation::INFEASIBLE,
             4 => status == lp_relaxation::OPTIMAL,
-            _ => cb!(self, lp_query, which, status),
+            _ => self.lp().lph().model_status() == crate::lp_data::run::MS_OBJECTIVE_BOUND,
         }
     }
     fn lp_objective(&self) -> f64 {
         self.lp().sh.objective
     }
+    /// The LP solution's column values (0) or duals (1)
     fn lp_solution(&self, which: i32) -> &[f64] {
-        let mut n = 0;
-        let p = cb!(self, lp_solution, which, &mut n);
-        // SAFETY: the LP's solution vector, unchanged while it is used
-        unsafe { crate::ffi::sl(p, n) }
+        let s = self.lp().lph().solution();
+        if which == 1 {
+            &s.col_dual
+        } else {
+            &s.col_value
+        }
+    }
+
+    /// The number of rows of the LP
+    fn lp_rows(&self) -> i32 {
+        self.lp().lph().model.num_row
     }
     fn frac_ints(&self) -> Vec<FracInt> {
         self.lp().frac.clone()
@@ -682,7 +683,7 @@ impl Search {
         if basis.is_some() {
             // SAFETY: a live basis box
             let rows = unsafe { ((*self.fns).basis_rows)(basis.p) };
-            if rows == cb!(self, lp_rows, 0) {
+            if rows == self.lp_rows() {
                 let p = basis.take().into_raw();
                 cb!(self, lp_set_stored_basis, p);
             }
@@ -1738,7 +1739,7 @@ impl Search {
         self.nodestack.last_mut().unwrap().domgchg_stack_pos = domchg_pos;
         let b = &self.nodestack.last().unwrap().node_basis;
         // SAFETY: a live basis box
-        if b.is_some() && unsafe { ((*self.fns).basis_rows)(b.p) } == cb!(self, lp_rows, 1) {
+        if b.is_some() && unsafe { ((*self.fns).basis_rows)(b.p) } == self.lp_rows() {
             let p = b.clone().take().into_raw();
             cb!(self, lp_set_stored_basis, p);
         }

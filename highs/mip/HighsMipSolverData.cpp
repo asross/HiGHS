@@ -187,7 +187,7 @@ double mipSetupOp(void* m, int which, void* w, int64_t i, double x) {
       d.getDomain().clearChangedCols();
       return 0;
     case 310:
-      d.getLp().getLpSolver().setOptionValue("presolve", kHighsOffString);
+      d.getLp().setLpOption("presolve", kHighsOffString);
       return 0;
     case 311:
       d.objectiveFunction.checkIntegrality(d.epsilon);
@@ -223,7 +223,7 @@ double mipSetupOp(void* m, int which, void* w, int64_t i, double x) {
       if (numCuts > 0) d.postSolveStack.appendCutsToModel(numCuts);
       auto integrality = std::move(d.presolvedModel.integrality_);
       double offset = d.presolvedModel.offset_;
-      d.presolvedModel = d.getLp().getLp();
+      d.presolvedModel = d.getLp().getLpCopy();
       d.presolvedModel.offset_ = offset;
       d.presolvedModel.integrality_ = std::move(integrality);
       return 0;
@@ -803,6 +803,46 @@ HighsModelStatus HighsMipSolverData::trivialHeuristics() {
 #endif  // HIGHS_RUST
 }
 
+#ifdef HIGHS_RUST
+// The IPM solve of the analytic centre, by an LP solver of the MIP
+// (rust/src/lp_data/lp_handle.rs; HiPO is not in this build)
+void HighsMipSolverData::startAnalyticCenterComputation(
+    const highs::parallel::TaskGroup& taskGroup) {
+  taskGroup.spawn([&]() {
+    // first check if the analytic centre computation should be cancelled, e.g.
+    // due to early return in the root node evaluation
+    if (skipAnalyticCenter) return;
+    HighsLpHandle ipm;
+    highs_rs::highs_rs_lph_set_profiling(ipm.p, mipsolver.profiling_);
+    rsLpSetOption(ipm.p, "output_flag", false);
+    // Don't use presolve - because this can lead to postsolve putting
+    // integer variables onto bounds. This is not just a "less good"
+    // AC. It can have implications leading to erroneous fixing of
+    // variables and a suboptimal solution declared as optimal.
+    rsLpSetOption(ipm.p, "presolve", kHighsOffString);
+    rsLpSetOption(ipm.p, "solver", kIpxString);
+    rsLpSetOption(ipm.p, "ipm_iteration_limit", HighsInt{200});
+    // not beyond the MIP's time limit
+    rsLpSetOption(ipm.p, "time_limit",
+                  std::max(0.0, mipsolver.options_mip_->time_limit -
+                                    mipsolver.timer_.read()));
+    rsLpSetOption(ipm.p, "run_crossover", kHighsOffString);
+    rsLpSetOption(ipm.p, "run_centring", true);
+    HighsLp lpmodel(*mipsolver.model_);
+    lpmodel.col_cost_.assign(lpmodel.num_col_, 0.0);
+    lpmodel.integrality_.clear();
+    rsLpPassModel(ipm.p, lpmodel);
+    if (mipsolver.profiling_) mipsolver.profiling_->start(kSubSolverIpxAc);
+    rsLpOptimize(ipm.p);
+    if (mipsolver.profiling_) mipsolver.profiling_->stop(kSubSolverIpxAc);
+    highs_rs::LphView v;
+    highs_rs::highs_rs_lph_view(ipm.p, &v);
+    if (v.n_col_value != mipsolver.numCol()) return;
+    analyticCenterStatus = HighsModelStatus(v.model_status);
+    highs_rs::highs_rs_mip_vecs_set(rsv_.p, 22, v.col_value, v.n_col_value);
+  });
+}
+#else
 void HighsMipSolverData::startAnalyticCenterComputation(
     const highs::parallel::TaskGroup& taskGroup) {
   taskGroup.spawn([&]() {
@@ -891,6 +931,8 @@ void HighsMipSolverData::startAnalyticCenterComputation(
 #endif
   });
 }
+
+#endif  // HIGHS_RUST
 
 #ifndef HIGHS_RUST
 void HighsMipSolverData::finishAnalyticCenterComputation(
@@ -2345,8 +2387,12 @@ bool HighsMipSolverData::rootSeparationRound(
   status = evaluateRootLp(worker);
   if (status == HighsLpRelaxation::Status::kInfeasible) return true;
 
+#ifdef HIGHS_RUST
+  const std::vector<double> solvals = getLp().lpColValueVec();
+#else
   const std::vector<double>& solvals =
       getLp().getLpSolver().getSolution().col_value;
+#endif
 
   if (mipsolver.submip || incumbent.empty()) {
     heuristics.randomizedRounding(worker, solvals);

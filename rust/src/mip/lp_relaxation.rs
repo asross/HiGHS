@@ -23,6 +23,10 @@ use super::pseudocost::Pseudocost;
 use super::search::FracInt;
 use crate::util::cdouble::CDouble;
 use crate::util::hash_table::HighsHashTable;
+use crate::ffi::CHVec;
+use crate::hvector::OwnedHVec;
+use crate::lp_data::lp_handle::LpHandle;
+use crate::lp_data::opts::OptValue;
 use crate::util::sparse_vector_sum::HighsSparseVectorSum;
 use std::ffi::c_void;
 
@@ -171,26 +175,16 @@ pub struct CSolveOut {
 /// The C++ side, called with the C++ HighsLpRelaxation
 #[repr(C)]
 pub struct CLpFns {
-    pub view: unsafe extern "C" fn(*mut c_void, *mut CLpView),
     pub mip: unsafe extern "C" fn(*mut c_void, *mut CLpMip),
     /// run() up to the solve's end (solver choice, IPM / race / simplex)
     pub solve: unsafe extern "C" fn(*mut c_void, *mut CSolveOut),
-    /// 0 clearSolver, 1 dual simplex with presolve, 2 presolve off, 3
-    /// recoverBasis, 4 the IPM basis after an iteration limit, 5 the
+    /// 3 recoverBasis, 4 the IPM basis after an iteration limit, 5 the
     /// warning of an unbounded LP without basis, 6 trySolution of an
     /// unbounded LP's point, 7 the warning of an unexpected status, 8 the
     /// "no dual ray" dev log, 9 the root basis for removeWorkerSpecificRows
     pub op: unsafe extern "C" fn(*mut c_void, i32),
     /// removeCuts' deleteRows(mask) with the basis kept, and the solve
     pub delete_rows: unsafe extern "C" fn(*mut c_void, *mut i32),
-    /// deleteRows(from, to)
-    pub delete_row_range: unsafe extern "C" fn(*mut c_void, i32, i32),
-    pub has_invert: unsafe extern "C" fn(*mut c_void) -> bool,
-    pub basic_index: unsafe extern "C" fn(*mut c_void) -> *const i32,
-    /// getBasisInverseRowSparse(row) into row_ep: (count, index, array)
-    pub basis_inverse_row: unsafe extern "C" fn(*mut c_void, i32, *mut i32, *mut *const i32, *mut *const f64),
-    /// getDualRaySparse into row_ep: has ray, (count, index, array)
-    pub dual_ray: unsafe extern "C" fn(*mut c_void, *mut bool, *mut i32, *mut *const i32, *mut *const f64),
     /// tightenCoefficients of a (global) domain
     pub tighten: unsafe extern "C" fn(*const c_void, *mut i32, *mut f64, i32, *mut f64),
     /// cliquetable.extractCliquesFromCut
@@ -232,6 +226,9 @@ pub struct LpShared {
 
 pub struct LpRelax {
     pub sh: LpShared,
+    /// The LP solver (owned; C++ and the dives write its solution
+    /// through the views, so it is reached through a raw pointer)
+    lph: *mut LpHandle,
     fns: *const CLpFns,
     ctx: *mut c_void,
     pub rows: Vec<LpRow>,
@@ -246,6 +243,16 @@ pub struct LpRelax {
     /// computeDualProof's outputs for the C++ callers
     pub out_inds: Vec<i32>,
     pub out_vals: Vec<f64>,
+    /// The basis inverse rows and dual rays (HighsLpRelaxation::row_ep;
+    /// it only grows)
+    row_ep: OwnedHVec,
+}
+
+impl Drop for LpRelax {
+    fn drop(&mut self) {
+        // SAFETY: from Box::into_raw in new
+        drop(unsafe { Box::from_raw(self.lph) });
+    }
 }
 
 /// std::min(a, b)
@@ -441,6 +448,7 @@ impl LpRelax {
                 numlpiters: 0,
                 avg_solve_iters: 0.0,
             },
+            lph: Box::into_raw(LpHandle::new()),
             fns,
             ctx,
             rows: Vec::new(),
@@ -454,6 +462,7 @@ impl LpRelax {
             max_num_fractional: 0,
             out_inds: Vec::new(),
             out_vals: Vec::new(),
+            row_ep: OwnedHVec::new(0),
         });
         s.sync();
         s
@@ -487,12 +496,54 @@ impl LpRelax {
         unsafe { &*self.fns }
     }
 
+    /// The LP solver
+    #[allow(clippy::mut_from_ref)]
+    pub fn lph(&self) -> &mut LpHandle {
+        // SAFETY: owned by this relaxation; its users do not hold a
+        // borrow of it across a call that changes it
+        unsafe { &mut *self.lph }
+    }
+
     /// The LP solver's current view
     pub fn lp(&self) -> LpBox {
-        // SAFETY: CLpView is plain data, filled by the callback
-        let mut v: Box<CLpView> = Box::new(unsafe { std::mem::zeroed() });
-        unsafe { (self.f().view)(self.ctx, &mut *v) };
-        LpBox(v)
+        let h = self.lph();
+        let m = &h.model;
+        let r = &h.lps.run;
+        let (s, b, info) = (&r.solution, &r.basis.b, &r.info);
+        let v = CLpView {
+            num_col: m.num_col,
+            num_row: m.num_row,
+            col_lower: m.col_lower.as_ptr(),
+            col_upper: m.col_upper.as_ptr(),
+            row_lower: m.row_lower.as_ptr(),
+            row_upper: m.row_upper.as_ptr(),
+            col_cost: m.col_cost.as_ptr(),
+            a_start: m.a.start.as_ptr(),
+            a_index: m.a.index.as_ptr(),
+            a_value: m.a.value.as_ptr(),
+            col_value: s.col_value.as_ptr() as *mut f64,
+            n_col_value: s.col_value.len() as i32,
+            col_dual: s.col_dual.as_ptr() as *mut f64,
+            n_col_dual: s.col_dual.len() as i32,
+            row_value: s.row_value.as_ptr(),
+            n_row_value: s.row_value.len() as i32,
+            row_dual: s.row_dual.as_ptr(),
+            n_row_dual: s.row_dual.len() as i32,
+            col_status: b.col_status.as_ptr(),
+            n_col_status: b.col_status.len() as i32,
+            row_status: b.row_status.as_ptr(),
+            n_row_status: b.row_status.len() as i32,
+            basis_valid: b.valid,
+            dual_valid: s.dual_valid,
+            basis_validity: info.basis_validity,
+            primal_solution_status: info.primal_solution_status,
+            simplex_iteration_count: info.simplex_iteration_count,
+            model_status: r.model_status,
+            max_primal_infeasibility: info.max_primal_infeasibility,
+            max_dual_infeasibility: info.max_dual_infeasibility,
+            dual_feasibility_tolerance: h.opts.dual_feasibility_tolerance,
+        };
+        LpBox(Box::new(v))
     }
 
     pub fn mip(&self) -> MipBox {
@@ -505,6 +556,35 @@ impl LpRelax {
     fn op(&self, which: i32) {
         // SAFETY: a callback of the C++ side
         unsafe { (self.f().op)(self.ctx, which) }
+    }
+
+    /// row_ep sized for the LP's rows (setupRowEp)
+    fn setup_row_ep(&mut self) {
+        let num_row = self.lph().model.num_row;
+        if self.row_ep.size < num_row {
+            self.row_ep = OwnedHVec::new(num_row);
+        }
+    }
+
+    /// getBasisInverseRowSparse(row) into row_ep: (count, index, array),
+    /// valid until row_ep's next use
+    fn basis_inverse_row(&mut self, row: i32) -> (i32, *const i32, *const f64) {
+        self.setup_row_ep();
+        let mut v = CHVec::of(&mut self.row_ep);
+        // SAFETY: the view of row_ep, which has num_row entries
+        unsafe { self.lph().basis_inverse_row_sparse(row, &mut v) };
+        v.store_into(&mut self.row_ep);
+        (self.row_ep.count, self.row_ep.index.as_ptr(), self.row_ep.array.as_ptr())
+    }
+
+    /// getDualRaySparse into row_ep: has ray, (count, index, array)
+    fn dual_ray(&mut self) -> (bool, i32, *const i32, *const f64) {
+        self.setup_row_ep();
+        let mut v = CHVec::of(&mut self.row_ep);
+        // SAFETY: as basis_inverse_row
+        let has = unsafe { self.lph().dual_ray_sparse(&mut v) };
+        v.store_into(&mut self.row_ep);
+        (has, self.row_ep.count, self.row_ep.index.as_ptr(), self.row_ep.array.as_ptr())
     }
 
     /// loadModel's rows
@@ -601,8 +681,7 @@ impl LpRelax {
         let m = mb.get();
         let nmodel = m.m.num_model_row;
         let nlprows = self.lp().get().v.num_row;
-        // SAFETY: a callback of the C++ side
-        unsafe { (self.f().delete_row_range)(self.ctx, nmodel, nlprows - 1) };
+        self.lph().delete_rows_interval(nmodel, nlprows - 1);
         for i in nmodel as usize..nlprows as usize {
             if self.rows[i].origin == ROW_CUT {
                 self.lp_cut_removed(&m, &self.rows[i]);
@@ -761,8 +840,7 @@ impl LpRelax {
     /// computeBasicDegenerateDuals; `args` are the C++ arguments that the
     /// reconvergence callback needs
     pub fn compute_basic_degenerate_duals(&mut self, threshold: f64, getdualproof: bool) {
-        // SAFETY: callbacks of the C++ side
-        if !unsafe { (self.f().has_invert)(self.ctx) } {
+        if !self.lph().has_invert() {
             return;
         }
         let mb = self.mip();
@@ -806,8 +884,9 @@ impl LpRelax {
         }
         let num_col = lp.v.num_col;
         self.ensure_row_ap(num_col);
-        // SAFETY: the basic index array has num_row entries
-        let basic = unsafe { sl((self.f().basic_index)(self.ctx), lp.v.num_row) };
+        // SAFETY: the basic index array has num_row entries, and is not
+        // changed by the basis inverse rows
+        let basic = unsafe { sl(self.lph().basic_index().as_ptr(), lp.v.num_row) };
         let mut row = 0usize;
         while k > 0 {
             let var = basic[row];
@@ -820,11 +899,9 @@ impl LpRelax {
                 continue;
             }
             k -= 1;
-            let (mut cnt, mut idx, mut arr) = (0, std::ptr::null(), std::ptr::null());
-            // SAFETY: the C++ fills its HVector and returns its arrays,
-            // valid until the next call; the LP view stays valid (the
-            // solve's data does not change)
-            unsafe { (self.f().basis_inverse_row)(self.ctx, row as i32 - 1, &mut cnt, &mut idx, &mut arr) };
+            // the LP view stays valid (the solve's data does not change)
+            let (cnt, idx, arr) = self.basis_inverse_row(row as i32 - 1);
+            // SAFETY: row_ep's arrays, valid until its next use
             let ep_index = unsafe { sl(idx, cnt) };
             let ep = |r: i32| unsafe { *arr.add(r as usize) };
 
@@ -1048,9 +1125,7 @@ impl LpRelax {
         let num_col = lb.get().v.num_col;
         drop(lb);
         self.ensure_row_ap(num_col);
-        let (mut has, mut cnt, mut idx, mut arr) = (false, 0, std::ptr::null(), std::ptr::null());
-        // SAFETY: the C++ fills its HVector and returns its arrays
-        unsafe { (self.f().dual_ray)(self.ctx, &mut has, &mut cnt, &mut idx, &mut arr) };
+        let (has, cnt, idx, arr) = self.dual_ray();
         self.sh.has_proof = has;
         if !has {
             self.op(8);
@@ -1204,11 +1279,14 @@ impl LpRelax {
         }
         if out.callstatus == CALL_ERROR {
             drop(lb);
-            self.op(0);
+            self.lph().clear_solver();
             if resolve_on_error {
-                self.op(1);
+                // still an error: now try to solve with presolve from
+                // scratch (kSimplexStrategyDual)
+                self.lph().set_option("simplex_strategy", OptValue::Int(1));
+                self.lph().set_option("presolve", OptValue::Str(b"on"));
                 let r = self.run(false);
-                self.op(2);
+                self.lph().set_option("presolve", OptValue::Str(b"off"));
                 return r;
             }
             self.op(3);
@@ -1497,6 +1575,15 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_lprelax_shared(p: *mut LpRelax) -> *mut LpShared {
         &mut (*p).sh
+    }
+
+    /// The LP solver (it lives as long as the LP relaxation)
+    ///
+    /// # Safety
+    /// live `p`
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lprelax_lp(p: *mut LpRelax) -> *mut LpHandle {
+        (*p).lph
     }
 
     /// 0 loadModel(i), 1 removeObsoleteRows(notify = i), 2

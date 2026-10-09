@@ -118,16 +118,16 @@ pub struct PresolveData {
 /// The option values of the LP presolve (HPresolveRust.cpp:
 /// rsLpPresolveOptions)
 #[repr(C)]
-struct PresolveOptions {
-    o: Options,
+pub(crate) struct PresolveOptions {
+    pub(crate) o: Options,
     /// presolve_reduction_limit, -1 for none
-    reduction_limit: i32,
+    pub(crate) reduction_limit: i32,
 }
 
 /// The arguments of the dependent equations' factorization
 /// (HighsRunRust.cpp: kDependentEquations)
 #[repr(C)]
-struct DependentEquations {
+pub(crate) struct DependentEquations {
     num_col: usize,
     num_row: i32,
     start: *const i32,
@@ -295,6 +295,39 @@ extern "C" fn h_dependent_equations(
         *out = d.var_with_no_pivot;
     }
     d.build_return
+}
+
+/// rsDependentEquations on Rust data: the factorization of the dependent
+/// equations' columns (HFactor::setup with the default pivot threshold
+/// and tolerance, the time limit, build), timed by `read` (the run clock);
+/// the variables with no pivot go to `ints`, which `p` then views
+///
+/// # Safety
+/// `p` a DependentEquations whose arrays are valid
+pub(crate) unsafe fn dependent_equations(p: *mut c_void, ints: &mut Vec<i32>, read: impl Fn() -> f64) {
+    use crate::factor::{AMatrix, HFactor};
+    let d = &mut *(p as *mut DependentEquations);
+    let num_col = d.num_col as i32;
+    ints.clear();
+    if num_col > 0 {
+        let start = sl(d.start, d.num_col + 1);
+        let a = AMatrix { num_col, start, index: sl(d.index, d.nnz), value: sl(d.value, d.nnz) };
+        let mut factor = HFactor::default();
+        // kUpdateMethodFt
+        factor.setup(num_col, d.num_row, num_col, start, 1);
+        let mut basic_index: Vec<i32> = (0..num_col).collect();
+        // HFactor::setTimeLimit
+        let time_limit = if d.time_limit < 0.0 { f64::INFINITY } else { d.time_limit };
+        d.time_taken = -read();
+        // kDefaultPivotThreshold, kDefaultPivotTolerance
+        d.build_return = factor.build_with_refactor_info(0.1, 1e-10, time_limit, &a, &mut basic_index);
+        d.time_taken += read();
+        ints.extend_from_slice(&factor.var_with_no_pivot);
+    } else {
+        d.time_taken = 0.0;
+        d.build_return = 0;
+    }
+    d.var_with_no_pivot = CSlice { ptr: ints.as_ptr(), len: ints.len() };
 }
 
 // The MIP callbacks: never called for an LP

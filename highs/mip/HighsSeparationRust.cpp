@@ -53,9 +53,6 @@ struct SepaHost {
   int64_t (*num_nodes_down)(void*, HighsInt);
   int64_t (*num_nodes_up)(void*, HighsInt);
   int64_t (*num_lp_iterations)(void*);
-  bool (*basis_inverse_row)(void*, HighsInt, HighsInt*, const HighsInt**,
-                            const double**);
-  const double* (*dual_edge_weights)(void*);
 };
 
 // rust/src/mip/cuts/round.rs: CSepaLp
@@ -83,6 +80,7 @@ struct CSepaLp {
   bool parallel_lock_active;
   HighsInt mip_pool_soft_limit;
   SepaHost host;
+  LpHandle* lph;
 };
 
 // rust/src/mip/cuts/ffi.rs: CConflict
@@ -130,8 +128,6 @@ struct HighsSepaRoundCtx {
   HighsImplications* implications;
   const HighsMipSolver* mipsolver;
   HighsCutPool* cutpool = nullptr;
-  Highs* lpsolver = nullptr;
-  HVector rowEp;
   const HighsDomain* localdom = nullptr;
 };
 
@@ -147,8 +143,9 @@ bool sepaCbDomInfeasible(void* p) { return sepaCtxOf(p).globaldom->infeasible();
 HighsInt sepaCbBestVub(void* p, HighsInt col, double* bound,
                    highs_rs::SepaVarBound* vb) {
   HighsSepaRoundCtx& c = sepaCtxOf(p);
-  auto best = c.implications->getBestVub(
-      col, c.lp->getLpSolver().getSolution(), *bound, *c.globaldom);
+  const highs_rs::LphView v = c.lp->lpView();
+  auto best = c.implications->getBestVb(false, col, v.col_value, v.col_dual,
+                                        v.n_col_value, *bound, *c.globaldom);
   vb->coef = best.second.coef;
   vb->constant = best.second.constant;
   return best.first;
@@ -157,8 +154,9 @@ HighsInt sepaCbBestVub(void* p, HighsInt col, double* bound,
 HighsInt sepaCbBestVlb(void* p, HighsInt col, double* bound,
                    highs_rs::SepaVarBound* vb) {
   HighsSepaRoundCtx& c = sepaCtxOf(p);
-  auto best = c.implications->getBestVlb(
-      col, c.lp->getLpSolver().getSolution(), *bound, *c.globaldom);
+  const highs_rs::LphView v = c.lp->lpView();
+  auto best = c.implications->getBestVb(true, col, v.col_value, v.col_dual,
+                                        v.n_col_value, *bound, *c.globaldom);
   vb->coef = best.second.coef;
   vb->constant = best.second.constant;
   return best.first;
@@ -205,22 +203,6 @@ int64_t sepaCbNumLpIterations(void* p) {
   return sepaCtxOf(p).lp->getNumLpIterations();
 }
 
-bool sepaCbBasisInverseRow(void* p, HighsInt basisIndex, HighsInt* count,
-                       const HighsInt** index, const double** array) {
-  HighsSepaRoundCtx& c = sepaCtxOf(p);
-  if (c.lpsolver->getBasisInverseRowSparse(basisIndex, c.rowEp) !=
-      HighsStatus::kOk)
-    return false;
-  *count = c.rowEp.count;
-  *index = c.rowEp.index.data();
-  *array = c.rowEp.array.data();
-  return true;
-}
-
-const double* sepaCbDualEdgeWeights(void* p) {
-  return sepaCtxOf(p).lpsolver->getDualEdgeWeights();
-}
-
 highs_rs::SepaHost sepaMakeHost(HighsSepaRoundCtx* ctx) {
   return highs_rs::SepaHost{ctx,
                         sepaCbCleanupVarbounds,
@@ -235,9 +217,7 @@ highs_rs::SepaHost sepaMakeHost(HighsSepaRoundCtx* ctx) {
                         sepaCbNumAvailableCuts,
                         sepaCbNumNodesDown,
                         sepaCbNumNodesUp,
-                        sepaCbNumLpIterations,
-                        sepaCbBasisInverseRow,
-                        sepaCbDualEdgeWeights};
+                        sepaCbNumLpIterations};
 }
 
 /// HighsCutGeneration's seed: random_seed + LP iterations + cuts in the pool
@@ -254,26 +234,25 @@ HighsTransformedLp::HighsTransformedLp(const HighsLpRelaxation& lprelaxation,
   assert(lprelaxation.scaledOptimal(lprelaxation.getStatus()));
   const HighsMipSolver& mipsolver = implications.mipsolver;
   const HighsMipSolverData& mipdata = *mipsolver.mipdata_;
-  const HighsLp& lp = lprelaxation.getLp();
-  const HighsSolution& sol = lprelaxation.getLpSolver().getSolution();
+  const highs_rs::LphView lp = lprelaxation.lpView();
   ctx_->lp = &lprelaxation;
   ctx_->globaldom = &globaldom;
   ctx_->implications = &implications;
   ctx_->mipsolver = &mipsolver;
 
   highs_rs::CSepaLp c;
-  c.num_col = lp.num_col_;
-  c.num_row = lp.num_row_;
+  c.num_col = lp.num_col;
+  c.num_row = lp.num_row;
   c.col_lower = globaldom.col_lower_.data();
   c.col_upper = globaldom.col_upper_.data();
-  c.col_value = sol.col_value.data();
-  c.row_value = sol.row_value.data();
-  c.row_dual = sol.row_dual.data();
-  c.row_lower = lp.row_lower_.data();
-  c.row_upper = lp.row_upper_.data();
-  c.a_start = lp.a_matrix_.start_.data();
-  c.a_index = lp.a_matrix_.index_.data();
-  c.a_value = lp.a_matrix_.value_.data();
+  c.col_value = lp.col_value;
+  c.row_value = lp.row_value;
+  c.row_dual = lp.row_dual;
+  c.row_lower = lp.row_lower;
+  c.row_upper = lp.row_upper;
+  c.a_start = lp.a_start;
+  c.a_index = lp.a_index;
+  c.a_value = lp.a_value;
   c.integrality =
       reinterpret_cast<const uint8_t*>(mipsolver.model_->integrality_.data());
   c.continuous_cols = mipdata.continuous_cols.data();
@@ -286,7 +265,7 @@ HighsTransformedLp::HighsTransformedLp(const HighsLpRelaxation& lprelaxation,
   c.parallel_lock_active = mipdata.parallelLockActive();
   c.mip_pool_soft_limit = mipsolver.options_mip_->mip_pool_soft_limit;
   c.host = sepaMakeHost(ctx_.get());
-  assert(lp.a_matrix_.isColwise());
+  c.lph = lprelaxation.lpHandle();
   rs_ = highs_rs::highs_rs_sepa_round_new(&c);
 }
 
@@ -325,17 +304,12 @@ void HighsTableauSeparator::separateLpSolution(HighsLpRelaxation& lpRelaxation,
                                                HighsLpAggregator&,
                                                HighsTransformedLp& transLp,
                                                HighsCutPool& cutpool) {
-  Highs& lpSolver = lpRelaxation.getLpSolver();
-  if (!lpSolver.hasInvert()) return;
+  if (!lpRelaxation.lpHasInvert()) return;
   const HighsMipSolverData& mipdata = *lpRelaxation.getMipSolver().mipdata_;
   highs_rs::SepaRound* r = transLp.rust(cutpool);
-  HighsSepaRoundCtx& ctx = transLp.ctx();
-  ctx.lpsolver = &lpSolver;
-  if (ctx.rowEp.size != lpRelaxation.numRows())
-    ctx.rowEp.setup(lpRelaxation.numRows());
   highs_rs::highs_rs_tableau_separate(
       rs_, r, sepaCutGenSeed(lpRelaxation, cutpool), getNumCalls(),
-      lpSolver.getBasicVariablesArray(),
+      lpRelaxation.lpBasicIndex(),
       mipdata.total_lp_iterations - mipdata.heuristic_lp_iterations);
 }
 

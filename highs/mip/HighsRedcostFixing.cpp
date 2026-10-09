@@ -128,7 +128,7 @@ void HighsRedcostFixing::propagateRedCost(const HighsMipSolver& mipsolver,
   r.global = &global;
   r.integral_cols = mipdata.integral_cols.data();
   r.num_integral = mipdata.integral_cols.size();
-  r.redcost = lp.getSolution().col_dual.data();
+  r.redcost = lp.lpColDual().data();
   r.lp_objective = lp.getObjective();
   r.upper_limit = upper_limit;
   r.feastol = mipdata.feastol;
@@ -143,6 +143,12 @@ void HighsRedcostFixing::propagateRedCost(const HighsMipSolver& mipsolver,
 void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
                                         const std::vector<double>& lpredcost,
                                         double lpobjective) {
+  addRootRedcost(mipsolver, lpredcost.data(), lpobjective);
+}
+
+void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
+                                        const double* lpredcost,
+                                        double lpobjective) {
   HighsMipSolverData& mipdata = *mipsolver.mipdata_;
   // Provided domains won't be used (only used for dual proof)
   mipdata.getLp().computeBasicDegenerateDuals(
@@ -152,7 +158,7 @@ void HighsRedcostFixing::addRootRedcost(const HighsMipSolver& mipsolver,
   highs_rs::highs_rs_redcost_add_root(
       rs_, mipsolver.numCol(), mipdata.integral_cols.data(),
       mipdata.integral_cols.size(), dom.col_lower_.data(),
-      dom.col_upper_.data(), lpredcost.data(), lpobjective, mipdata.feastol,
+      dom.col_upper_.data(), lpredcost, lpobjective, mipdata.feastol,
       mipdata.lower_bound);
 }
 #else

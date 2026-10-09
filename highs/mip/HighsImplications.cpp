@@ -1109,33 +1109,40 @@ void HighsImplications::columnTransformed(HighsInt col, double scale,
   highs_rs::highs_rs_implics_column_transformed(rs_, col, scale, constant);
 }
 
-static std::pair<HighsInt, HighsImplications::VarBound> implicsBestVb(
-    const HighsImplications& self, highs_rs::Implications* rs, bool vlb,
-    HighsInt col, const HighsSolution& lpSolution, double& bound,
-    const HighsDomain& globaldom) {
-  highs_rs::ImpCtx ctx{const_cast<HighsImplications*>(&self), &self.mipsolver,
+std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVb(
+    bool vlb, HighsInt col, const double* col_value, const double* col_dual,
+    size_t n, double& bound, const HighsDomain& globaldom) const {
+  highs_rs::ImpCtx ctx{const_cast<HighsImplications*>(this), &mipsolver,
                        nullptr};
   highs_rs::ImplicsHost h = highs_rs::implicsHost(ctx);
   highs_rs::CliqueDom d =
       highs_rs::cliqueDom(const_cast<HighsDomain&>(globaldom));
-  assert(lpSolution.col_dual.size() >= lpSolution.col_value.size());
   highs_rs::ImplicsVarBound vb;
   HighsInt c = highs_rs::highs_rs_implics_best_vb(
-      rs, vlb, &h, &d, col, lpSolution.col_value.data(),
-      lpSolution.col_dual.data(), lpSolution.col_value.size(), &bound, &vb);
+      rs_, vlb, &h, &d, col, col_value, col_dual, n, &bound, &vb);
   return {c, HighsImplications::VarBound{vb.coef, vb.constant}};
+}
+
+static std::pair<HighsInt, HighsImplications::VarBound> implicsBestVb(
+    const HighsImplications& self, bool vlb, HighsInt col,
+    const HighsSolution& lpSolution, double& bound,
+    const HighsDomain& globaldom) {
+  assert(lpSolution.col_dual.size() >= lpSolution.col_value.size());
+  return self.getBestVb(vlb, col, lpSolution.col_value.data(),
+                        lpSolution.col_dual.data(),
+                        lpSolution.col_value.size(), bound, globaldom);
 }
 
 std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVub(
     HighsInt col, const HighsSolution& lpSolution, double& bestUb,
     const HighsDomain& globaldom) const {
-  return implicsBestVb(*this, rs_, false, col, lpSolution, bestUb, globaldom);
+  return implicsBestVb(*this, false, col, lpSolution, bestUb, globaldom);
 }
 
 std::pair<HighsInt, HighsImplications::VarBound> HighsImplications::getBestVlb(
     HighsInt col, const HighsSolution& lpSolution, double& bestLb,
     const HighsDomain& globaldom) const {
-  return implicsBestVb(*this, rs_, true, col, lpSolution, bestLb, globaldom);
+  return implicsBestVb(*this, true, col, lpSolution, bestLb, globaldom);
 }
 
 bool HighsImplications::runProbing(HighsInt col, HighsInt& numReductions) {

@@ -212,7 +212,7 @@ void HighsSearch::addBoundExceedingConflict() {
 
 void HighsSearch::addInfeasibleConflict() {
   double rhs;
-  if (lp->getLpSolver().getModelStatus() == HighsModelStatus::kObjectiveBound)
+  if (lp->getLpModelStatus() == HighsModelStatus::kObjectiveBound)
     lp->performAging();
 
   if (lp->computeDualInfProof(getDomain(), inds, vals, rhs)) {
@@ -858,12 +858,22 @@ void HighsSearch::resetLocalDomain() {
   localdom = getDomain();
 
 #ifndef NDEBUG
+#ifdef HIGHS_RUST
+  const highs_rs::LphView lpv = lp->lpView();
+  for (HighsInt i = 0; i != mipsolver.numCol(); ++i) {
+    assert(lpv.col_lower[i] == localdom.col_lower_[i] ||
+           mipsolver.isColContinuous(i));
+    assert(lpv.col_upper[i] == localdom.col_upper_[i] ||
+           mipsolver.isColContinuous(i));
+  }
+#else
   for (HighsInt i = 0; i != mipsolver.numCol(); ++i) {
     assert(lp->getLpSolver().getLp().col_lower_[i] == localdom.col_lower_[i] ||
            mipsolver.isColContinuous(i));
     assert(lp->getLpSolver().getLp().col_upper_[i] == localdom.col_upper_[i] ||
            mipsolver.isColContinuous(i));
   }
+#endif
 #endif
 }
 
@@ -2111,13 +2121,10 @@ struct SearchFns {
   void (*lp_set_objective_limit)(void*, double);
   int (*lp_resolve)(void*);
   highs_rs::LpRelax* (*lp_rust)(void*);
-  bool (*lp_query)(void*, int, int);
-  const double* (*lp_solution)(void*, int, HighsInt*);
   void* (*lp_store_basis)(void*, bool);
   void (*lp_set_stored_basis)(void*, void*);
   void (*lp_recover_basis)(void*);
   HighsInt (*basis_rows)(void*);
-  HighsInt (*lp_rows)(void*, int);
   void (*lp_perform_aging)(void*);
   void (*lp_degenerate_duals)(void*, double);
   double (*lp_degeneracy)(void*);
@@ -2250,18 +2257,6 @@ struct SearchAccess {
     return int(s(p).lp->resolveLp(&s(p).localdom));
   }
   static highs_rs::LpRelax* lpRust(void* p) { return s(p).lp->rust(); }
-  static bool lpQuery(void* p, int, int) {
-    return s(p).lp->getLpSolver().getModelStatus() ==
-           HighsModelStatus::kObjectiveBound;
-  }
-  static const double* lpSolution(void* p, int which, HighsInt* n) {
-    const std::vector<double>& v =
-        which == 0   ? s(p).lp->getSolution().col_value
-        : which == 1 ? s(p).lp->getSolution().col_dual
-                     : s(p).lp->getLpSolver().getSolution().col_value;
-    *n = v.size();
-    return v.data();
-  }
   static void* lpStoreBasis(void* p, bool get) {
     if (!get) {
       s(p).lp->storeBasis();
@@ -2275,9 +2270,6 @@ struct SearchAccess {
   static void lpRecoverBasis(void* p) { s(p).lp->recoverBasis(); }
   static HighsInt basisRows(void* b) {
     return unboxed<HighsBasis>(b)->row_status.size();
-  }
-  static HighsInt lpRows(void* p, int which) {
-    return which == 0 ? s(p).lp->numRows() : s(p).lp->getLp().num_row_;
   }
   static void lpPerformAging(void* p) { s(p).lp->performAging(); }
   static void lpDegenerateDuals(void* p, double threshold) {
@@ -2311,30 +2303,28 @@ struct SearchAccess {
         HighsLpRelaxation& lpCopy = *x.fallbackLp_;
         lpCopy.setProfiling(x.mipsolver.profiling_);
         lpCopy.loadModel();
-        lpCopy.getLpSolver().changeColsBounds(0, x.mipsolver.numCol() - 1,
-                                              x.localdom.col_lower_.data(),
-                                              x.localdom.col_upper_.data());
+        lpCopy.changeColsBounds(0, x.mipsolver.numCol() - 1,
+                                x.localdom.col_lower_.data(),
+                                x.localdom.col_upper_.data());
         // temporarily use the fresh LP for the search
         x.fallbackSwapped_ = x.lp;
         x.lp = &lpCopy;
         // reevaluate the node with LP presolve enabled
-        x.lp->getLpSolver().setOptionValue("presolve", kHighsOnString);
+        x.lp->setLpOption("presolve", kHighsOnString);
         break;
       }
       case 1:
         // LP still not solved, reevaluate with primal simplex
-        x.lp->getLpSolver().clearSolver();
-        x.lp->getLpSolver().setOptionValue("simplex_strategy",
-                                           kSimplexStrategyPrimal);
+        x.lp->clearLpSolver();
+        x.lp->setLpOption("simplex_strategy", HighsInt{kSimplexStrategyPrimal});
         break;
       case 2:
-        x.lp->getLpSolver().setOptionValue("simplex_strategy",
-                                           kSimplexStrategyDual);
+        x.lp->setLpOption("simplex_strategy", HighsInt{kSimplexStrategyDual});
         break;
       case 3:
         // LP still not solved, reevaluate with IPM instead of simplex
-        x.lp->getLpSolver().clearSolver();
-        x.lp->getLpSolver().setOptionValue("solver", "ipm");
+        x.lp->clearLpSolver();
+        x.lp->setLpOption("solver", "ipm");
         break;
       case 4:
         highsLogUser(x.mipsolver.options_mip_->log_options,
@@ -2477,13 +2467,10 @@ const SearchFns SearchAccess::fns = {
     lpSetObjectiveLimit,
     lpResolve,
     lpRust,
-    lpQuery,
-    lpSolution,
     lpStoreBasis,
     lpSetStoredBasis,
     lpRecoverBasis,
     basisRows,
-    lpRows,
     lpPerformAging,
     lpDegenerateDuals,
     lpDegeneracy,

@@ -1,6 +1,8 @@
 //! HighsTableauSeparator::separateLpSolution: cuts from rows of the simplex
 //! tableau of fractional basic integer variables.
 
+use crate::ffi::CHVec;
+use crate::hvector::OwnedHVec;
 use crate::util::fma::ClangFma;
 use super::cut_generation::CutGeneration;
 use super::round::{MinCpp, SepaRound};
@@ -113,8 +115,8 @@ impl TableauSeparator {
 
         let num_tries = self.num_tries;
         if fracvars.len() as i64 > max_tries {
-            // SAFETY: a C++ query; the weights have num_row entries
-            let edge_wt = unsafe { (lp.host.dual_edge_weights)(lp.host.ctx) };
+            // SAFETY: the LP solver's DSE weights (num_row entries), if any
+            let edge_wt = unsafe { (*lp.lph).dual_edge_weights() };
             if !edge_wt.is_null() {
                 let edge_wt = unsafe { std::slice::from_raw_parts(edge_wt, num_row) };
                 pdqsort(fracvars, |f1, f2| {
@@ -137,16 +139,18 @@ impl TableauSeparator {
         }
         self.num_tries += fracvars.len() as i64;
 
+        // the row vector of the round, sized for the LP's rows
+        if lp.row_ep.size != num_row as i32 {
+            lp.row_ep = OwnedHVec::new(num_row as i32);
+        }
         for fv in fracvars.iter_mut() {
-            let (mut count, mut index, mut array) = (0i32, std::ptr::null(), std::ptr::null());
-            // SAFETY: C++ fills the HVector's count, index and array (num_row
-            // entries), valid until the next call
-            let ok = unsafe {
-                (lp.host.basis_inverse_row)(lp.host.ctx, fv.basis_index, &mut count, &mut index, &mut array)
-            };
-            if !ok {
-                continue;
-            }
+            // getBasisInverseRowSparse(basis_index): row_ep's count, index
+            // and array (num_row entries), valid until its next use
+            let mut v = CHVec::of(&mut lp.row_ep);
+            // SAFETY: the view of row_ep, of num_row entries
+            unsafe { (*lp.lph).basis_inverse_row_sparse(fv.basis_index, &mut v) };
+            v.store_into(&mut lp.row_ep);
+            let (count, index, array) = (lp.row_ep.count, lp.row_ep.index.as_ptr(), lp.row_ep.array.as_ptr());
             if count == 1 {
                 continue;
             }

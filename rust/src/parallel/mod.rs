@@ -940,6 +940,17 @@ pub fn initialize(num_threads: i32, run: RunFn) {
     });
 }
 
+/// initialize_scheduler(num_threads) on a thread Rust made (the helper
+/// of the IPX race), with the run function the C++ registered (nothing if
+/// there is none: no task is run then)
+pub fn initialize_thread(num_threads: i32) {
+    let f = RUN_FN.load(Relaxed);
+    if f != 0 {
+        // SAFETY: stored from a RunFn by initialize
+        initialize(num_threads, unsafe { std::mem::transmute::<usize, RunFn>(f) });
+    }
+}
+
 /// HighsTaskExecutor::shutdown
 pub fn shutdown(blocking: bool) {
     EXECUTOR_HANDLE.with(|h| {

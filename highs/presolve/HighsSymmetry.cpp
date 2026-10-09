@@ -134,6 +134,13 @@ HighsInt HighsSymmetries::getBranchingColumn(
       rs.get(), colLower.data(), colUpper.data(), colLower.size(), col);
 }
 
+HighsInt HighsSymmetries::getBranchingColumn(const double* colLower,
+                                             const double* colUpper,
+                                             HighsInt n, HighsInt col) const {
+  return highs_rs::highs_rs_sym_branching_column(rs.get(), colLower, colUpper,
+                                                 n, col);
+}
+
 std::shared_ptr<const StabilizerOrbits>
 HighsSymmetries::computeStabilizerOrbits(const HighsDomain& localdom,
                                          StabilizerOrbitWorkspace&) {

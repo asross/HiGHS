@@ -13,7 +13,9 @@
 //! borrowed from the C++ objects for the duration of a call.
 
 use super::domain::{DomChg, Reason, StdVec};
-use super::lp_relaxation::LpShared;
+use super::lp_relaxation::{LpRelax, LpShared};
+use crate::lp_data::lp_handle::LpHandle;
+use crate::lp_data::opts::OptValue;
 use super::nodequeue::NodeQueue;
 use super::pseudocost::Pseudocost;
 use super::search::{FracInt, Search, Stats};
@@ -146,28 +148,18 @@ pub struct CMipFns {
     /// a fresh LP relaxation of the model (loadModel) for the worker
     pub lp_new: unsafe extern "C" fn(P, P) -> P,
     pub lp_free: unsafe extern "C" fn(P),
-    pub lp_shared: unsafe extern "C" fn(P) -> *mut LpShared,
-    pub lp_set_iteration_limit: unsafe extern "C" fn(P, i32),
-    pub lp_change_cols_bounds: unsafe extern "C" fn(P, *const f64, *const f64),
-    pub lp_change_col_bounds: unsafe extern "C" fn(P, i32, f64, f64),
-    pub lp_change_cols_cost: unsafe extern "C" fn(P, *const i32, *const f64),
-    /// 0 presolve off, 1 presolve on, 2 simplex_strategy primal,
-    /// 3 primal_simplex_bound_perturbation_multiplier 0
-    pub lp_set_option: unsafe extern "C" fn(P, i32),
+    /// the Rust LP relaxation (with the LP solver)
+    pub lp_rust: unsafe extern "C" fn(P) -> *mut LpRelax,
     /// setBasis(firstrootbasis, origin)
     pub lp_set_root_basis: unsafe extern "C" fn(P, *const u8),
     /// resolveLp(domain or null)
     pub lp_resolve: unsafe extern "C" fn(P, P) -> i32,
-    /// the LP solver's solution: 0 col_value, 1 col_dual
-    pub lp_solution: unsafe extern "C" fn(P, i32, *mut i32) -> *const f64,
     pub lp_set_objective_limit: unsafe extern "C" fn(P, f64),
     pub lp_flush_domain: unsafe extern "C" fn(P, P),
     pub lp_remove_obsolete_rows: unsafe extern "C" fn(P, bool),
     /// computeDualInfProof, and if it holds, generateConflict on the local
     /// domain with the worker's cut pool
     pub lp_infeasible_conflict: unsafe extern "C" fn(P, P, P),
-    pub lp_put_iterate: unsafe extern "C" fn(P) -> bool,
-    pub lp_get_iterate: unsafe extern "C" fn(P),
     // HighsSearch
     pub search_new: unsafe extern "C" fn(P, *mut SearchParts),
     pub search_free: unsafe extern "C" fn(P),
@@ -679,27 +671,34 @@ impl Drop for Dom {
 /// A HighsLpRelaxation: owned (freed on drop) or borrowed
 pub struct Lp {
     pub p: P,
-    sh: *mut LpShared,
+    rs: *mut LpRelax,
     owned: bool,
 }
 
 impl Lp {
     pub fn borrowed(p: P) -> Lp {
-        Lp { p, sh: c!(lp_shared, p), owned: false }
+        Lp { p, rs: c!(lp_rust, p), owned: false }
     }
     /// HighsLpRelaxation(other) for the worker
     pub fn copy(other: P, w: &Worker) -> Lp {
         let p = c!(lp_copy, other, w.p);
-        Lp { p, sh: c!(lp_shared, p), owned: true }
+        Lp { p, rs: c!(lp_rust, p), owned: true }
     }
     /// HighsLpRelaxation(mipsolver) with loadModel, for the worker
     pub fn new(m: &MipData, w: &Worker) -> Lp {
         let p = c!(lp_new, m.mipsolver, w.p);
-        Lp { p, sh: c!(lp_shared, p), owned: true }
+        Lp { p, rs: c!(lp_rust, p), owned: true }
     }
     fn sh(&self) -> &LpShared {
         // SAFETY: the Rust state of the live relaxation
-        unsafe { &*self.sh }
+        unsafe { &(*self.rs).sh }
+    }
+    /// The LP solver
+    #[allow(clippy::mut_from_ref)]
+    fn lph(&self) -> &mut LpHandle {
+        // SAFETY: the live relaxation's LP solver, not otherwise borrowed
+        // across these calls
+        unsafe { (*self.rs).lph() }
     }
     pub fn status(&self) -> i32 {
         self.sh().status
@@ -715,7 +714,7 @@ impl Lp {
     }
     pub fn set_adjust_symmetric_branching_col(&self, adjust: bool) {
         // SAFETY: as sh
-        unsafe { (*self.sh).adjust_sym = adjust }
+        unsafe { (*self.rs).sh.adjust_sym = adjust }
     }
     /// getFractionalIntegers (valid until the next solve)
     #[allow(clippy::mut_from_ref)]
@@ -726,24 +725,38 @@ impl Lp {
         unsafe { crate::ffi::sl_mut(sh.frac, sh.num_frac) }
     }
     pub fn set_iteration_limit(&self, limit: i32) {
-        c!(lp_set_iteration_limit, self.p, limit)
+        self.lph().set_option("simplex_iteration_limit", OptValue::Int(limit));
     }
+    /// changeColsBounds(0, numCol - 1, lo, up)
     pub fn change_cols_bounds(&self, lo: &[f64], up: &[f64]) {
-        c!(lp_change_cols_bounds, self.p, lo.as_ptr(), up.as_ptr())
+        let n = self.lph().model.num_col;
+        self.lph().change_col_bounds_interval(0, n - 1, lo, up);
     }
     /// changeColsBounds to a domain's bounds
     pub fn change_cols_bounds_dom(&self, d: &Dom) {
         let b = d.bnd();
-        c!(lp_change_cols_bounds, self.p, b.lo, b.up)
+        let n = self.lph().model.num_col;
+        // SAFETY: the domain's bounds of the model's columns
+        let (lo, up) = unsafe { (crate::ffi::sl(b.lo, n), crate::ffi::sl(b.up, n)) };
+        self.lph().change_col_bounds_interval(0, n - 1, lo, up);
     }
     pub fn change_col_bounds(&self, col: i32, lo: f64, up: f64) {
-        c!(lp_change_col_bounds, self.p, col, lo, up)
+        self.lph().change_col_bounds_set(&[col], &[lo], &[up]);
     }
     pub fn change_cols_cost(&self, mask: &[i32], cost: &[f64]) {
-        c!(lp_change_cols_cost, self.p, mask.as_ptr(), cost.as_ptr())
+        self.lph().change_col_costs_mask(mask, cost);
     }
+    /// 0 presolve off, 1 presolve on, 2 simplex_strategy primal, 3
+    /// primal_simplex_bound_perturbation_multiplier 0
     pub fn set_option(&self, which: i32) {
-        c!(lp_set_option, self.p, which)
+        let h = self.lph();
+        match which {
+            0 => h.set_option("presolve", OptValue::Str(b"off")),
+            1 => h.set_option("presolve", OptValue::Str(b"on")),
+            // kSimplexStrategyPrimal
+            2 => h.set_option("simplex_strategy", OptValue::Int(4)),
+            _ => h.set_option("primal_simplex_bound_perturbation_multiplier", OptValue::Double(0.0)),
+        };
     }
     /// setBasis(firstrootbasis, origin); `origin` is NUL-terminated
     pub fn set_root_basis(&self, origin: &[u8]) {
@@ -754,16 +767,10 @@ impl Lp {
     }
     /// the LP solver's col_value (valid until the next solve)
     pub fn col_value(&self) -> &[f64] {
-        let mut n = 0;
-        let p = c!(lp_solution, self.p, 0, &mut n);
-        // SAFETY: the solution vector
-        unsafe { crate::ffi::sl(p, n) }
+        &self.lph().solution().col_value
     }
     pub fn col_dual(&self) -> &[f64] {
-        let mut n = 0;
-        let p = c!(lp_solution, self.p, 1, &mut n);
-        // SAFETY: the solution vector
-        unsafe { crate::ffi::sl(p, n) }
+        &self.lph().solution().col_dual
     }
     pub fn set_objective_limit(&self, lim: f64) {
         c!(lp_set_objective_limit, self.p, lim)
@@ -778,10 +785,10 @@ impl Lp {
         c!(lp_infeasible_conflict, self.p, w.p, localdom.p)
     }
     pub fn put_iterate(&self) -> bool {
-        c!(lp_put_iterate, self.p)
+        self.lph().put_iterate() == crate::lp_data::Status::Ok
     }
     pub fn get_iterate(&self) {
-        c!(lp_get_iterate, self.p)
+        self.lph().get_iterate();
     }
 }
 

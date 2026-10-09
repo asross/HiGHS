@@ -115,6 +115,20 @@ pub struct RunData {
     pub postsolve_time: f64,
 }
 
+impl RunData {
+    /// HighsRunData::invalidate
+    pub fn invalidate(&mut self) {
+        self.valid = false;
+        self.presolved_model_num_col = ILLEGAL_INT_MEASURE;
+        self.presolved_model_num_row = ILLEGAL_INT_MEASURE;
+        self.presolved_model_num_nz = ILLEGAL_INT_MEASURE;
+        self.num_simplex_iterations_after_postsolve = ILLEGAL_INT_MEASURE;
+        self.presolve_time = ILLEGAL_DOUBLE_MEASURE;
+        self.solve_time = ILLEGAL_DOUBLE_MEASURE;
+        self.postsolve_time = ILLEGAL_DOUBLE_MEASURE;
+    }
+}
+
 /// The option values read by the run, and the options it changes in place
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -666,15 +680,7 @@ impl<'a> Run<'a> {
     }
     /// HighsRunData::invalidate
     pub(crate) fn invalidate_run_data(&self) {
-        let r = self.run_data();
-        r.valid = false;
-        r.presolved_model_num_col = ILLEGAL_INT_MEASURE;
-        r.presolved_model_num_row = ILLEGAL_INT_MEASURE;
-        r.presolved_model_num_nz = ILLEGAL_INT_MEASURE;
-        r.num_simplex_iterations_after_postsolve = ILLEGAL_INT_MEASURE;
-        r.presolve_time = ILLEGAL_DOUBLE_MEASURE;
-        r.solve_time = ILLEGAL_DOUBLE_MEASURE;
-        r.postsolve_time = ILLEGAL_DOUBLE_MEASURE;
+        self.run_data().invalidate();
     }
     /// Highs::setHighsModelStatusAndClearSolutionAndBasis
     pub(crate) fn set_status_and_clear(&self, s: i32) {

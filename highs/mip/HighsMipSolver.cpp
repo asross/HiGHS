@@ -342,7 +342,7 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
       std::shared_ptr<const HighsBasis> basis =
           worker.getLpRelaxation().getStoredBasis();
       if (!basis ||
-          !isBasisConsistent(worker.getLpRelaxation().getLp(), *basis)) {
+          !worker.getLpRelaxation().isBasisConsistent(*basis)) {
         HighsBasis b = d.firstrootbasis;
         b.row_status.resize(worker.getLpRelaxation().numRows(),
                             HighsBasisStatus::kBasic);
@@ -378,8 +378,8 @@ double mipDriverOp(void* m, int which, void* w, int64_t i, double x) {
     }
     case 241: {
       HighsMipWorker& worker = d.workers[i];
-      const std::vector<double>& sol =
-          worker.getLpRelaxation().getLpSolver().getSolution().col_value;
+      const std::vector<double> sol =
+          worker.getLpRelaxation().lpColValueVec();
       if (x == 0) {
         if (!lockActive) profiling->start(kMipClockDiveRandomizedRounding);
         d.heuristics.randomizedRounding(worker, sol);

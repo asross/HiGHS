@@ -49,6 +49,38 @@ pub struct CHVec {
 }
 
 impl CHVec {
+    /// The view of a Rust-owned HVector (its scalars copied back with
+    /// `store_into`)
+    pub(crate) fn of(v: &mut crate::hvector::OwnedHVec) -> CHVec {
+        CHVec {
+            size: v.size,
+            count: v.count,
+            index: v.index.as_mut_ptr(),
+            n_index: v.index.len() as i32,
+            array: v.array.as_mut_ptr(),
+            n_array: v.array.len() as i32,
+            cwork: v.cwork.as_mut_ptr(),
+            n_cwork: v.cwork.len() as i32,
+            iwork: v.iwork.as_mut_ptr(),
+            n_iwork: v.iwork.len() as i32,
+            synthetic_tick: v.synthetic_tick,
+            pack_flag: v.pack_flag as u8,
+            pack_count: v.pack_count,
+            pack_index: v.pack_index.as_mut_ptr(),
+            n_pack_index: v.pack_index.len() as i32,
+            pack_value: v.pack_value.as_mut_ptr(),
+            n_pack_value: v.pack_value.len() as i32,
+        }
+    }
+
+    /// The scalars back into the Rust-owned HVector it views
+    pub(crate) fn store_into(&self, v: &mut crate::hvector::OwnedHVec) {
+        v.count = self.count;
+        v.synthetic_tick = self.synthetic_tick;
+        v.pack_flag = self.pack_flag != 0;
+        v.pack_count = self.pack_count;
+    }
+
     /// # Safety
     /// The pointers must be valid for their lengths and unaliased
     pub(crate) unsafe fn view<'a>(&self) -> HVec<'a> {

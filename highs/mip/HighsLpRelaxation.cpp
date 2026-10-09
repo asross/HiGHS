@@ -11,6 +11,7 @@
 #include <atomic>
 #include <thread>
 
+#include "lp_data/HighsModelUtils.h"
 #include "lp_data/HighsSolve.h"  // For useIpm()
 #include "mip/HighsCutPool.h"
 #include "mip/HighsDomain.h"
@@ -23,6 +24,7 @@
 #include "util/HighsCDouble.h"
 #include "util/HighsHash.h"
 
+#ifndef HIGHS_RUST
 void HighsLpRelaxation::setProfiling(HighsProfiling* profiling) {
   assert(profiling);
   lpsolver.setProfiling(profiling);
@@ -88,6 +90,8 @@ void HighsLpRelaxation::getCutPool(HighsInt& num_col, HighsInt& num_cut,
     }
   }
 }
+
+#endif  // HIGHS_RUST
 
 void HighsLpRelaxation::LpRow::get(const HighsMipSolver& mipsolver,
                                    HighsInt& len, const HighsInt*& inds,
@@ -266,11 +270,14 @@ void HighsLpRelaxation::loadModel() {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsLpRelaxation::resetToGlobalDomain(const HighsDomain& globaldom) {
   lpsolver.changeColsBounds(0, mipsolver.numCol() - 1,
                             globaldom.col_lower_.data(),
                             globaldom.col_upper_.data());
 }
+
+#endif  // HIGHS_RUST
 
 #ifndef HIGHS_RUST
 void HighsLpRelaxation::computeBasicDegenerateDuals(
@@ -721,6 +728,7 @@ void HighsLpRelaxation::notifyCutPoolsLpCopied(HighsInt n) {
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsLpRelaxation::flushDomain(HighsDomain& domain, bool continuous) {
   if (!domain.getChangedCols().empty()) {
     if (&domain == &mipsolver.mipdata_->getDomain()) continuous = true;
@@ -741,6 +749,8 @@ void HighsLpRelaxation::flushDomain(HighsDomain& domain, bool continuous) {
     domain.clearChangedCols();
   }
 }
+
+#endif  // HIGHS_RUST
 
 #ifndef HIGHS_RUST
 bool HighsLpRelaxation::computeDualProof(const HighsDomain& globaldomain,
@@ -1119,6 +1129,7 @@ bool HighsLpRelaxation::computeDualInfProof(const HighsDomain& globaldomain,
 }
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void HighsLpRelaxation::recoverBasis() {
   if (basischeckpoint) {
     lpsolver.setBasis(*basischeckpoint, "HighsLpRelaxation::recoverBasis");
@@ -1373,6 +1384,8 @@ void HighsLpRelaxation::ipmBasisAfterIterationLimit() {
   }
   lpsolver.setBasis(ipm.getBasis(), "HighsLpRelaxation::run IPM basis");
 }
+
+#endif  // HIGHS_RUST
 
 #ifndef HIGHS_RUST
 HighsLpRelaxation::Status HighsLpRelaxation::run(bool resolve_on_error) {
@@ -1774,41 +1787,6 @@ static_assert(sizeof(HighsBasisStatus) == 1, "basis status bytes");
 static_assert(sizeof(HighsDomainChange) == 16, "HighsDomainChange is DomChg");
 
 namespace highs_rs {
-// Mirror of CLpView
-struct LpView {
-  HighsInt num_col;
-  HighsInt num_row;
-  const double* col_lower;
-  const double* col_upper;
-  const double* row_lower;
-  const double* row_upper;
-  const double* col_cost;
-  const HighsInt* a_start;
-  const HighsInt* a_index;
-  const double* a_value;
-  double* col_value;
-  HighsInt n_col_value;
-  double* col_dual;
-  HighsInt n_col_dual;
-  const double* row_value;
-  HighsInt n_row_value;
-  const double* row_dual;
-  HighsInt n_row_dual;
-  const uint8_t* col_status;
-  HighsInt n_col_status;
-  const uint8_t* row_status;
-  HighsInt n_row_status;
-  bool basis_valid;
-  bool dual_valid;
-  HighsInt basis_validity;
-  HighsInt primal_solution_status;
-  HighsInt simplex_iteration_count;
-  int model_status;
-  double max_primal_infeasibility;
-  double max_dual_infeasibility;
-  double dual_feasibility_tolerance;
-};
-
 // Mirror of CLpMip
 struct LpMip {
   HighsInt num_model_row;
@@ -1852,17 +1830,10 @@ struct SolveOut {
 
 // Mirror of CLpFns
 struct LpFns {
-  void (*view)(void*, LpView*);
   void (*mip)(void*, LpMip*);
   void (*solve)(void*, SolveOut*);
   void (*op)(void*, int);
   void (*delete_rows)(void*, HighsInt*);
-  void (*delete_row_range)(void*, HighsInt, HighsInt);
-  bool (*has_invert)(void*);
-  const HighsInt* (*basic_index)(void*);
-  void (*basis_inverse_row)(void*, HighsInt, HighsInt*, const HighsInt**,
-                            const double**);
-  void (*dual_ray)(void*, bool*, HighsInt*, const HighsInt**, const double**);
   void (*tighten)(const void*, HighsInt*, double*, HighsInt, double*);
   void (*extract_cliques)(void*, const HighsInt*, const double*, HighsInt,
                           double);
@@ -1914,46 +1885,6 @@ struct HighsLpRelaxationAccess {
     return *static_cast<HighsLpRelaxation*>(p);
   }
   static HighsDomain& dom(void* d) { return *static_cast<HighsDomain*>(d); }
-
-  static void view(void* p, highs_rs::LpView* v) {
-    const Highs& s = lp(p).lpsolver;
-    const HighsLp& l = s.getLp();
-    const HighsSolution& sol = s.getSolution();
-    const HighsBasis& b = s.getBasis();
-    const HighsInfo& info = s.getInfo();
-    assert(l.a_matrix_.isColwise());
-    v->num_col = l.num_col_;
-    v->num_row = l.num_row_;
-    v->col_lower = l.col_lower_.data();
-    v->col_upper = l.col_upper_.data();
-    v->row_lower = l.row_lower_.data();
-    v->row_upper = l.row_upper_.data();
-    v->col_cost = l.col_cost_.data();
-    v->a_start = l.a_matrix_.start_.data();
-    v->a_index = l.a_matrix_.index_.data();
-    v->a_value = l.a_matrix_.value_.data();
-    v->col_value = const_cast<double*>(sol.col_value.data());
-    v->n_col_value = sol.col_value.size();
-    v->col_dual = const_cast<double*>(sol.col_dual.data());
-    v->n_col_dual = sol.col_dual.size();
-    v->row_value = sol.row_value.data();
-    v->n_row_value = sol.row_value.size();
-    v->row_dual = sol.row_dual.data();
-    v->n_row_dual = sol.row_dual.size();
-    v->col_status = reinterpret_cast<const uint8_t*>(b.col_status.data());
-    v->n_col_status = b.col_status.size();
-    v->row_status = reinterpret_cast<const uint8_t*>(b.row_status.data());
-    v->n_row_status = b.row_status.size();
-    v->basis_valid = b.valid;
-    v->dual_valid = sol.dual_valid;
-    v->basis_validity = info.basis_validity;
-    v->primal_solution_status = info.primal_solution_status;
-    v->simplex_iteration_count = info.simplex_iteration_count;
-    v->model_status = int(s.getModelStatus());
-    v->max_primal_infeasibility = info.max_primal_infeasibility;
-    v->max_dual_infeasibility = info.max_dual_infeasibility;
-    v->dual_feasibility_tolerance = s.getOptions().dual_feasibility_tolerance;
-  }
 
   static void mip(void* p, highs_rs::LpMip* m) {
     HighsLpRelaxation& x = lp(p);
@@ -2012,17 +1943,6 @@ struct HighsLpRelaxationAccess {
     HighsLpRelaxation& x = lp(p);
     const HighsMipSolver& ms = x.mipsolver;
     switch (which) {
-      case 0:
-        x.lpsolver.clearSolver();
-        break;
-      case 1:
-        // still an error: now try to solve with presolve from scratch
-        x.lpsolver.setOptionValue("simplex_strategy", kSimplexStrategyDual);
-        x.lpsolver.setOptionValue("presolve", kHighsOnString);
-        break;
-      case 2:
-        x.lpsolver.setOptionValue("presolve", kHighsOffString);
-        break;
       case 3:
         x.recoverBasis();
         break;
@@ -2036,21 +1956,19 @@ struct HighsLpRelaxationAccess {
                      "HighsLpRelaxation::run LP is unbounded with no basis, "
                      "but not returning Status::kError\n");
         break;
-      case 6:
+      case 6: {
+        const std::vector<double> col_value = x.lpColValueVec();
         if (!ms.mipdata_->parallelLockActive() || !x.worker_) {
-          ms.mipdata_->trySolution(x.lpsolver.getSolution().col_value,
-                                   kSolutionSourceUnbounded);
+          ms.mipdata_->trySolution(col_value, kSolutionSourceUnbounded);
         } else {
-          x.worker_->trySolution(x.lpsolver.getSolution().col_value,
-                                 kSolutionSourceUnbounded);
+          x.worker_->trySolution(col_value, kSolutionSourceUnbounded);
         }
         break;
+      }
       case 7:
         highsLogUser(ms.options_mip_->log_options, HighsLogType::kWarning,
                      "LP solved to unexpected status: %s\n",
-                     x.lpsolver
-                         .modelStatusToString(x.lpsolver.getModelStatus())
-                         .c_str());
+                     utilModelStatusToString(x.getLpModelStatus()).c_str());
         break;
       case 8:
         highsLogDev(ms.options_mip_->log_options, HighsLogType::kVerbose,
@@ -2059,16 +1977,16 @@ struct HighsLpRelaxationAccess {
       default: {
         HighsBasis root_basis = ms.mipdata_->firstrootbasis;
         root_basis.row_status.resize(x.numRows(), HighsBasisStatus::kBasic);
-        x.lpsolver.setBasis(root_basis);
+        x.setLpBasis(root_basis);
       }
     }
   }
 
   static void deleteRows(void* p, HighsInt* mask) {
     HighsLpRelaxation& x = lp(p);
-    HighsBasis basis = x.lpsolver.getBasis();
-    HighsInt nlprows = x.lpsolver.getNumRow();
-    x.lpsolver.deleteRows(mask);
+    HighsBasis basis = x.getLpBasis();
+    HighsInt nlprows = x.numRows();
+    highs_rs::highs_rs_lph_delete_rows_mask(x.lp_, mask);
     HighsInt ndelcuts = 0;
     for (HighsInt i = x.mipsolver.numRow(); i != nlprows; ++i) {
       if (mask[i] >= 0)
@@ -2078,44 +1996,9 @@ struct HighsLpRelaxationAccess {
     }
     basis.row_status.resize(basis.row_status.size() - ndelcuts);
     basis.debug_origin_name = "HighsLpRelaxation::removeCuts";
-    x.lpsolver.setBasis(basis);
+    x.setLpBasis(basis);
     x.mipsolver.profiling_->solveCall("LP0", x.mipsolver.submip);
-    x.lpsolver.optimizeLp();
-  }
-
-  static void deleteRowRange(void* p, HighsInt from, HighsInt to) {
-    lp(p).lpsolver.deleteRows(from, to);
-  }
-
-  static bool hasInvert(void* p) { return lp(p).lpsolver.hasInvert(); }
-
-  static const HighsInt* basicIndex(void* p) {
-    return lp(p).lpsolver.getBasicVariablesArray();
-  }
-
-  static void setupRowEp(HighsLpRelaxation& x) {
-    HighsInt num_row = x.lpsolver.getNumRow();
-    if (x.row_ep.size < num_row) x.row_ep.setup(num_row);
-  }
-
-  static void basisInverseRow(void* p, HighsInt row, HighsInt* count,
-                              const HighsInt** index, const double** array) {
-    HighsLpRelaxation& x = lp(p);
-    setupRowEp(x);
-    x.lpsolver.getBasisInverseRowSparse(row, x.row_ep);
-    *count = x.row_ep.count;
-    *index = x.row_ep.index.data();
-    *array = x.row_ep.array.data();
-  }
-
-  static void dualRay(void* p, bool* has, HighsInt* count,
-                      const HighsInt** index, const double** array) {
-    HighsLpRelaxation& x = lp(p);
-    setupRowEp(x);
-    x.lpsolver.getDualRaySparse(*has, x.row_ep);
-    *count = x.row_ep.count;
-    *index = x.row_ep.index.data();
-    *array = x.row_ep.array.data();
+    x.optimizeLp();
   }
 
   static void tighten(const void* d, HighsInt* inds, double* vals,
@@ -2157,8 +2040,9 @@ struct HighsLpRelaxationAccess {
 
   static HighsInt branchingColumn(void* p, HighsInt col) {
     HighsLpRelaxation& x = lp(p);
+    const highs_rs::LphView v = x.lpView();
     return x.mipsolver.mipdata_->symmetries.getBranchingColumn(
-        x.getLp().col_lower_, x.getLp().col_upper_, col);
+        v.col_lower, v.col_upper, v.num_col, col);
   }
 
   static void addIncumbent(void* p, const double* sol, HighsInt n, double obj,
@@ -2181,16 +2065,10 @@ struct HighsLpRelaxationAccess {
 };
 
 const highs_rs::LpFns HighsLpRelaxationAccess::fns = {
-    view,
     mip,
     solve,
     op,
     deleteRows,
-    deleteRowRange,
-    hasInvert,
-    basicIndex,
-    basisInverseRow,
-    dualRay,
     tighten,
     extractCliques,
     reconvergence,
@@ -2207,9 +2085,11 @@ HighsLpRelaxation::HighsLpRelaxation(const HighsMipSolver& mipsolver)
     : mipsolver(mipsolver),
       rs_(highs_rs::highs_rs_lprelax_new(&HighsLpRelaxationAccess::fns, this)),
       sh_(highs_rs::highs_rs_lprelax_shared(rs_)),
+      lp_(highs_rs::highs_rs_lprelax_lp(rs_)),
       worker_(nullptr) {
-  lpsolver.setOptionValue("output_flag", false);
-  lpsolver.setOptionValue("random_seed", mipsolver.options_mip_->random_seed);
+  highs_rs::highs_rs_lph_register(rsSimplexProfiling);
+  setLpOption("output_flag", false);
+  setLpOption("random_seed", mipsolver.options_mip_->random_seed);
   // Set primal feasibility tolerance for LP solves according to
   // mip_feasibility_tolerance, and smaller tolerance for dual
   // feasibility
@@ -2217,36 +2097,34 @@ HighsLpRelaxation::HighsLpRelaxation(const HighsMipSolver& mipsolver)
       mipsolver.options_mip_->mip_feasibility_tolerance;
   double mip_dual_feasibility_tolerance =
       mipsolver.options_mip_->mip_feasibility_tolerance * 0.1;
-  lpsolver.setOptionValue("primal_feasibility_tolerance",
-                          mip_primal_feasibility_tolerance);
-  lpsolver.setOptionValue("dual_feasibility_tolerance",
-                          mip_dual_feasibility_tolerance);
+  setLpOption("primal_feasibility_tolerance",
+              mip_primal_feasibility_tolerance);
+  setLpOption("dual_feasibility_tolerance", mip_dual_feasibility_tolerance);
   // Re-solves are short, so for large LPs computing exact DSE weights
   // for a new basis (a BTRAN per row) is rarely worth it
-  lpsolver.setOptionValue("simplex_dse_exact_init_max_rows", 20000);
-  lpsolver.setOptionValue("simplex_keep_random_vectors", true);
+  setLpOption("simplex_dse_exact_init_max_rows", HighsInt{20000});
+  setLpOption("simplex_keep_random_vectors", true);
   // only the absolute infeasibilities of a re-solve are used
-  lpsolver.setOptionValue("full_lp_kkt_check", false);
+  setLpOption("full_lp_kkt_check", false);
   currentbasisstored = false;
   solved_first_lp = true;
-  row_ep.size = 0;
 }
 
 HighsLpRelaxation::HighsLpRelaxation(const HighsLpRelaxation& other)
     : mipsolver(other.mipsolver),
       rs_(highs_rs::highs_rs_lprelax_copy(other.rs_, this)),
       sh_(highs_rs::highs_rs_lprelax_shared(rs_)),
+      lp_(highs_rs::highs_rs_lprelax_lp(rs_)),
       basischeckpoint(other.basischeckpoint),
       currentbasisstored(other.currentbasisstored),
       worker_(nullptr) {
-  lpsolver.setOptionValue("output_flag", false);
-  lpsolver.passOptions(other.lpsolver.getOptions());
-  lpsolver.passModel(other.lpsolver.getLp());
-  lpsolver.setBasis(other.lpsolver.getBasis());
+  setLpOption("output_flag", false);
+  highs_rs::highs_rs_lph_pass_options(lp_, other.lp_);
+  highs_rs::highs_rs_lph_pass_model_of(lp_, other.lp_);
+  setLpBasis(other.getLpBasis());
   colLbBuffer.resize(mipsolver.numCol());
   colUbBuffer.resize(mipsolver.numCol());
   solved_first_lp = true;
-  row_ep.size = 0;
 }
 
 HighsLpRelaxation::~HighsLpRelaxation() { highs_rs::highs_rs_lprelax_free(rs_); }
@@ -2261,9 +2139,9 @@ void HighsLpRelaxation::loadModel() {
   highs_rs::highs_rs_lprelax_op(rs_, 0, lpmodel.num_row_);
   lpmodel.integrality_.clear();
   HighsInt num_col = lpmodel.num_col_;
-  lpsolver.clearSolver();
-  lpsolver.clearModel();
-  lpsolver.passModel(std::move(lpmodel));
+  clearLpSolver();
+  highs_rs::highs_rs_lph_clear_model(lp_);
+  rsLpPassModel(lp_, lpmodel);
   colLbBuffer.resize(num_col);
   colUbBuffer.resize(num_col);
 }
@@ -2291,17 +2169,18 @@ double HighsLpRelaxation::computeLPDegneracy(
 
 void HighsLpRelaxation::addCuts(HighsCutSet& cutset) {
   HighsInt numcuts = cutset.numCuts();
-  assert(lpsolver.getLp().num_row_ == sh_->num_rows);
+  assert(numRows() == sh_->num_rows);
   if (numcuts > 0) {
     currentbasisstored = false;
     basischeckpoint.reset();
     highs_rs::highs_rs_lprelax_add_cuts(rs_, cutset.cutindices.data(),
                                    cutset.cutpools.data(), numcuts);
     bool success =
-        lpsolver.addRows(numcuts, cutset.lower_.data(), cutset.upper_.data(),
-                         cutset.ARvalue_.size(), cutset.ARstart_.data(),
-                         cutset.ARindex_.data(),
-                         cutset.ARvalue_.data()) == HighsStatus::kOk;
+        highs_rs::highs_rs_lph_add_rows(
+            lp_, numcuts, cutset.lower_.data(), cutset.upper_.data(),
+            cutset.ARvalue_.size(), cutset.ARstart_.data(),
+            cutset.ARindex_.data(),
+            cutset.ARvalue_.data()) == int(HighsStatus::kOk);
     assert(success);
     (void)success;
     cutset.clear();
@@ -2367,4 +2246,425 @@ HighsLpRelaxation::Status HighsLpRelaxation::run(bool resolve_on_error) {
 HighsLpRelaxation::Status HighsLpRelaxation::resolveLp(HighsDomain* domain) {
   return Status(highs_rs::highs_rs_lprelax_resolve(rs_, domain));
 }
+// ---- The LP solver (rust/src/lp_data/lp_handle.rs)
+
+void HighsLpRelaxation::setProfiling(HighsProfiling* profiling) {
+  assert(profiling);
+  highs_rs::highs_rs_lph_set_profiling(lp_, profiling);
+}
+
+void rsLpSetOption(highs_rs::LpHandle* lp, const std::string& name,
+                   bool value) {
+  const bool ok = highs_rs::highs_rs_lph_set_option(
+      lp, name.data(), name.size(), 0, value, 0, nullptr, 0);
+  assert(ok);
+  (void)ok;
+}
+
+void rsLpSetOption(highs_rs::LpHandle* lp, const std::string& name,
+                   HighsInt value) {
+  const bool ok = highs_rs::highs_rs_lph_set_option(
+      lp, name.data(), name.size(), 1, value, 0, nullptr, 0);
+  assert(ok);
+  (void)ok;
+}
+
+void rsLpSetOption(highs_rs::LpHandle* lp, const std::string& name,
+                   double value) {
+  const bool ok = highs_rs::highs_rs_lph_set_option(
+      lp, name.data(), name.size(), 2, 0, value, nullptr, 0);
+  assert(ok);
+  (void)ok;
+}
+
+void rsLpSetOption(highs_rs::LpHandle* lp, const std::string& name,
+                   const std::string& value) {
+  const bool ok = highs_rs::highs_rs_lph_set_option(
+      lp, name.data(), name.size(), 3, 0, 0, value.data(), value.size());
+  assert(ok);
+  (void)ok;
+}
+
+HighsStatus rsLpPassModel(highs_rs::LpHandle* lp, const HighsLp& model) {
+  const RsLp v = rsLp(model);
+  return HighsStatus(highs_rs::highs_rs_lph_pass_model(
+      lp, &v, model.model_name_.data(), model.model_name_.size()));
+}
+
+HighsStatus rsLpOptimize(highs_rs::LpHandle* lp) {
+  bool interrupted = false;
+  const HighsStatus status =
+      HighsStatus(highs_rs::highs_rs_lph_optimize_lp(lp, &interrupted));
+  // A cancelled task interrupted IPX
+  if (interrupted) throw HighsTask::Interrupt();
+  return status;
+}
+
+HighsSolution rsLpSolution(highs_rs::LpHandle* lp) {
+  highs_rs::LphView v;
+  highs_rs::highs_rs_lph_view(lp, &v);
+  HighsSolution s;
+  s.value_valid = v.value_valid;
+  s.dual_valid = v.dual_valid;
+  s.col_value.assign(v.col_value, v.col_value + v.n_col_value);
+  s.col_dual.assign(v.col_dual, v.col_dual + v.n_col_dual);
+  s.row_value.assign(v.row_value, v.row_value + v.n_row_value);
+  s.row_dual.assign(v.row_dual, v.row_dual + v.n_row_dual);
+  return s;
+}
+
+void HighsLpRelaxation::setLpOption(const std::string& name, bool value) {
+  rsLpSetOption(lp_, name, value);
+}
+
+void HighsLpRelaxation::setLpOption(const std::string& name, HighsInt value) {
+  rsLpSetOption(lp_, name, value);
+}
+
+void HighsLpRelaxation::setLpOption(const std::string& name, double value) {
+  rsLpSetOption(lp_, name, value);
+}
+
+void HighsLpRelaxation::setLpOption(const std::string& name,
+                                    const std::string& value) {
+  rsLpSetOption(lp_, name, value);
+}
+
+// The value of a string option of the LP solver
+static std::string lpOptionString(highs_rs::LpHandle* lp,
+                                  const std::string& name) {
+  double d;
+  const char* s = nullptr;
+  size_t len = 0;
+  const bool ok = highs_rs::highs_rs_lph_get_option(lp, name.data(),
+                                                    name.size(), &d, &s, &len);
+  assert(ok);
+  (void)ok;
+  return std::string(s, len);
+}
+
+HighsBasis HighsLpRelaxation::getLpBasis() const {
+  highs_rs::LphBasis b;
+  highs_rs::highs_rs_lph_basis(lp_, &b);
+  HighsBasis basis;
+  basis.valid = b.valid;
+  basis.alien = b.alien;
+  basis.useful = b.useful;
+  basis.was_alien = b.was_alien;
+  basis.debug_id = b.debug_id;
+  basis.debug_update_count = b.debug_update_count;
+  const HighsBasisStatus* col =
+      reinterpret_cast<const HighsBasisStatus*>(b.col_status);
+  const HighsBasisStatus* row =
+      reinterpret_cast<const HighsBasisStatus*>(b.row_status);
+  basis.col_status.assign(col, col + b.n_col);
+  basis.row_status.assign(row, row + b.n_row);
+  basis.debug_origin_name.assign(b.origin, b.origin_len);
+  return basis;
+}
+
+HighsStatus HighsLpRelaxation::setLpBasis(const HighsBasis& basis,
+                                          const std::string& origin) {
+  highs_rs::LphBasis b;
+  b.valid = basis.valid;
+  b.alien = basis.alien;
+  b.useful = basis.useful;
+  b.was_alien = basis.was_alien;
+  b.debug_id = basis.debug_id;
+  b.debug_update_count = basis.debug_update_count;
+  b.col_status = reinterpret_cast<const uint8_t*>(basis.col_status.data());
+  b.n_col = basis.col_status.size();
+  b.row_status = reinterpret_cast<const uint8_t*>(basis.row_status.data());
+  b.n_row = basis.row_status.size();
+  b.origin = basis.debug_origin_name.data();
+  b.origin_len = basis.debug_origin_name.size();
+  return HighsStatus(
+      highs_rs::highs_rs_lph_set_basis(lp_, &b, origin.data(), origin.size()));
+}
+
+// vec = the elements of an RsMut view
+template <typename T, typename V>
+static void take(std::vector<T>& vec, const V& r) {
+  vec.assign(r.ptr, r.ptr + r.len);
+}
+
+HighsLp HighsLpRelaxation::getLpCopy() const {
+  RsLp v;
+  const char* name;
+  size_t len;
+  highs_rs::highs_rs_lph_model(lp_, &v, &name, &len);
+  HighsLp lp;
+  lp.num_col_ = v.num_col;
+  lp.num_row_ = v.num_row;
+  take(lp.col_cost_, v.col_cost);
+  take(lp.col_lower_, v.col_lower);
+  take(lp.col_upper_, v.col_upper);
+  take(lp.row_lower_, v.row_lower);
+  take(lp.row_upper_, v.row_upper);
+  HighsSparseMatrix& a = lp.a_matrix_;
+  a.format_ = MatrixFormat(v.a.format);
+  a.num_col_ = v.a.num_col;
+  a.num_row_ = v.a.num_row;
+  take(a.start_, v.a.start);
+  take(a.p_end_, v.a.p_end);
+  take(a.index_, v.a.index);
+  take(a.value_, v.a.value);
+  lp.sense_ = ObjSense(v.sense);
+  lp.offset_ = v.offset;
+  const HighsVarType* integrality =
+      reinterpret_cast<const HighsVarType*>(v.integrality.ptr);
+  lp.integrality_.assign(integrality, integrality + v.integrality.len);
+  lp.scale_.strategy = v.scale_strategy;
+  lp.scale_.has_scaling = v.scale_has_scaling;
+  lp.scale_.num_col = v.scale_num_col;
+  lp.scale_.num_row = v.scale_num_row;
+  lp.scale_.cost = v.scale_cost;
+  take(lp.scale_.col, v.scale_col);
+  take(lp.scale_.row, v.scale_row);
+  lp.is_scaled_ = v.is_scaled;
+  lp.is_moved_ = v.is_moved;
+  lp.has_infinite_cost_ = v.has_infinite_cost;
+  lp.model_name_.assign(name, len);
+  lp.origin_name_ = "Original";
+  // The names of the MIP's model, which the LP's rows extend with the
+  // cuts' blank names
+  const HighsLp& model = *mipsolver.model_;
+  if (model.col_names_.size()) lp.col_names_ = model.col_names_;
+  if (model.row_names_.size()) {
+    lp.row_names_ = model.row_names_;
+    lp.row_names_.resize(lp.num_row_);
+  }
+  return lp;
+}
+
+HighsStatus HighsLpRelaxation::clearLpSolver() {
+  return HighsStatus(highs_rs::highs_rs_lph_clear_solver(lp_));
+}
+
+HighsStatus HighsLpRelaxation::changeColsBounds(HighsInt from, HighsInt to,
+                                                const double* lower,
+                                                const double* upper) {
+  return HighsStatus(highs_rs::highs_rs_lph_change_col_bounds_interval(
+      lp_, from, to, lower, upper));
+}
+
+HighsStatus HighsLpRelaxation::changeColBounds(HighsInt col, double lower,
+                                               double upper) {
+  return HighsStatus(
+      highs_rs::highs_rs_lph_change_col_bounds_set(lp_, 1, &col, &lower, &upper));
+}
+
+HighsStatus HighsLpRelaxation::changeColsCost(const HighsInt* mask,
+                                              const double* cost) {
+  return HighsStatus(
+      highs_rs::highs_rs_lph_change_col_costs_mask(lp_, mask, cost));
+}
+
+HighsStatus HighsLpRelaxation::putIterate() {
+  return HighsStatus(highs_rs::highs_rs_lph_put_iterate(lp_));
+}
+
+HighsStatus HighsLpRelaxation::getIterate() {
+  return HighsStatus(highs_rs::highs_rs_lph_get_iterate(lp_));
+}
+
+HighsStatus HighsLpRelaxation::optimizeLp() { return rsLpOptimize(lp_); }
+
+void HighsLpRelaxation::getCutPool(HighsInt& num_col, HighsInt& num_cut,
+                                   std::vector<double>& cut_lower,
+                                   std::vector<double>& cut_upper,
+                                   HighsSparseMatrix& cut_matrix) const {
+  const highs_rs::LphView lp = lpView();
+  num_col = lp.num_col;
+  HighsInt num_lp_row = lp.num_row;
+  HighsInt num_model_row = mipsolver.numRow();
+  num_cut = num_lp_row - num_model_row;
+  cut_lower.resize(num_cut);
+  cut_upper.resize(num_cut);
+  // Get a map from row index to cut row index
+  std::vector<HighsInt> cut_row_index;
+  cut_row_index.assign(num_lp_row, -1);
+  HighsInt cut_num = 0;
+  for (HighsInt iRow = 0; iRow < lp.num_row; iRow++) {
+    if (lprow(iRow).origin != LpRow::Origin::kCutPool) continue;
+    cut_row_index[iRow] = cut_num;
+    cut_lower[cut_num] = lp.row_lower[iRow];
+    cut_upper[cut_num] = lp.row_upper[iRow];
+    cut_num++;
+  }
+  assert(cut_num == num_cut);
+
+  cut_matrix.num_col_ = lp.num_col;
+  cut_matrix.num_row_ = num_cut;
+  cut_matrix.format_ = MatrixFormat::kRowwise;
+
+  std::vector<HighsInt> cut_matrix_length;
+  cut_matrix_length.assign(num_cut, 0);
+  for (HighsInt iCol = 0; iCol < lp.num_col; iCol++) {
+    for (HighsInt iEl = lp.a_start[iCol]; iEl < lp.a_start[iCol + 1]; iEl++) {
+      HighsInt iCut = cut_row_index[lp.a_index[iEl]];
+      if (iCut >= 0) cut_matrix_length[iCut]++;
+    }
+  }
+  cut_matrix.start_.resize(num_cut + 1);
+  cut_matrix.start_[0] = 0;
+  HighsInt num_cut_nz = 0;
+  for (HighsInt iCut = 0; iCut < num_cut; iCut++) {
+    HighsInt length = cut_matrix_length[iCut];
+    cut_matrix_length[iCut] = cut_matrix.start_[iCut];
+    num_cut_nz += length;
+    cut_matrix.start_[iCut + 1] = num_cut_nz;
+  }
+  cut_matrix.index_.resize(num_cut_nz);
+  cut_matrix.value_.resize(num_cut_nz);
+  for (HighsInt iCol = 0; iCol < lp.num_col; iCol++) {
+    for (HighsInt iEl = lp.a_start[iCol]; iEl < lp.a_start[iCol + 1]; iEl++) {
+      HighsInt iCut = cut_row_index[lp.a_index[iEl]];
+      if (iCut >= 0) {
+        cut_matrix.index_[cut_matrix_length[iCut]] = iCol;
+        cut_matrix.value_[cut_matrix_length[iCut]] = lp.a_value[iEl];
+        cut_matrix_length[iCut]++;
+      }
+    }
+  }
+}
+
+void HighsLpRelaxation::resetToGlobalDomain(const HighsDomain& globaldom) {
+  changeColsBounds(0, mipsolver.numCol() - 1, globaldom.col_lower_.data(),
+                   globaldom.col_upper_.data());
+}
+
+void HighsLpRelaxation::flushDomain(HighsDomain& domain, bool continuous) {
+  if (!domain.getChangedCols().empty()) {
+    if (&domain == &mipsolver.mipdata_->getDomain()) continuous = true;
+    currentbasisstored = false;
+    if (!continuous) domain.removeContinuousChangedCols();
+    HighsInt numChgCols = domain.getChangedCols().size();
+    if (numChgCols == 0) return;
+    const HighsInt* chgCols = domain.getChangedCols().data();
+    for (HighsInt i = 0; i < numChgCols; ++i) {
+      HighsInt col = chgCols[i];
+      colLbBuffer[i] = domain.col_lower_[col];
+      colUbBuffer[i] = domain.col_upper_[col];
+    }
+
+    highs_rs::highs_rs_lph_change_col_bounds_set(
+        lp_, numChgCols, domain.getChangedCols().data(), colLbBuffer.data(),
+        colUbBuffer.data());
+
+    domain.clearChangedCols();
+  }
+}
+
+void HighsLpRelaxation::recoverBasis() {
+  if (basischeckpoint) {
+    setLpBasis(*basischeckpoint, "HighsLpRelaxation::recoverBasis");
+    currentbasisstored = true;
+  }
+}
+
+void HighsLpRelaxation::setObjectiveLimit(double objlim) {
+  double offset;
+  if (mipsolver.mipdata_->objectiveFunction.isIntegral())
+    offset = 0.5 / mipsolver.mipdata_->objectiveFunction.integralScale();
+  else
+    offset = std::max(1000.0 * mipsolver.mipdata_->feastol,
+                      std::abs(objlim) * kHighsTiny);
+
+  setLpOption("objective_bound", objlim + offset);
+}
+
+HighsStatus HighsLpRelaxation::runSolve(bool& use_simplex_out,
+                                        int64_t& extraIterations) {
+  const double this_time_limit =
+      std::max(highs_rs::highs_rs_lph_run_time(lp_) +
+                   mipsolver.options_mip_->time_limit - mipsolver.timer_.read(),
+               0.0);
+  setLpOption("time_limit", this_time_limit);
+  const bool valid_basis = lpBasisValid();
+
+  if (mipsolver.profiling_->mip_ && !mipsolver.submip &&
+      !this->solved_first_lp) {
+    highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
+                 "MIP-Timing: %11.2g - start first LP solve (with%s basis)\n",
+                 mipsolver.timer_.read(), valid_basis ? "" : "out");
+  }
+  // Determine the solver: simplex, unless IPM is requested and there is
+  // no basis
+  const std::string solver = lpOptionString(lp_, "solver");
+  std::string use_solver;
+  if (valid_basis) {
+    use_solver = kSimplexString;
+  } else {
+    const std::string mip_lp_solver = mipsolver.options_mip_->mip_lp_solver;
+    if (useIpm(mip_lp_solver)) {
+      bool use_hipo = mip_lp_solver == kHipoString;
+      use_solver = use_hipo ? kHipoString : kIpxString;
+    } else {
+      use_solver = kSimplexString;
+    }
+  }
+  HighsStatus callstatus;
+  // Now allowing the use of IPM at the root node
+  setLpOption("solver", use_solver);
+  bool use_ipm = useIpm(use_solver);
+  bool use_simplex = !use_ipm;
+  if (use_ipm) {
+    assert(!valid_basis);
+    mipsolver.profiling_->solveCall("LP1", mipsolver.submip);
+    callstatus = optimizeLp();
+    if (callstatus == HighsStatus::kError) {
+      highsLogDev(
+          mipsolver.options_mip_->log_options, HighsLogType::kInfo,
+          "HighsLpRelaxation::run HiPO has failed : status = %s Try IPX\n",
+          utilModelStatusToString(getLpModelStatus()).c_str());
+      setLpOption("solver", kSimplexString);
+      use_simplex = true;
+    }
+  }
+  if (use_simplex) {
+    const bool profiling_submip = mipsolver.profiling_->isSubMip();
+    mipsolver.profiling_->setSubMip(mipsolver.submip);
+    if (mipsolver.profiling_->running(kSubSolverSubMip))
+      printf(
+          "HighsLpRelaxation::run Sub-MIP sub-solver clock running on thread "
+          "%2d and this is %sMIP\n",
+          int(mipsolver.profiling_->myThread()),
+          mipsolver.submip ? "sub-" : "");
+    mipsolver.profiling_->setSubMip(profiling_submip);
+    mipsolver.profiling_->solveCall("LP2", mipsolver.submip);
+    if (raceIpx && !valid_basis) {
+      // the dual simplex here and IPX on a helper thread
+      bool ipxWon = false;
+      callstatus = HighsStatus(highs_rs::highs_rs_lph_race_ipx(
+          lp_, mipsolver.options_mip_->random_seed, &extraIterations,
+          &ipxWon));
+      highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
+                   "Root LP: %s won the race on two threads\n",
+                   ipxWon ? "IPX" : "the dual simplex");
+    } else {
+      callstatus = optimizeLp();
+    }
+  }
+  // Revert the value of the solver option
+  setLpOption("solver", solver);
+  if (mipsolver.profiling_->mip_ && !mipsolver.submip &&
+      !this->solved_first_lp) {
+    highsLogUser(mipsolver.options_mip_->log_options, HighsLogType::kInfo,
+                 "MIP-Timing: %11.2g - finish first LP solve\n",
+                 mipsolver.timer_.read());
+  }
+  this->solved_first_lp = true;
+  use_simplex_out = use_simplex;
+  return callstatus;
+}
+
+void HighsLpRelaxation::ipmBasisAfterIterationLimit() {
+  // IPX (HiPO is not in this build), presolved unless only the root may be
+  mipsolver.profiling_->solveCall("LP3", mipsolver.submip);
+  highs_rs::highs_rs_lph_ipm_basis(
+      lp_, !mipsolver.options_mip_->mip_root_presolve_only,
+      mipsolver.profiling_);
+}
+
 #endif  // HIGHS_RUST

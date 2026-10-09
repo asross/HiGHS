@@ -66,6 +66,10 @@ class HighsRedcostFixing {
 
   void addRootRedcost(const HighsMipSolver& mipsolver,
                       const std::vector<double>& lpredcost, double lpobjective);
+  // of the LP solution's reduced costs in place (computeBasicDegenerateDuals
+  // changes them before they are read)
+  void addRootRedcost(const HighsMipSolver& mipsolver,
+                      const double* lpredcost, double lpobjective);
 };
 #else
 class HighsRedcostFixing {

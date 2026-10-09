@@ -91,7 +91,7 @@ struct HighsSeparationAccess {
       case 7:
         if (master) {
           mipdata.redcostfixing.addRootRedcost(mipdata.mipsolver,
-                                               lp->getSolution().col_dual,
+                                               lp->lpColDual().data(),
                                                lp->getObjective());
           if ((which == 6 ? w.upper_limit : mipdata.upper_limit) != kHighsInf)
             mipdata.redcostfixing.propagateRootRedcost(mipdata.mipsolver);
@@ -101,7 +101,7 @@ struct HighsSeparationAccess {
         if (!mipdata.parallelLockActive())
           lp->getMipSolver().profiling_->start(s.implBoundClock);
         mipdata.implications.separateImpliedBounds(
-            *lp, lp->getSolution().col_value, w.getCutPool(), mipdata.feastol,
+            *lp, lp->lpColValueVec(), w.getCutPool(), mipdata.feastol,
             w.getGlobalDomain(), mipdata.parallelLockActive());
         if (!mipdata.parallelLockActive())
           lp->getMipSolver().profiling_->stop(s.implBoundClock);
@@ -110,7 +110,7 @@ struct HighsSeparationAccess {
         if (!mipdata.parallelLockActive())
           lp->getMipSolver().profiling_->start(s.cliqueClock);
         mipdata.cliquetable.separateCliques(
-            lp->getMipSolver(), lp->getLpSolver().getSolution().col_value,
+            lp->getMipSolver(), lp->lpColValueVec(),
             w.getCutPool(), mipdata.feastol,
             mipdata.parallelLockActive() ? w.randgen
                                          : mipdata.cliquetable.getRandgen(),
@@ -139,7 +139,7 @@ struct HighsSeparationAccess {
         return 0;
       }
       case 12: {
-        const std::vector<double>& sol = lp->getLpSolver().getSolution().col_value;
+        const std::vector<double> sol = lp->lpColValueVec();
         w.getCutPool().separate(sol, propdomain, s.cutset, mipdata.feastol,
                                 mipdata.cutpools);
         // Also separate the global cut pool

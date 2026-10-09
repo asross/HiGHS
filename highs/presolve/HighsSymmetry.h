@@ -100,6 +100,9 @@ struct HighsSymmetries {
   HighsInt getBranchingColumn(const std::vector<double>& colLower,
                               const std::vector<double>& colUpper,
                               HighsInt col) const;
+  // the bounds of n columns
+  HighsInt getBranchingColumn(const double* colLower, const double* colUpper,
+                              HighsInt n, HighsInt col) const;
 
   std::shared_ptr<const StabilizerOrbits> computeStabilizerOrbits(
       const HighsDomain& localdom, StabilizerOrbitWorkspace& workspace);

@@ -199,6 +199,11 @@ struct RsFactorLogStore {
 void rsSimplexAppTemplate(HighsOptions& options, HighsLp& lp,
                           RsFactorLogStore& factor_log, void* out);
 // A step of solveLpSimplex on the HEkk shell (app.rs ops)
+// The profiling steps of a simplex solve on a HighsProfiling (code 1
+// start, 2 stop, arg whether there is a basis) and of PDLP (3 start, 4
+// stop)
+void rsSimplexProfiling(void* profiling, int code, HighsInt simplex_strategy,
+                        int64_t arg);
 int64_t rsSimplexShellOp(HEkk& ekk, HighsProfiling* profiling,
                          HighsOptions& options, HighsCallback& callback,
                          HighsTimer& timer, HighsLp& lp, int code,

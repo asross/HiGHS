@@ -20,6 +20,8 @@
 //! - LP rows are copied: a cut row's storage in the cut pool can move
 //!   when cuts are added.
 
+use crate::hvector::OwnedHVec;
+use crate::lp_data::lp_handle::LpHandle;
 use crate::util::fma::ClangFma;
 use crate::util::sparse_vector_sum::HighsSparseVectorSum;
 use std::ffi::c_void;
@@ -77,11 +79,6 @@ pub struct Host {
     pub num_nodes_up: unsafe extern "C" fn(*mut c_void, i32) -> i64,
     /// lpRelaxation.getNumLpIterations()
     pub num_lp_iterations: unsafe extern "C" fn(*mut c_void) -> i64,
-    /// Highs::getBasisInverseRowSparse(basisIndex): false unless kOk;
-    /// the row's nonzeros (index, and array indexed by row)
-    pub basis_inverse_row: unsafe extern "C" fn(*mut c_void, i32, *mut i32, *mut *const i32, *mut *const f64) -> bool,
-    /// lpSolver.getDualEdgeWeights() (may be null)
-    pub dual_edge_weights: unsafe extern "C" fn(*mut c_void) -> *const f64,
 }
 
 /// What C++ passes to start a round
@@ -116,6 +113,8 @@ pub struct CSepaLp {
     pub parallel_lock_active: bool,
     pub mip_pool_soft_limit: i32,
     pub host: Host,
+    /// The LP solver (its basis inverse rows and DSE weights)
+    pub lph: *mut LpHandle,
 }
 
 /// HighsTransformedLp::BoundType
@@ -225,6 +224,9 @@ pub struct SepaRound {
     pub parallel_lock_active: bool,
     pub mip_pool_soft_limit: i32,
     pub host: Host,
+    /// The LP solver, and the vector of its basis inverse rows
+    pub lph: *mut LpHandle,
+    pub row_ep: OwnedHVec,
 
     /// LP rows (row-wise copy)
     pub ar_start: Vec<usize>,
@@ -275,6 +277,8 @@ impl SepaRound {
             parallel_lock_active: c.parallel_lock_active,
             mip_pool_soft_limit: c.mip_pool_soft_limit,
             host: c.host,
+            lph: c.lph,
+            row_ep: OwnedHVec::new(0),
             ar_start: Vec::with_capacity(num_row + 1),
             ar_index: Vec::new(),
             ar_value: Vec::new(),

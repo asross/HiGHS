@@ -106,49 +106,13 @@ static void* lpNew(void* m, void* w) {
   return p;
 }
 static void lpFree(void* lp) { delete static_cast<HighsLpRelaxation*>(lp); }
-static LpShared* lpShared(void* lp) { return lpr(lp).rustShared(); }
-static void lpSetIterationLimit(void* lp, HighsInt limit) {
-  lpr(lp).setIterationLimit(limit);
-}
-static void lpChangeColsBounds(void* lp, const double* lo, const double* up) {
-  HighsLpRelaxation& l = lpr(lp);
-  l.getLpSolver().changeColsBounds(0, l.getMipSolver().numCol() - 1, lo, up);
-}
-static void lpChangeColBounds(void* lp, HighsInt col, double lo, double up) {
-  lpr(lp).getLpSolver().changeColBounds(col, lo, up);
-}
-static void lpChangeColsCost(void* lp, const HighsInt* mask,
-                             const double* cost) {
-  lpr(lp).getLpSolver().changeColsCost(mask, cost);
-}
-static void lpSetOption(void* lp, int which) {
-  Highs& h = lpr(lp).getLpSolver();
-  switch (which) {
-    case 0:
-      h.setOptionValue("presolve", kHighsOffString);
-      break;
-    case 1:
-      h.setOptionValue("presolve", kHighsOnString);
-      break;
-    case 2:
-      h.setOptionValue("simplex_strategy", kSimplexStrategyPrimal);
-      break;
-    default:
-      h.setOptionValue("primal_simplex_bound_perturbation_multiplier", 0.0);
-  }
-}
+static highs_rs::LpRelax* lpRust(void* lp) { return lpr(lp).rust(); }
 static void lpSetRootBasis(void* lp, const char* origin) {
   HighsLpRelaxation& l = lpr(lp);
-  l.getLpSolver().setBasis(l.getMipSolver().mipdata_->firstrootbasis, origin);
+  l.setLpBasis(l.getMipSolver().mipdata_->firstrootbasis, origin);
 }
 static int lpResolve(void* lp, void* d) {
   return int(lpr(lp).resolveLp(static_cast<HighsDomain*>(d)));
-}
-static const double* lpSolution(void* lp, int which, HighsInt* n) {
-  const HighsSolution& s = lpr(lp).getLpSolver().getSolution();
-  const std::vector<double>& v = which == 0 ? s.col_value : s.col_dual;
-  *n = v.size();
-  return v.data();
 }
 static void lpSetObjectiveLimit(void* lp, double lim) {
   lpr(lp).setObjectiveLimit(lim);
@@ -168,10 +132,6 @@ static void lpInfeasibleConflict(void* lp, void* w, void* localdom) {
                             vals, rhs);
   }
 }
-static bool lpPutIterate(void* lp) {
-  return lpr(lp).getLpSolver().putIterate() == HighsStatus::kOk;
-}
-static void lpGetIterate(void* lp) { lpr(lp).getLpSolver().getIterate(); }
 
 // a heuristic's search, with its own copy of the worker's pseudocosts
 struct HeurSearch {
@@ -225,10 +185,16 @@ static void subMip(void* m, void* w, const MipSubMipSpec* spec,
                    MipSubMipResult* r, double* sol) {
   const HighsMipSolver& mipsolver = mip(m);
   HighsMipWorker& worker = wk(w);
-  const HighsLp& lpModel =
-      spec->lp ? lpr(spec->lp).getLp() : *mipsolver.model_;
-  const HighsBasis& basis = spec->lp ? lpr(spec->lp).getLpSolver().getBasis()
-                                     : mipsolver.mipdata_->firstrootbasis;
+  // the LP relaxation's model and basis (copies), or the MIP's
+  HighsLp lpCopy;
+  HighsBasis basisCopy;
+  if (spec->lp) {
+    lpCopy = lpr(spec->lp).getLpCopy();
+    basisCopy = lpr(spec->lp).getLpBasis();
+  }
+  const HighsLp& lpModel = spec->lp ? lpCopy : *mipsolver.model_;
+  const HighsBasis& basis =
+      spec->lp ? basisCopy : mipsolver.mipdata_->firstrootbasis;
   HighsOptions submipoptions = *mipsolver.options_mip_;
   HighsLp submip = lpModel;
 
@@ -439,15 +405,14 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
     case 119:
       // check if only root presolve is allowed
       if (d.firstrootbasis.valid)
-        d.getLp().getLpSolver().setBasis(
-            d.firstrootbasis, "HighsMipSolverData::evaluateRootNode");
+        d.getLp().setLpBasis(d.firstrootbasis,
+                             "HighsMipSolverData::evaluateRootNode");
       else if (ms.options_mip_->mip_root_presolve_only)
-        d.getLp().getLpSolver().setOptionValue("presolve", kHighsOffString);
+        d.getLp().setLpOption("presolve", kHighsOffString);
       else
-        d.getLp().getLpSolver().setOptionValue("presolve", kHighsOnString);
+        d.getLp().setLpOption("presolve", kHighsOnString);
       if (ms.options_mip_->highs_debug_level)
-        d.getLp().getLpSolver().setOptionValue("output_flag",
-                                               ms.options_mip_->output_flag);
+        d.getLp().setLpOption("output_flag", ms.options_mip_->output_flag);
       return 0;
     case 120:
       d.getLp().setRaceIpx(i != 0);
@@ -457,21 +422,19 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
     case 122:
       return d.firstrootbasis.valid;
     case 123:
-      d.getLp().getLpSolver().setOptionValue("output_flag", false);
-      d.getLp().getLpSolver().setOptionValue("presolve", kHighsOffString);
-      d.getLp().getLpSolver().setOptionValue("parallel", kHighsOffString);
+      d.getLp().setLpOption("output_flag", false);
+      d.getLp().setLpOption("presolve", kHighsOffString);
+      d.getLp().setLpOption("parallel", kHighsOffString);
       return 0;
     case 124:
-      highs_rs_mip_vecs_set(d.rsv_.p, 1,
-                            d.getLp().getSolution().col_value.data(),
-                            d.getLp().getSolution().col_value.size());
+      highs_rs_mip_vecs_set(d.rsv_.p, 1, d.getLp().lpColValue().data(),
+                            d.getLp().lpColValue().size());
       d.firstlpsolobj = d.getLp().getObjective();
       d.rootlpsolobj = d.firstlpsolobj;
       return 0;
     case 125:
-      if (d.getLp().getLpSolver().getBasis().valid &&
-          d.getLp().numRows() == ms.numRow())
-        d.firstrootbasis = d.getLp().getLpSolver().getBasis();
+      if (d.getLp().lpBasisValid() && d.getLp().numRows() == ms.numRow())
+        d.firstrootbasis = d.getLp().getLpBasis();
       else {
         // the root basis is later expected to be consistent for the model
         // without cuts so set it to the slack basis if the current basis
@@ -532,18 +495,17 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
           h.shifting(worker, d.rootlpsol);
           break;
         case 11:
-          h.randomizedRounding(
-              worker, d.getLp().getLpSolver().getSolution().col_value);
+          h.randomizedRounding(worker, d.getLp().lpColValueVec());
           break;
         default:
-          h.shifting(worker, d.getLp().getLpSolver().getSolution().col_value);
+          h.shifting(worker, d.getLp().lpColValueVec());
       }
       return 0;
     }
     case 133: {
       HighsCutSet cutset;
-      d.getCutPool().separate(d.getLp().getSolution().col_value, d.getDomain(),
-                              cutset, d.feastol, d.cutpools);
+      d.getCutPool().separate(d.getLp().lpColValueVec(), d.getDomain(), cutset,
+                              d.feastol, d.cutpools);
       if (cutset.empty()) return 0;
       d.getLp().addCuts(cutset);
       return 1;
@@ -562,7 +524,7 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
         index.insert(index.end(), inds, inds + len);
         value.insert(value.end(), vals, vals + len);
         start.push_back(index.size());
-        rhs.push_back(lp.getLp().row_upper_[row]);
+        rhs.push_back(lp.rowUpper(row));
         integral.push_back(lp.isRowIntegral(row));
       }
       highs_rs_concurrent_lns_set_root_cuts(
@@ -593,11 +555,10 @@ static double rootOp(void* m, int which, void* w, int64_t i, double x) {
     case 143:
       return d.getLp().getAvgSolveIters();
     case 146:
-      return d.getLp().getLpSolver().getBasis().valid;
+      return d.getLp().lpBasisValid();
     case 147:
-      highs_rs_mip_vecs_set(
-          d.rsv_.p, 2, d.getLp().getLpSolver().getSolution().col_value.data(),
-          d.getLp().getLpSolver().getSolution().col_value.size());
+      highs_rs_mip_vecs_set(d.rsv_.p, 2, d.getLp().lpColValue().data(),
+                            d.getLp().lpColValue().size());
       return 0;
     case 148:
       return d.getDomain().getChangedCols().size();
@@ -659,16 +620,13 @@ static double op(void* m, int which, void* w, int64_t i, double x) {
     case 21:
       return d.getLp().getNumModelRows();
     case 22:
-      return d.getLp().getLpSolver().getModelStatus() ==
-             HighsModelStatus::kNotset;
+      return d.getLp().getLpModelStatus() == HighsModelStatus::kNotset;
     case 23:
-      d.redcostfixing.addRootRedcost(
-          ms, d.getLp().getLpSolver().getSolution().col_dual,
-          d.getLp().getObjective());
+      d.redcostfixing.addRootRedcost(ms, d.getLp().lpColDual().data(),
+                                     d.getLp().getObjective());
       return 0;
     case 24:
-      d.heuristics.ziRound(wk(w),
-                           d.getLp().getLpSolver().getSolution().col_value);
+      d.heuristics.ziRound(wk(w), d.getLp().lpColValueVec());
       return 0;
     case 25:
       return ms.solution_.empty();
@@ -707,21 +665,22 @@ static bool repairLp(void* m, const double* lower, const double* upper,
   fixedModel.integrality_.clear();
   fixedModel.col_lower_.assign(lower, lower + fixedModel.num_col_);
   fixedModel.col_upper_.assign(upper, upper + fixedModel.num_col_);
-  Highs tmpSolver;
-  tmpSolver.setProfiling(ms.profiling_);
-  tmpSolver.setOptionValue("output_flag", false);
-  tmpSolver.setOptionValue("time_limit", time_limit);
-  tmpSolver.setOptionValue("primal_feasibility_tolerance",
-                           feasibility_tolerance);
-  tmpSolver.setOptionValue("presolve",
-                           presolve ? kHighsChooseString : kHighsOffString);
-  tmpSolver.passModel(std::move(fixedModel));
-  tmpSolver.setOptionValue("solver", kSimplexString);
-  tmpSolver.optimizeLp();
-  *iterations = tmpSolver.getInfo().simplex_iteration_count;
-  if (tmpSolver.getInfo().primal_solution_status != kSolutionStatusFeasible)
-    return false;
-  ms.mipdata_->rsScratch_ = tmpSolver.getSolution();
+  HighsLpHandle tmpSolver;
+  highs_rs::highs_rs_lph_set_profiling(tmpSolver.p, ms.profiling_);
+  rsLpSetOption(tmpSolver.p, "output_flag", false);
+  rsLpSetOption(tmpSolver.p, "time_limit", time_limit);
+  rsLpSetOption(tmpSolver.p, "primal_feasibility_tolerance",
+                feasibility_tolerance);
+  rsLpSetOption(tmpSolver.p, "presolve",
+                presolve ? kHighsChooseString : kHighsOffString);
+  rsLpPassModel(tmpSolver.p, fixedModel);
+  rsLpSetOption(tmpSolver.p, "solver", kSimplexString);
+  rsLpOptimize(tmpSolver.p);
+  highs_rs::LphView v;
+  highs_rs::highs_rs_lph_view(tmpSolver.p, &v);
+  *iterations = v.info->simplex_iteration_count;
+  if (v.info->primal_solution_status != kSolutionStatusFeasible) return false;
+  ms.mipdata_->rsScratch_ = rsLpSolution(tmpSolver.p);
   return true;
 }
 
@@ -799,21 +758,13 @@ static const MipFns fns = {
     lpCopy,
     lpNew,
     lpFree,
-    lpShared,
-    lpSetIterationLimit,
-    lpChangeColsBounds,
-    lpChangeColBounds,
-    lpChangeColsCost,
-    lpSetOption,
+    lpRust,
     lpSetRootBasis,
     lpResolve,
-    lpSolution,
     lpSetObjectiveLimit,
     lpFlushDomain,
     lpRemoveObsoleteRows,
     lpInfeasibleConflict,
-    lpPutIterate,
-    lpGetIterate,
     searchNew,
     searchFree,
     searchSetLp,

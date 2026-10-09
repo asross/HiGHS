@@ -83,6 +83,13 @@ class HighsImplications {
                                            double& bestLb,
                                            const HighsDomain& globaldom) const;
 
+  // the same on the LP solution's column values and duals (n each)
+  std::pair<HighsInt, VarBound> getBestVb(bool vlb, HighsInt col,
+                                          const double* col_value,
+                                          const double* col_dual, size_t n,
+                                          double& bound,
+                                          const HighsDomain& globaldom) const;
+
   bool runProbing(HighsInt col, HighsInt& numReductions);
 
   void rebuild(HighsInt ncols, const std::vector<HighsInt>& cIndex,

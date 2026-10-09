@@ -696,16 +696,15 @@ void HEkk::lpBack(HighsLp& lp, const bool matrix) const {
 
 // The steps of solveLpSimplex on the HEkk shell (app.rs ops 1-4, 6-11),
 // with `lp` the incumbent LP
-int64_t rsSimplexShellOp(HEkk& ekk, HighsProfiling* profiling,
-                         HighsOptions& options, HighsCallback& callback,
-                         HighsTimer& timer, HighsLp& lp, int code,
-                         int64_t arg, void* p) {
+void rsSimplexProfiling(void* profiling_p, int code, HighsInt simplex_strategy,
+                        int64_t arg) {
+  HighsProfiling* profiling = static_cast<HighsProfiling*>(profiling_p);
   switch (code) {
     case 1:
       // arg: whether the HiGHS basis is valid
       if (profiling) {
         HighsInt profiling_clock = -1;
-        if (options.simplex_strategy == kSimplexStrategyPrimal) {
+        if (simplex_strategy == kSimplexStrategyPrimal) {
           profiling_clock =
               arg ? kSubSolverPrSimplexBasis : kSubSolverPrSimplexNoBasis;
         } else {
@@ -714,7 +713,7 @@ int64_t rsSimplexShellOp(HEkk& ekk, HighsProfiling* profiling,
         }
         profiling->start(profiling_clock);
       }
-      return 0;
+      return;
     case 2:
       if (profiling->sub_solver_) {
         HighsInt profiling_clock = -1;
@@ -732,6 +731,24 @@ int64_t rsSimplexShellOp(HEkk& ekk, HighsProfiling* profiling,
           profiling_clock = kSubSolverPrSimplexNoBasis;
         profiling->stop(profiling_clock);
       }
+      return;
+    case 3:
+      profiling->start(kSubSolverPdlp);
+      return;
+    case 4:
+      profiling->stop(kSubSolverPdlp);
+      return;
+  }
+}
+
+int64_t rsSimplexShellOp(HEkk& ekk, HighsProfiling* profiling,
+                         HighsOptions& options, HighsCallback& callback,
+                         HighsTimer& timer, HighsLp& lp, int code,
+                         int64_t arg, void* p) {
+  switch (code) {
+    case 1:
+    case 2:
+      rsSimplexProfiling(profiling, code, options.simplex_strategy, arg);
       return 0;
     case 3:
       ekk.initialiseSimplexStats();

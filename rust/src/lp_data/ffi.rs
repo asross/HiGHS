@@ -49,6 +49,17 @@ pub struct RsVec<T> {
     len: usize,
 }
 
+unsafe extern "C" fn null_resize<T>(_: *mut std::ffi::c_void, _: usize) -> *mut T {
+    unreachable!("a placeholder vector")
+}
+
+impl<T> RsVec<T> {
+    /// An empty placeholder (a template's field set later)
+    pub fn null() -> Self {
+        RsVec { vec: std::ptr::null_mut(), resize_fn: null_resize::<T>, ptr: std::ptr::null_mut(), len: 0 }
+    }
+}
+
 impl<T: Copy + Default> RsVec<T> {
     pub fn len(&self) -> usize {
         self.len
