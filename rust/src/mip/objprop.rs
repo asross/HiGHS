@@ -29,22 +29,22 @@ pub struct Contribution {
 #[repr(C)]
 pub struct CObjProp {
     pub active: bool,
-    cost: CSlice<f64>,
-    obj_nonzeros: CSlice<i32>,
-    partition_starts: CSlice<i32>,
-    col_to_partition: CSlice<i32>,
-    num_binaries: i32,
-    contributions: CSlice<Contribution>,
+    pub(crate) cost: CSlice<f64>,
+    pub(crate) obj_nonzeros: CSlice<i32>,
+    pub(crate) partition_starts: CSlice<i32>,
+    pub(crate) col_to_partition: CSlice<i32>,
+    pub(crate) num_binaries: i32,
+    pub(crate) contributions: CSlice<Contribution>,
     /// (root, first) of each partition's tree
-    partition_sets: CSlice<[i32; 2]>,
-    objective_lower: *mut CDouble,
-    num_inf_obj_lower: *mut i32,
-    capacity_threshold: *mut f64,
-    is_propagated: *mut bool,
+    pub(crate) partition_sets: CSlice<[i32; 2]>,
+    pub(crate) objective_lower: *mut CDouble,
+    pub(crate) num_inf_obj_lower: *mut i32,
+    pub(crate) capacity_threshold: *mut f64,
+    pub(crate) is_propagated: *mut bool,
     // getPropagationConstraint
-    obj_vals: CSlice<f64>,
-    clique_data: CSlice<CliqueData>,
-    cons_buffer: CSlice<f64>,
+    pub(crate) obj_vals: CSlice<f64>,
+    pub(crate) clique_data: CSlice<CliqueData>,
+    pub(crate) cons_buffer: CSlice<f64>,
 }
 
 /// ObjectivePropagation::PartitionCliqueData
@@ -566,6 +566,26 @@ pub unsafe extern "C" fn highs_rs_domain_obj_propagation_constraint(
 }
 
 impl CObjProp {
+    /// The view of an inactive objective propagation
+    pub fn inactive() -> CObjProp {
+        CObjProp {
+            active: false,
+            cost: CSlice::of(&[]),
+            obj_nonzeros: CSlice::of(&[]),
+            partition_starts: CSlice::of(&[]),
+            col_to_partition: CSlice::of(&[]),
+            num_binaries: 0,
+            contributions: CSlice::of(&[]),
+            partition_sets: CSlice::of(&[]),
+            objective_lower: std::ptr::null_mut(),
+            num_inf_obj_lower: std::ptr::null_mut(),
+            capacity_threshold: std::ptr::null_mut(),
+            is_propagated: std::ptr::null_mut(),
+            obj_vals: CSlice::of(&[]),
+            clique_data: CSlice::of(&[]),
+            cons_buffer: CSlice::of(&[]),
+        }
+    }
     /// # Safety
     /// As for CDomain::view; one view at a time
     #[inline(always)]

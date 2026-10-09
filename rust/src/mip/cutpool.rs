@@ -890,7 +890,7 @@ pub struct CMatrixView {
     pub num_rhs: i32,
 }
 
-mod ffi {
+pub(crate) mod ffi {
     use super::*;
     use crate::ffi::{sl, sl_mut};
 

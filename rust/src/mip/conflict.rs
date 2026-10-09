@@ -32,16 +32,16 @@ const REASON_CLIQUE_TABLE: i32 = -5;
 /// mirrored by highs_rs::Conflict in highs/mip/HighsDomainRust.h
 #[repr(C)]
 pub struct CConflict {
-    local: *const CDomain,
-    global: *const CDomain,
+    pub(crate) local: *const CDomain,
+    pub(crate) global: *const CDomain,
     /// the HighsConflictPool, the pseudocosts and the node queue
-    pool: *mut c_void,
-    pseudocost: *mut Pseudocost,
-    nodequeue: *const NodeQueue,
-    num_integral: i32,
+    pub(crate) pool: *mut c_void,
+    pub(crate) pseudocost: *mut Pseudocost,
+    pub(crate) nodequeue: *const NodeQueue,
+    pub(crate) num_integral: i32,
     /// addConflictCut and addReconvergenceCut (if domchg is not null) of the
     /// frontier's entries, then refills both views
-    add_cut: unsafe extern "C" fn(*const CConflict, *const DomChg, i32, *const DomChg),
+    pub(crate) add_cut: unsafe extern "C" fn(*const CConflict, *const DomChg, i32, *const DomChg),
 }
 
 type Frontier = BTreeMap<i32, DomChg>;

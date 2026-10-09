@@ -395,6 +395,7 @@ set(highs_sources
     mip/HighsImplications.cpp
     mip/HighsLpAggregator.cpp
     mip/HighsLpRelaxation.cpp
+    mip/HighsMipHost.cpp
     mip/HighsMipSolver.cpp
     mip/HighsMipSolverData.cpp
     mip/HighsMipWorker.cpp
@@ -536,6 +537,7 @@ set(highs_headers
     mip/HighsImplications.h
     mip/HighsLpAggregator.h
     mip/HighsLpRelaxation.h
+    mip/HighsMipHost.h
     mip/HighsMipSolver.h
     mip/HighsMipSolverData.h
     mip/HighsMipWorker.h

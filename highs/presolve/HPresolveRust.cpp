@@ -25,19 +25,11 @@
 
 #include "io/HighsIO.h"
 #include "lp_data/HighsLpUtils.h"
-#include "mip/HighsCliqueTable.h"
-#include "mip/HighsCliqueTableRust.h"
-#include "mip/HighsDomainRust.h"
-#include "mip/HighsImplications.h"
-#include "mip/HighsMipSolverData.h"
-#include "mip/HighsObjectiveFunction.h"
-#include "mip/MipTimer.h"
 #include "presolve/HighsPostsolveStack.h"
 #include "util/HFactor.h"
 
 static_assert(sizeof(HighsInt) == 4, "the Rust port uses 32-bit HighsInt");
 static_assert(sizeof(HighsVarType) == 1, "integrality is read as bytes");
-static_assert(sizeof(HighsSubstitution) == 24, "HighsSubstitution layout");
 
 namespace presolve {
 
@@ -91,15 +83,6 @@ struct RsOptions {
   bool presolve_rule_logging;
 };
 
-struct RsMipInfo {
-  double epsilon;
-  double feastol;
-  highs_rs::CliqueTable* cliquetable;
-  highs_rs::Implications* implications;
-  HighsInt orig_num_row;
-  HighsInt num_restarts;
-  bool submip;
-};
 
 struct RsModel {
   HighsInt num_col;
@@ -163,7 +146,6 @@ struct Ctx {
   HighsLp* model;
   const HighsOptions* options;
   HighsTimer* timer;
-  HighsMipSolver* mipsolver;
   HighsPostsolveStack* stack;
   // scratch arrays handed to Rust
   std::vector<HighsInt> ints;
@@ -173,11 +155,6 @@ struct Ctx {
 
 using Cb = void*;
 
-struct RsMipEnv {
-  const highs_rs::Domain* domain;
-  highs_rs::CliqueDom cdom;
-  highs_rs::CliqueMip cmip;
-};
 
 struct RsHost {
   Cb ctx;
@@ -195,7 +172,7 @@ struct RsHost {
                                   double, double*, RsSlice<HighsInt>*);
   void (*profiling)(Cb, bool, HighsInt);
   bool (*probing_prepare)(Cb, HighsInt, bool*);
-  void (*mip_env)(Cb, RsMipEnv*);
+  void (*mip_env)(Cb, void*);
   bool (*probe)(Cb, HighsInt, HighsInt*);
   void (*set_lifting)(Cb, bool);
   void (*lifting_opps)(Cb, RsSlice<RsLiftOpp>*);
@@ -280,26 +257,6 @@ void cbShrink(Cb c, const HighsInt* new_col, size_t nc, const HighsInt* new_row,
     lp.row_names_.resize(lp.num_row_);
   }
   x.stack->compressIndexMaps(newRowIndex, newColIndex);
-  HighsMipSolver* mipsolver = x.mipsolver;
-  if (mipsolver != nullptr) {
-    mipsolver->mipdata_->rowMatrixSet = false;
-    mipsolver->mipdata_->objectiveFunction = HighsObjectiveFunction(*mipsolver);
-    mipsolver->mipdata_->getDomain() = HighsDomain(*mipsolver);
-    mipsolver->mipdata_->cliquetable.rebuild(lp.num_col_, *x.stack,
-                                             mipsolver->mipdata_->getDomain(),
-                                             newColIndex, newRowIndex);
-    mipsolver->mipdata_->implications.rebuild(lp.num_col_, newColIndex,
-                                              newRowIndex);
-    mipsolver->mipdata_->getCutPool() =
-        HighsCutPool(mipsolver->model_->num_col_,
-                     mipsolver->options_mip_->mip_pool_age_limit,
-                     mipsolver->options_mip_->mip_pool_soft_limit, 0);
-    mipsolver->mipdata_->getConflictPool() =
-        HighsConflictPool(5 * mipsolver->options_mip_->mip_pool_age_limit,
-                          mipsolver->options_mip_->mip_pool_soft_limit);
-    mipsolver->mipdata_->debugSolution.shrink(newColIndex);
-    lp.setMatrixDimensions();
-  }
   lp.setMatrixDimensions();
 }
 
@@ -322,140 +279,30 @@ HighsInt cbDependentEquations(Cb c, size_t num_col, HighsInt num_row,
   return build_return;
 }
 
-void cbProfiling(Cb c, bool start, HighsInt clock) {
-  HighsMipSolver* mipsolver = C(c).mipsolver;
-  const HighsInt k =
-      clock == 0 ? kMipClockProbingPresolve : kMipClockEnumerationPresolve;
-  if (start)
-    mipsolver->profiling_->start(k);
-  else
-    mipsolver->profiling_->stop(k);
+// The MIP presolve's callbacks: the MIP presolve is Rust's
+// (rust/src/mip/host/presolve.rs), so an LP presolve never calls them
+[[noreturn]] void mipOnly() { abort(); }
+void cbProfiling(Cb, bool, HighsInt) { mipOnly(); }
+bool cbProbingPrepare(Cb, HighsInt, bool*) { mipOnly(); }
+void cbMipEnv(Cb, void*) { mipOnly(); }
+bool cbProbe(Cb, HighsInt, HighsInt*) { mipOnly(); }
+void cbSetLifting(Cb, bool) { mipOnly(); }
+void cbLiftingOpps(Cb, RsSlice<RsLiftOpp>*) { mipOnly(); }
+void cbFinaliseBegin(Cb, bool, RsSlice<HighsInt>*, RsSlice<HighsInt>*) {
+  mipOnly();
 }
-
-// the C++ part of prepareProbing; true if infeasible
-bool cbProbingPrepare(Cb c, HighsInt nnz, bool* first_call) {
-  Ctx& x = C(c);
-  HighsMipSolver* mipsolver = x.mipsolver;
-  HighsDomain& domain = mipsolver->mipdata_->getDomain();
-  HighsCliqueTable& cliquetable = mipsolver->mipdata_->cliquetable;
-  (void)nnz;
-  mipsolver->mipdata_->setupDomainPropagation();
-  const bool firstCall = !mipsolver->mipdata_->cliquesExtracted;
-  *first_call = firstCall;
-  domain.propagate();
-  if (domain.infeasible()) return true;
-  if (firstCall) {
-    mipsolver->mipdata_->cliquesExtracted = true;
-    cliquetable.extractCliques(*mipsolver);
-    if (domain.infeasible()) return true;
-    if (mipsolver->mipdata_->upper_limit != kHighsInf) {
-      double tmpLimit = mipsolver->mipdata_->upper_limit;
-      mipsolver->mipdata_->upper_limit = tmpLimit - x.model->offset_;
-      cliquetable.extractObjCliques(*mipsolver);
-      mipsolver->mipdata_->upper_limit = tmpLimit;
-      if (domain.infeasible()) return true;
-    }
-    domain.propagate();
-    if (domain.infeasible()) return true;
-  }
-  cliquetable.cleanupFixed(domain);
-  if (domain.infeasible()) return true;
-  return false;
+void cbDomainBounds(Cb, RsSlice<double>*, RsSlice<double>*) { mipOnly(); }
+void cbMipFinishPresolve(Cb, HighsInt) { mipOnly(); }
+void cbAddCut(Cb, const HighsInt*, const double*, size_t, double, bool) {
+  mipOnly();
 }
-
-// the domain view, clique table and MIP solver contexts of the probing and
-// enumeration loops (rust/src/presolve/hpresolve/probing.rs, enumeration.rs)
-void cbMipEnv(Cb c, RsMipEnv* env) {
-  HighsMipSolver* mipsolver = C(c).mipsolver;
-  HighsDomain& domain = mipsolver->mipdata_->getDomain();
-  env->domain = highs_rs::DomainAccess::view(domain);
-  env->cdom = highs_rs::cliqueDom(domain);
-  env->cmip = highs_rs::cliqueMip(*mipsolver);
-}
-
-bool cbProbe(Cb c, HighsInt col, HighsInt* num_bound_chgs) {
-  return C(c).mipsolver->mipdata_->implications.runProbing(col,
-                                                           *num_bound_chgs);
-}
-
-// collect the lifting opportunities of probing (on) or stop (off)
-void cbSetLifting(Cb c, bool on) {
-  Ctx& x = C(c);
-  HighsImplications& implications = x.mipsolver->mipdata_->implications;
-  if (!on) {
-    implications.storeLiftingOpportunity = nullptr;
-    return;
-  }
-  x.lifting.clear();
-  implications.storeLiftingOpportunity = [&x](HighsInt row, HighsInt col,
-                                              HighsInt val, double coef) {
-    x.lifting.push_back({row, col, val, coef});
-  };
-}
-
-void cbLiftingOpps(Cb c, RsSlice<RsLiftOpp>* out) {
-  Ctx& x = C(c);
-  *out = {x.lifting.data(), x.lifting.size()};
-}
-
-void cbFinaliseBegin(Cb c, bool first_call, RsSlice<HighsInt>* deleted,
-                     RsSlice<HighsInt>* extensions) {
-  Ctx& x = C(c);
-  HighsMipSolver* mipsolver = x.mipsolver;
-  HighsDomain& domain = mipsolver->mipdata_->getDomain();
-  HighsCliqueTable& cliquetable = mipsolver->mipdata_->cliquetable;
-  cliquetable.cleanupFixed(domain);
-  if (!first_call) cliquetable.extractCliques(*mipsolver, false);
-  cliquetable.runCliqueMerging(domain);
-  x.ints.assign(cliquetable.getDeletedRows().begin(),
-                cliquetable.getDeletedRows().end());
-  cliquetable.getDeletedRows().clear();
-  x.ints2.clear();
-  for (const auto& ext : cliquetable.getCliqueExtensions()) {
-    x.ints2.push_back(ext.first);
-    x.ints2.push_back(ext.second.col);
-    x.ints2.push_back(ext.second.val);
-  }
-  cliquetable.getCliqueExtensions().clear();
-  *deleted = {x.ints.data(), x.ints.size()};
-  *extensions = {x.ints2.data(), x.ints2.size()};
-}
-
-void cbDomainBounds(Cb c, RsSlice<double>* lower, RsSlice<double>* upper) {
-  const HighsDomain& domain = C(c).mipsolver->mipdata_->getDomain();
-  *lower = {domain.col_lower_.data(), domain.col_lower_.size()};
-  *upper = {domain.col_upper_.data(), domain.col_upper_.size()};
-}
-
-void cbMipFinishPresolve(Cb c, HighsInt nnz) {
-  HighsMipSolver* mipsolver = C(c).mipsolver;
-  mipsolver->mipdata_->cliquetable.setPresolveFlag(false);
-  mipsolver->mipdata_->cliquetable.setMaxEntries(nnz);
-  mipsolver->mipdata_->getDomain().addCutpool(
-      mipsolver->mipdata_->getCutPool());
-  mipsolver->mipdata_->getDomain().addConflictPool(
-      mipsolver->mipdata_->getConflictPool());
-}
-
-void cbAddCut(Cb c, const HighsInt* inds, const double* vals, size_t n,
-              double rhs, bool integral) {
-  HighsMipSolver* mipsolver = C(c).mipsolver;
-  std::vector<HighsInt> cutinds(inds, inds + n);
-  std::vector<double> cutvals(vals, vals + n);
-  mipsolver->mipdata_->getCutPool().addCut(*mipsolver, cutinds.data(),
-                                           cutvals.data(), n, rhs, integral,
-                                           true, false, false);
-}
-
-double cbUpperLimit(Cb c) { return C(c).mipsolver->mipdata_->upper_limit; }
-
-void cbSetLowerBoundZero(Cb c) { C(c).mipsolver->mipdata_->lower_bound = 0; }
-
+double cbUpperLimit(Cb) { mipOnly(); }
+void cbSetLowerBoundZero(Cb) { mipOnly(); }
 }  // namespace
 
 extern "C" HighsInt highs_rs_presolve_run(const RsHost* host,
                                           const RsOptions* opt,
-                                          const RsMipInfo* mip,
+                                          const void* mip,
                                           const RsInput* inp, RsOut* out);
 
 bool HPresolve::okSetInput(HighsLp& model_, const HighsOptions& options_,
@@ -474,22 +321,6 @@ bool HPresolve::okSetInput(HighsLp& model_, const HighsOptions& options_,
   return true;
 }
 
-bool HPresolve::okSetInput(HighsMipSolver& mipsolver,
-                           const HighsInt presolve_reduction_limit) {
-  this->mipsolver = &mipsolver;
-  if (mipsolver.model_ != &mipsolver.mipdata_->presolvedModel) {
-    mipsolver.mipdata_->presolvedModel = *mipsolver.model_;
-    mipsolver.model_ = &mipsolver.mipdata_->presolvedModel;
-  } else {
-    mipsolver.mipdata_->presolvedModel.col_lower_ =
-        mipsolver.mipdata_->getDomain().col_lower_;
-    mipsolver.mipdata_->presolvedModel.col_upper_ =
-        mipsolver.mipdata_->getDomain().col_upper_;
-  }
-  return okSetInput(mipsolver.mipdata_->presolvedModel, *mipsolver.options_mip_,
-                    presolve_reduction_limit, &mipsolver.timer_);
-}
-
 HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
   postsolve_stack.debug_prev_numreductions = 0;
   postsolve_stack.debug_prev_col_lower = 0;
@@ -499,8 +330,7 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
   if (model->a_matrix_.isRowwise()) model->a_matrix_.ensureColwise();
   assert(model->a_matrix_.numNz() || model->num_row_ == 0);
 
-  Ctx ctx{this, model, options, timer, mipsolver, &postsolve_stack, {}, {},
-          {}};
+  Ctx ctx{this, model, options, timer, &postsolve_stack, {}, {}, {}};
   RsHost host{&ctx,
               cbLog,
               cbTimerRead,
@@ -523,16 +353,6 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
               cbUpperLimit,
               cbSetLowerBoundZero};
   const RsOptions o = rsOptions(*options);
-  RsMipInfo mi{};
-  if (mipsolver != nullptr) {
-    mi.epsilon = mipsolver->mipdata_->epsilon;
-    mi.feastol = mipsolver->mipdata_->feastol;
-    mi.cliquetable = mipsolver->mipdata_->cliquetable.rust();
-    mi.implications = mipsolver->mipdata_->implications.rust();
-    mi.orig_num_row = mipsolver->orig_model_->num_row_;
-    mi.num_restarts = mipsolver->mipdata_->numRestarts;
-    mi.submip = mipsolver->submip;
-  }
   const PostsolveRsStack s = postsolve_stack.rustStack();
   static_assert(sizeof(HighsVarType) == sizeof(uint8_t), "");
   RsInput in{model->num_col_,
@@ -560,7 +380,7 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
              model->model_name_.c_str()};
   RsOut result{};
   const HighsInt status = highs_rs_presolve_run(
-      &host, &o, mipsolver != nullptr ? &mi : nullptr, &in, &result);
+      &host, &o, nullptr, &in, &result);
   presolve_status_ = HighsPresolveStatus(result.presolve_status);
   analysis_.presolve_log_.rule.resize(kPresolveRuleCount);
   for (HighsInt r = 0; r < kPresolveRuleCount; r++) {

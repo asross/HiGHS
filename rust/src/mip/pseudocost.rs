@@ -458,7 +458,7 @@ pub struct CPscostInit {
     pub ninferencestotal: i64,
 }
 
-mod ffi {
+pub(crate) mod ffi {
     use super::*;
     use crate::ffi::{sl, sl_mut};
 

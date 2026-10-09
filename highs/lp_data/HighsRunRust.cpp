@@ -24,7 +24,8 @@
 #include "lp_data/HighsModelUtils.h"
 #include "lp_data/HighsSolutionDebug.h"
 #include "lp_data/HighsSolution.h"
-#include "mip/HighsMipSolver.h"
+#include "mip/HighsMipHost.h"
+#include "mip/MipTimer.h"
 #include "parallel/HighsParallel.h"
 #include "model/HighsHessianUtils.h"
 #include "presolve/ICrashX.h"
@@ -552,7 +553,7 @@ struct HighsRunRust {
   std::exception_ptr pending;
   // The state of the drivers (drivers.rs) between steps
   HighsLp mip_lp;
-  std::unique_ptr<HighsMipSolver> mip_solver;
+  std::unique_ptr<HighsMipRun> mip_solver;
   double saved_tolerance = 0;
   HighsInt saved_mip_max_nodes = 0;
   std::vector<double> saved_lower, saved_upper, saved_cost;
@@ -886,13 +887,10 @@ struct HighsRunRust {
         h.presolve_.clear();
         return 0;
       case RunOp::kMipPresolve: {
-        HighsMipSolver solver(h.callback_, options, h.model_.lp_, h.solution_);
-        solver.setProfiling(h.profiling_);
-        solver.timer_.start();
-        solver.runMipPresolve(options.presolve_reduction_limit);
-        const HighsPresolveStatus status = solver.getPresolveStatus();
-        h.presolve_.data_.reduced_lp_ = solver.getPresolvedModel();
-        h.presolve_.data_.postSolveStack = solver.getPostsolveStack();
+        // the MIP presolve is Rust's (rust/src/mip/host)
+        const HighsPresolveStatus status = highsMipPresolve(
+            h.callback_, options, h.model_.lp_, h.solution_, h.profiling_,
+            h.presolve_.data_.reduced_lp_, h.presolve_.data_.postSolveStack);
         h.presolve_.presolve_status_ = status;
         return int64_t(status);
       }
@@ -955,14 +953,13 @@ struct HighsRunRust {
         if (has_semi_variables)
           mip_lp = withoutSemiVariables(lp, h.solution_,
                                         options.primal_feasibility_tolerance);
-        mip_solver.reset(new HighsMipSolver(
-            h.callback_, options, has_semi_variables ? mip_lp : lp,
-            h.solution_));
-        HighsMipSolver& solver = *mip_solver;
-        solver.setProfiling(h.profiling_);
+        // the MIP solver is Rust's (rust/src/mip/host)
         h.profiling_->start(kSubSolverMip);
-        solver.run();
+        mip_solver.reset(new HighsMipRun(h.callback_, options,
+                                         has_semi_variables ? mip_lp : lp,
+                                         h.solution_, h.profiling_));
         h.profiling_->stop(kSubSolverMip);
+        HighsMipRun& solver = *mip_solver;
         options.log_dev_level = log_dev_level;
         RsMipResult& r = *static_cast<RsMipResult*>(p);
         r.model_status = HighsInt(solver.modelstatus_);

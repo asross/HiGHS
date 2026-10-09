@@ -376,7 +376,7 @@ pub struct CPopped {
     pub depth: i32,
 }
 
-mod ffi {
+pub(crate) mod ffi {
     use super::*;
     use crate::ffi::sl;
 

@@ -286,7 +286,7 @@ impl ConflictPool {
     }
 }
 
-mod ffi {
+pub(crate) mod ffi {
     use super::*;
     use crate::ffi::sl;
 

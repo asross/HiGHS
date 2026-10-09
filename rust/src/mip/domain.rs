@@ -131,6 +131,13 @@ impl<T> Clone for CSlice<T> {
 impl<T> Copy for CSlice<T> {}
 
 impl<T> CSlice<T> {
+    /// The view of a slice that the code given it may write (as C++'s
+    /// non-const vectors); empty slices get the dangling non-null pointer
+    #[inline(always)]
+    pub fn of(s: &[T]) -> CSlice<T> {
+        CSlice { p: s.as_ptr() as *mut T, n: s.len() as i32 }
+    }
+
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.n as usize
@@ -179,7 +186,7 @@ impl<T, I: std::slice::SliceIndex<[T]>> std::ops::IndexMut<I> for CSlice<T> {
 
 /// A pointer to a C++ object of the domain (a std::vector or a scalar)
 #[repr(transparent)]
-pub struct Ptr<T>(*mut T);
+pub struct Ptr<T>(pub(crate) *mut T);
 
 impl<T> Clone for Ptr<T> {
     fn clone(&self) -> Self {
@@ -553,36 +560,36 @@ pub unsafe extern "C" fn highs_rs_reserve_pair(v: *mut c_void, n: usize) {
 /// highs_rs::CutProp in highs/mip/HighsDomainRustView.h
 #[repr(C)]
 pub struct CCutProp {
-    cutpoolindex: i32,
-    cutpool: *const c_void,
-    activitycuts: CSlice<CDouble>,
-    activitycutsinf: CSlice<i32>,
-    propagatecutflags: CSlice<u8>,
-    capacity_threshold: CSlice<f64>,
-    propagatecutinds: Ptr<StdVec<i32>>,
+    pub(crate) cutpoolindex: i32,
+    pub(crate) cutpool: *const c_void,
+    pub(crate) activitycuts: CSlice<CDouble>,
+    pub(crate) activitycutsinf: CSlice<i32>,
+    pub(crate) propagatecutflags: CSlice<u8>,
+    pub(crate) capacity_threshold: CSlice<f64>,
+    pub(crate) propagatecutinds: Ptr<StdVec<i32>>,
     // HighsDynamicRowMatrix
-    ar_range: CSlice<[i32; 2]>,
-    ar_index: CSlice<i32>,
-    ar_value: CSlice<f64>,
-    ar_rowindex: CSlice<i32>,
-    next_pos: CSlice<i32>,
-    next_neg: CSlice<i32>,
-    head_pos: CSlice<i32>,
-    head_neg: CSlice<i32>,
-    rhs: CSlice<f64>,
+    pub(crate) ar_range: CSlice<[i32; 2]>,
+    pub(crate) ar_index: CSlice<i32>,
+    pub(crate) ar_value: CSlice<f64>,
+    pub(crate) ar_rowindex: CSlice<i32>,
+    pub(crate) next_pos: CSlice<i32>,
+    pub(crate) next_neg: CSlice<i32>,
+    pub(crate) head_pos: CSlice<i32>,
+    pub(crate) head_neg: CSlice<i32>,
+    pub(crate) rhs: CSlice<f64>,
 }
 
 /// A ConflictPoolPropagation and its pool's conflicts, mirrored by
 /// highs_rs::ConfProp
 #[repr(C)]
 pub struct CConfProp {
-    col_lower_watched: CSlice<i32>,
-    col_upper_watched: CSlice<i32>,
-    watched: CSlice<WatchedLiteral>,
-    conflict_flag: CSlice<u8>,
-    propagate_conflict_inds: Ptr<StdVec<i32>>,
+    pub(crate) col_lower_watched: CSlice<i32>,
+    pub(crate) col_upper_watched: CSlice<i32>,
+    pub(crate) watched: CSlice<WatchedLiteral>,
+    pub(crate) conflict_flag: CSlice<u8>,
+    pub(crate) propagate_conflict_inds: Ptr<StdVec<i32>>,
     /// the pool (its conflicts are read live: syncConflictPool clears them)
-    pool: *mut ConflictPool,
+    pub(crate) pool: *mut ConflictPool,
 }
 
 impl CConfProp {
@@ -605,60 +612,60 @@ impl CConfProp {
 /// highs_rs::Domain in highs/mip/HighsDomainRustView.h
 #[repr(C)]
 pub struct CDomain {
-    feastol: *const f64,
-    epsilon: *const f64,
-    upper_limit: *const f64,
+    pub(crate) feastol: *const f64,
+    pub(crate) epsilon: *const f64,
+    pub(crate) upper_limit: *const f64,
     // model, column-wise
-    a_start: CSlice<i32>,
-    a_index: CSlice<i32>,
-    a_value: CSlice<f64>,
+    pub(crate) a_start: CSlice<i32>,
+    pub(crate) a_index: CSlice<i32>,
+    pub(crate) a_value: CSlice<f64>,
     // mipdata, row-wise
-    ar_start: CSlice<i32>,
-    ar_index: CSlice<i32>,
-    ar_value: CSlice<f64>,
-    row_lower: CSlice<f64>,
-    row_upper: CSlice<f64>,
+    pub(crate) ar_start: CSlice<i32>,
+    pub(crate) ar_index: CSlice<i32>,
+    pub(crate) ar_value: CSlice<f64>,
+    pub(crate) row_lower: CSlice<f64>,
+    pub(crate) row_upper: CSlice<f64>,
     pub(crate) integrality: CSlice<u8>,
     // the domain
     pub(crate) col_lower: CSlice<f64>,
     pub(crate) col_upper: CSlice<f64>,
-    activitymin: CSlice<CDouble>,
-    activitymax: CSlice<CDouble>,
-    activitymininf: CSlice<i32>,
-    activitymaxinf: CSlice<i32>,
-    capacity_threshold: CSlice<f64>,
-    propagateflags: CSlice<u8>,
-    col_lower_pos: CSlice<i32>,
-    col_upper_pos: CSlice<i32>,
-    changedcolsflags: CSlice<u8>,
-    propagateinds: Ptr<StdVec<i32>>,
-    changedcols: Ptr<StdVec<i32>>,
-    branchpos: Ptr<StdVec<i32>>,
-    domchgstack: Ptr<StdVec<DomChg>>,
-    domchgreason: Ptr<StdVec<Reason>>,
-    prevboundval: Ptr<StdVec<PrevBound>>,
+    pub(crate) activitymin: CSlice<CDouble>,
+    pub(crate) activitymax: CSlice<CDouble>,
+    pub(crate) activitymininf: CSlice<i32>,
+    pub(crate) activitymaxinf: CSlice<i32>,
+    pub(crate) capacity_threshold: CSlice<f64>,
+    pub(crate) propagateflags: CSlice<u8>,
+    pub(crate) col_lower_pos: CSlice<i32>,
+    pub(crate) col_upper_pos: CSlice<i32>,
+    pub(crate) changedcolsflags: CSlice<u8>,
+    pub(crate) propagateinds: Ptr<StdVec<i32>>,
+    pub(crate) changedcols: Ptr<StdVec<i32>>,
+    pub(crate) branchpos: Ptr<StdVec<i32>>,
+    pub(crate) domchgstack: Ptr<StdVec<DomChg>>,
+    pub(crate) domchgreason: Ptr<StdVec<Reason>>,
+    pub(crate) prevboundval: Ptr<StdVec<PrevBound>>,
     // scratch of propagate()
-    scratch_inds: Ptr<StdVec<i32>>,
-    scratch_bounds: Ptr<StdVec<DomChg>>,
-    scratch_counts: Ptr<StdVec<[i32; 2]>>,
+    pub(crate) scratch_inds: Ptr<StdVec<i32>>,
+    pub(crate) scratch_bounds: Ptr<StdVec<DomChg>>,
+    pub(crate) scratch_counts: Ptr<StdVec<[i32; 2]>>,
     pub(crate) infeasible: Ptr<bool>,
-    infeasible_reason: Ptr<Reason>,
-    infeasible_pos: Ptr<i32>,
-    record_redundant_rows: Ptr<bool>,
-    cutpools: CSlice<CCutProp>,
-    conflictpools: CSlice<CConfProp>,
+    pub(crate) infeasible_reason: Ptr<Reason>,
+    pub(crate) infeasible_pos: Ptr<i32>,
+    pub(crate) record_redundant_rows: Ptr<bool>,
+    pub(crate) cutpools: CSlice<CCutProp>,
+    pub(crate) conflictpools: CSlice<CConfProp>,
     pub(crate) objprop: CObjProp,
     // calls into C++, with `dom` (the HighsDomain)
-    dom: *mut c_void,
-    implications: unsafe extern "C" fn(*mut c_void, i32, i32),
-    redundant_row: unsafe extern "C" fn(*mut c_void, i32),
-    cut_reset_age: unsafe extern "C" fn(*mut c_void, i32, i32),
-    conflict_reset_age: unsafe extern "C" fn(*mut c_void, i32, i32),
-    reserve_i32: ReserveFn,
-    reserve_domchg: ReserveFn,
-    reserve_reason: ReserveFn,
-    reserve_prev: ReserveFn,
-    reserve_pair: ReserveFn,
+    pub(crate) dom: *mut c_void,
+    pub(crate) implications: unsafe extern "C" fn(*mut c_void, i32, i32),
+    pub(crate) redundant_row: unsafe extern "C" fn(*mut c_void, i32),
+    pub(crate) cut_reset_age: unsafe extern "C" fn(*mut c_void, i32, i32),
+    pub(crate) conflict_reset_age: unsafe extern "C" fn(*mut c_void, i32, i32),
+    pub(crate) reserve_i32: ReserveFn,
+    pub(crate) reserve_domchg: ReserveFn,
+    pub(crate) reserve_reason: ReserveFn,
+    pub(crate) reserve_prev: ReserveFn,
+    pub(crate) reserve_pair: ReserveFn,
 }
 
 /// The data of the const methods (computeMin/MaxActivity,
@@ -666,16 +673,16 @@ pub struct CDomain {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CBounds {
-    feastol: f64,
-    epsilon: f64,
-    col_lower: CSlice<f64>,
-    col_upper: CSlice<f64>,
-    integrality: CSlice<u8>,
-    col_lower_pos: CSlice<i32>,
-    col_upper_pos: CSlice<i32>,
-    prevboundval: CSlice<PrevBound>,
-    infeasible: bool,
-    infeasible_pos: i32,
+    pub(crate) feastol: f64,
+    pub(crate) epsilon: f64,
+    pub(crate) col_lower: CSlice<f64>,
+    pub(crate) col_upper: CSlice<f64>,
+    pub(crate) integrality: CSlice<u8>,
+    pub(crate) col_lower_pos: CSlice<i32>,
+    pub(crate) col_upper_pos: CSlice<i32>,
+    pub(crate) prevboundval: CSlice<PrevBound>,
+    pub(crate) infeasible: bool,
+    pub(crate) infeasible_pos: i32,
 }
 
 /// The column bounds and what the bound-only kernels read

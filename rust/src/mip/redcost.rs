@@ -351,7 +351,7 @@ pub unsafe fn propagate_redcost(r: &CRedcost) {
     }
 }
 
-mod ffi {
+pub(crate) mod ffi {
     use super::*;
 
     #[no_mangle]

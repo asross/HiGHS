@@ -8,7 +8,7 @@
 
 pub mod clique;
 pub mod concurrent;
-mod clique_ffi;
+pub(crate) mod clique_ffi;
 pub mod conflict;
 pub mod cuts;
 pub mod domain;
@@ -16,9 +16,10 @@ pub mod driver;
 pub mod feasjump;
 pub mod glue;
 pub mod graph_lns;
+pub mod host;
 pub mod heuristics;
 pub mod implications;
-mod implications_ffi;
+pub(crate) mod implications_ffi;
 pub mod lns;
 pub mod lp_relaxation;
 pub mod mip_data;
