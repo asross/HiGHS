@@ -86,6 +86,10 @@ static RsKktOptions rsKktOptions(const HighsOptions& options) {
   return o;
 }
 
+void rsKktOptionsInto(const HighsOptions& options, void* out) {
+  *static_cast<RsKktOptions*>(out) = rsKktOptions(options);
+}
+
 void getKktFailures(const HighsOptions& options, const bool is_qp,
                     const HighsLp& lp, const std::vector<double>& gradient,
                     const HighsSolution& solution, HighsInfo& highs_info,

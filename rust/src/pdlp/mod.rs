@@ -10,7 +10,7 @@
 //! the Malitsky-Pock step, the "CPU" restart (a no-op in C), the JSON and
 //! solution writers and the debug logs.
 
-mod ffi;
+pub mod ffi;
 mod linalg;
 mod scaling;
 mod solver;

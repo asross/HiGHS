@@ -95,6 +95,19 @@ static PdlpRsParams getParamsFromOptions(const HighsOptions& options) {
   return params;
 }
 
+// The parameters and print function of solveLpCupdlp (logging as
+// getUserParamsFromOptions does)
+struct RsPdlpTemplate {
+  PdlpRsParams params;
+  void (*print)(const char*);
+};
+
+void rsPdlpTemplate(const HighsOptions& options, void* out) {
+  RsPdlpTemplate& t = *static_cast<RsPdlpTemplate*>(out);
+  t.params = getParamsFromOptions(options);
+  t.print = pdlpPrint;
+}
+
 HighsStatus solveLpCupdlp(HighsLpSolverObject& solver_object) {
   return solveLpCupdlp(solver_object.options_, solver_object.timer_,
                        solver_object.lp_, solver_object.basis_,

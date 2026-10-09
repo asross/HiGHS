@@ -29,6 +29,7 @@ mod record;
 mod reduce;
 mod rows;
 mod driver;
+pub use driver::Input;
 mod enumeration;
 mod probing;
 

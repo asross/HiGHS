@@ -474,6 +474,9 @@ pub struct LpSolver {
     nla_rust_scale: bool,
     /// What dualize keeps to undualize
     pub dz: Dualized,
+    /// The solution, basis, info and model status of an LP run on Rust
+    /// data (lp_data/lp_run.rs)
+    pub run: crate::lp_data::lp_run::LpRun,
 }
 
 /// What HEkk::dualize keeps (original_* and upper_bound_*)
@@ -640,6 +643,7 @@ impl Default for LpSolver {
             nla_rust: false,
             nla_rust_scale: false,
             dz: Dualized::default(),
+            run: Default::default(),
         };
         s.clear_ekk_data_info();
         s

@@ -10,6 +10,40 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-09, the solved LP, its run and LP presolve on Rust data
+
+`perf.py <rust-port HIGHS_RUST highs (811de0eb90)> <this build's highs>
+--reps 3` (quiet M1): the LP being solved is a Rust copy in LpSolver
+(imported per solve; the C++ LP is no longer moved or scaled), the
+solveLpSimplex driver, dualize, the model interfaces and HighsSparseMatrix
+are Rust, and the LP part of a run works on Rust-owned solution, basis,
+info, model status and presolve data (reduced LP and postsolve stack).
+All 64 cases same path; no measurable cost (the per-solve LP copy replaces
+the C++ in-place scale/unscale).
+
+| Group | Geomean before -> after |
+|---|---|
+| MIP | 0.998 |
+| LP dual simplex | 0.998 |
+| LP primal simplex | 1.004 |
+| IPM (IPX) | 1.004 |
+| PDLP | 0.998 |
+| Read model (time_limit 0) | 1.000 |
+| **All** | **1.000** |
+
+Against the pure C++ build (`build/bin/highs`, same session), every case
+same path:
+
+| Group | Geomean Rust / C++ |
+|---|---|
+| MIP | 0.861 |
+| LP dual simplex | 0.752 |
+| LP primal simplex | 0.954 |
+| IPM (IPX) | 0.933 |
+| PDLP | 0.957 |
+| Read model (time_limit 0) | 0.388 |
+| **All** | **0.780** |
+
 ## 2026-10-08, the simplex engine's data owned by Rust (LpSolver)
 
 `perf.py <rust-port HIGHS_RUST highs> <this build's highs> --reps 3`

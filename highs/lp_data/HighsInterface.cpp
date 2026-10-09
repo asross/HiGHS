@@ -1585,13 +1585,6 @@ void Highs::appendBasicRowsToBasisInterface(const HighsInt ext_num_new_row) {
 // interface.rs): they edit the C++ LP and basis in place, and reach the
 // rest of the Highs object through ifaceOp
 namespace {
-struct RsBasisVec {
-  bool valid, alien, useful, was_alien;
-  HighsInt debug_id, debug_update_count;
-  RsVec<uint8_t> col_status, row_status;
-};
-static_assert(sizeof(RsBasisVec) == 80, "BasisG<RsVec> in interface.rs");
-
 struct RsIfaceOptions {
   RsLog log;
   double infinite_cost, infinite_bound, small_matrix_value,
@@ -1632,16 +1625,8 @@ struct HighsIfaceRust {
   RsIfaceCall call;
 
   HighsIfaceRust(Highs& highs, const HighsIndexCollection* ic) : h(highs) {
-    HighsBasis& b = h.basis_;
     lp = rsLpVec(h.model_.lp_);
-    basis = {b.valid,
-             b.alien,
-             b.useful,
-             b.was_alien,
-             b.debug_id,
-             b.debug_update_count,
-             rsByteVec(b.col_status),
-             rsByteVec(b.row_status)};
+    basis = rsBasisVec(h.basis_);
     call.ctx = this;
     call.op = op;
     call.lps = h.ekk_instance_.rs_;
@@ -1656,13 +1641,7 @@ struct HighsIfaceRust {
   // The scalars back into the C++ LP and basis
   void back() {
     rsLpVecBack(lp, h.model_.lp_);
-    HighsBasis& b = h.basis_;
-    b.valid = basis.valid;
-    b.alien = basis.alien;
-    b.useful = basis.useful;
-    b.was_alien = basis.was_alien;
-    b.debug_id = basis.debug_id;
-    b.debug_update_count = basis.debug_update_count;
+    rsBasisVecBack(basis, h.basis_);
   }
 
   static int op(void* ctx, int code, int arg, const void* p, int n) {

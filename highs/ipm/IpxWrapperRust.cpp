@@ -141,20 +141,10 @@ void highs_rs_ipx_data_get(void* d, RsIpxData* out);
 void highs_rs_ipx_data_free(void* d);
 }
 
-HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
-                       const HighsLp& lp, HighsBasis& highs_basis,
-                       HighsSolution& highs_solution,
-                       HighsModelStatus& model_status, HighsInfo& highs_info,
-                       HighsCallback& callback) {
-  IpxGlueCtx ctx{lp, timer, highs_solution, highs_basis};
-  RsIpxHost h;
-  h.ctx = &ctx;
-  h.timer_read = ipxGlueTimerRead;
-  h.resize = ipxGlueResize;
-  h.hooks = {ipxGlueLog, ipxGluePrint, ipxGlueTaskInterrupt,
-             ipxGlueUserInterrupt, &callback};
-  h.lp = rsLp(lp);
-  RsIpxOptions& o = h.options;
+namespace {
+double ipxTimerRead(void* ctx) { return static_cast<HighsTimer*>(ctx)->read(); }
+
+void ipxOptions(const HighsOptions& options, RsIpxOptions& o) {
   o.log = rsLog(options.log_options);
   o.log_options = &options.log_options;
   o.output_flag = options.output_flag;
@@ -176,6 +166,37 @@ HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
   o.kkt_tolerance = options.kkt_tolerance;
   o.time_limit = options.time_limit;
   o.centring_ratio_tolerance = options.centring_ratio_tolerance;
+}
+}  // namespace
+
+// The options, hooks and timer of solveLpIpx (the data are set by Rust):
+// ctx is the timer
+void rsIpxHostTemplate(const HighsOptions& options, HighsTimer& timer,
+                       HighsCallback& callback, void* out) {
+  RsIpxHost& h = *static_cast<RsIpxHost*>(out);
+  h = RsIpxHost{};
+  h.ctx = &timer;
+  h.timer_read = ipxTimerRead;
+  h.resize = nullptr;
+  h.hooks = {ipxGlueLog, ipxGluePrint, ipxGlueTaskInterrupt,
+             ipxGlueUserInterrupt, &callback};
+  ipxOptions(options, h.options);
+}
+
+HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
+                       const HighsLp& lp, HighsBasis& highs_basis,
+                       HighsSolution& highs_solution,
+                       HighsModelStatus& model_status, HighsInfo& highs_info,
+                       HighsCallback& callback) {
+  IpxGlueCtx ctx{lp, timer, highs_solution, highs_basis};
+  RsIpxHost h;
+  h.ctx = &ctx;
+  h.timer_read = ipxGlueTimerRead;
+  h.resize = ipxGlueResize;
+  h.hooks = {ipxGlueLog, ipxGluePrint, ipxGlueTaskInterrupt,
+             ipxGlueUserInterrupt, &callback};
+  h.lp = rsLp(lp);
+  ipxOptions(options, h.options);
   h.info = static_cast<HighsInfoStruct*>(&highs_info);
   h.model_status = reinterpret_cast<int*>(&model_status);
   h.value_valid = &highs_solution.value_valid;

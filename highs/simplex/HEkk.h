@@ -51,6 +51,8 @@ class HEkk {
   // The pointers to the solver object's options, callback and timer, and
   // the engine's checks of its (copied) LP
   void movedLp(HighsLpSolverObject& solver_object);
+  void movedLp(HighsCallback& callback, HighsOptions& options,
+               HighsTimer& timer);
   // What clear() clears on the C++ side (after the engine cleared itself)
   void clearShell() { clearCpp(); }
   // The environment of a call into the engine (for Rust)
@@ -58,6 +60,8 @@ class HEkk {
   // A C++ LP takes the engine LP's scale (and with `matrix` its
   // constraint matrix, which an undualized LP rebuilt)
   void lpBack(HighsLp& lp, const bool matrix) const;
+  // The simplex NLA's LP is the engine's
+  void setNlaEngineLp();
   // The engine LP's dimensions
   HighsInt lpNumCol() const;
   HighsInt lpNumRow() const;
@@ -178,11 +182,27 @@ class HEkk {
   // Take what a solve or INVERT left in the Rust records
   void takeRustOut();
   void setNlaLp(const HighsLp& lp);
-  // The simplex NLA's LP is the engine's
-  void setNlaEngineLp();
   HighsStatus returnFromEkkSolve(const HighsStatus return_status,
                                  const highs_rs::LpsSolveOut& out);
 };
+
+// The factor's log options for a solveLpSimplex host: a copy of the
+// options' log flags without callbacks
+struct RsFactorLogStore {
+  bool output_flag = false, log_to_console = true;
+  HighsInt log_dev_level = 0;
+  HighsLogOptions log_options;
+  void set(const HighsLogOptions& from);
+};
+// The options and logs of solveLpSimplex on Rust data (lp_run.rs) into
+// out (a CSimplexApp), the incumbent `lp`
+void rsSimplexAppTemplate(HighsOptions& options, HighsLp& lp,
+                          RsFactorLogStore& factor_log, void* out);
+// A step of solveLpSimplex on the HEkk shell (app.rs ops)
+int64_t rsSimplexShellOp(HEkk& ekk, HighsProfiling* profiling,
+                         HighsOptions& options, HighsCallback& callback,
+                         HighsTimer& timer, HighsLp& lp, int code,
+                         int64_t arg, void* p);
 
 #else
 

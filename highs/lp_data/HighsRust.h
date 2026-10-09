@@ -194,6 +194,26 @@ struct RsLpVec {
   RsScaleVec scale;
   bool is_scaled, is_moved, has_infinite_cost;
 };
+// A HighsBasis that Rust edits in place (rust/src/lp_data/interface.rs
+// BasisG<RsVec>); C++ copies the scalars back
+struct RsBasisVec {
+  bool valid, alien, useful, was_alien;
+  HighsInt debug_id, debug_update_count;
+  RsVec<uint8_t> col_status, row_status;
+};
+RsBasisVec rsBasisVec(HighsBasis& b);
+void rsBasisVecBack(const RsBasisVec& v, HighsBasis& b);
+
+// The templates of the solvers' hosts of the LP run on Rust data
+// (rust/src/lp_data/lp_run.rs), filled from the options
+class HighsTimer;
+struct HighsCallback;
+void rsKktOptionsInto(const HighsOptions& options, void* out);
+void rsSolveTemplate(const HighsOptions& options, void* out);
+void rsIpxHostTemplate(const HighsOptions& options, HighsTimer& timer,
+                       HighsCallback& callback, void* out);
+void rsPdlpTemplate(const HighsOptions& options, void* out);
+
 RsMatVec rsMatVec(HighsSparseMatrix& a);
 void rsMatVecBack(const RsMatVec& v, HighsSparseMatrix& a);
 RsLpVec rsLpVec(HighsLp& lp);

@@ -562,7 +562,7 @@ pub fn solve_lp_simplex(h: &mut CSimplexApp) -> Status {
     let mut scaled_model_status = MS_UNKNOWN;
     // SAFETY: the solver object's basis flags
     let (basis_valid, basis_useful) = unsafe { (*h.basis_valid, *h.basis_useful) };
-    h.op0(OP_PROFILE_START, 0);
+    h.op0(OP_PROFILE_START, basis_valid as i64);
     // Copy the simplex iteration count from highs_info_ to ekk_instance
     h.lps().sh.iteration_count = h.info().simplex_iteration_count;
     reset_model_status_and_info(h.model_status(), h.info());

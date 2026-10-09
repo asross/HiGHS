@@ -8,18 +8,18 @@ use std::ffi::c_char;
 /// The HiGHS LP; mirrored by PdlpRsLp in C++
 #[repr(C)]
 pub struct PdlpRsLp {
-    num_col: i32,
-    num_row: i32,
-    a_start: *const i32,
-    a_index: *const i32,
-    a_value: *const f64,
-    col_cost: *const f64,
-    col_lower: *const f64,
-    col_upper: *const f64,
-    row_lower: *const f64,
-    row_upper: *const f64,
-    offset: f64,
-    sense: f64,
+    pub num_col: i32,
+    pub num_row: i32,
+    pub a_start: *const i32,
+    pub a_index: *const i32,
+    pub a_value: *const f64,
+    pub col_cost: *const f64,
+    pub col_lower: *const f64,
+    pub col_upper: *const f64,
+    pub row_lower: *const f64,
+    pub row_upper: *const f64,
+    pub offset: f64,
+    pub sense: f64,
 }
 
 /// Solves the LP; returns the termination code (termination_code of

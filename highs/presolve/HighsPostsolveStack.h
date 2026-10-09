@@ -617,6 +617,27 @@ class HighsPostsolveStack {
     for (size_t i = 0; i != numNotTransformable; ++i)
       linearlyTransformable[notTransformable[i]] = false;
   }
+
+  // the stack of an LP presolve on Rust data (lp_presolve.rs)
+  void rustSet(const char* data, size_t len,
+               const void* reductionPairs, size_t num,
+               const HighsInt* colIndex, size_t numCol,
+               const HighsInt* rowIndex, size_t numRow,
+               const uint8_t* transformable, size_t numTransformable,
+               HighsInt numOrigCol, HighsInt numOrigRow) {
+    reductionValues = HighsDataStack();
+    reductionValues.pushBytes(data, len);
+    // the (type, position) pairs in the layout of reductions
+    const auto* r =
+        static_cast<const std::pair<ReductionType, size_t>*>(reductionPairs);
+    reductions.assign(r, r + num);
+    origColIndex.assign(colIndex, colIndex + numCol);
+    origRowIndex.assign(rowIndex, rowIndex + numRow);
+    linearlyTransformable.assign(transformable,
+                                 transformable + numTransformable);
+    origNumCol = numOrigCol;
+    origNumRow = numOrigRow;
+  }
 #endif
 
   std::vector<double> getReducedPrimalSolution(

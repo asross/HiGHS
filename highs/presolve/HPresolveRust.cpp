@@ -41,6 +41,32 @@ static_assert(sizeof(HighsSubstitution) == 24, "HighsSubstitution layout");
 
 namespace presolve {
 
+// The factorization of the dependent equations (HPresolve's
+// removeDependentEquations): the build return, its time, the variables
+// with no pivot in `ints`
+HighsInt rsDependentEquations(HighsTimer& timer, std::vector<HighsInt>& ints,
+                              size_t num_col, HighsInt num_row,
+                              const HighsInt* start, const HighsInt* index,
+                              const double* value, size_t nnz,
+                              double time_limit, double* time_taken) {
+  HighsSparseMatrix matrix;
+  matrix.num_col_ = num_col;
+  matrix.num_row_ = num_row;
+  matrix.start_.assign(start, start + num_col + 1);
+  matrix.index_.assign(index, index + nnz);
+  matrix.value_.assign(value, value + nnz);
+  std::vector<HighsInt> colSet(matrix.num_col_);
+  std::iota(colSet.begin(), colSet.end(), 0);
+  HFactor factor;
+  factor.setup(matrix, colSet);
+  factor.setTimeLimit(time_limit);
+  *time_taken = -timer.read();
+  HighsInt build_return = factor.build();
+  *time_taken += timer.read();
+  ints = factor.var_with_no_pivot;
+  return build_return;
+}
+
 namespace {
 
 struct RsOptions {
@@ -277,27 +303,37 @@ void cbShrink(Cb c, const HighsInt* new_col, size_t nc, const HighsInt* new_row,
   lp.setMatrixDimensions();
 }
 
+RsOptions rsOptions(const HighsOptions& options) {
+  return RsOptions{options.primal_feasibility_tolerance,
+                   options.dual_feasibility_tolerance,
+                   options.mip_feasibility_tolerance,
+                   options.small_matrix_value,
+                   options.time_limit,
+                   options.presolve_pivot_threshold,
+                   options.presolve_substitution_maxfillin,
+                   options.presolve_rule_test,
+                   options.presolve_rule_off,
+                   options.log_dev_level,
+                   options.random_seed,
+                   options.mip_lifting_for_probing,
+                   options.presolve == kHighsOffString,
+                   options.lp_presolve_requires_basis_postsolve,
+                   options.presolve_remove_slacks,
+                   options.output_flag,
+                   options.timeless_log,
+                   options.use_implied_bounds_from_presolve,
+                   options.presolve_rule_logging};
+}
+
 HighsInt cbDependentEquations(Cb c, size_t num_col, HighsInt num_row,
                               const HighsInt* start, const HighsInt* index,
                               const double* value, size_t nnz,
                               double time_limit, double* time_taken,
                               RsSlice<HighsInt>* var_with_no_pivot) {
   Ctx& x = C(c);
-  HighsSparseMatrix matrix;
-  matrix.num_col_ = num_col;
-  matrix.num_row_ = num_row;
-  matrix.start_.assign(start, start + num_col + 1);
-  matrix.index_.assign(index, index + nnz);
-  matrix.value_.assign(value, value + nnz);
-  std::vector<HighsInt> colSet(matrix.num_col_);
-  std::iota(colSet.begin(), colSet.end(), 0);
-  HFactor factor;
-  factor.setup(matrix, colSet);
-  factor.setTimeLimit(time_limit);
-  *time_taken = -x.timer->read();
-  HighsInt build_return = factor.build();
-  *time_taken += x.timer->read();
-  x.ints = factor.var_with_no_pivot;
+  const HighsInt build_return =
+      rsDependentEquations(*x.timer, x.ints, num_col, num_row, start, index,
+                           value, nnz, time_limit, time_taken);
   *var_with_no_pivot = {x.ints.data(), x.ints.size()};
   return build_return;
 }
@@ -502,25 +538,7 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
               cbAddCut,
               cbUpperLimit,
               cbSetLowerBoundZero};
-  RsOptions o{options->primal_feasibility_tolerance,
-              options->dual_feasibility_tolerance,
-              options->mip_feasibility_tolerance,
-              options->small_matrix_value,
-              options->time_limit,
-              options->presolve_pivot_threshold,
-              options->presolve_substitution_maxfillin,
-              options->presolve_rule_test,
-              options->presolve_rule_off,
-              options->log_dev_level,
-              options->random_seed,
-              options->mip_lifting_for_probing,
-              options->presolve == kHighsOffString,
-              options->lp_presolve_requires_basis_postsolve,
-              options->presolve_remove_slacks,
-              options->output_flag,
-              options->timeless_log,
-              options->use_implied_bounds_from_presolve,
-              options->presolve_rule_logging};
+  const RsOptions o = rsOptions(*options);
   RsMipInfo mi{};
   if (mipsolver != nullptr) {
     mi.epsilon = mipsolver->mipdata_->epsilon;
@@ -567,6 +585,20 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
     analysis_.presolve_log_.rule[r].row_removed = result.log[r][2];
   }
   return HighsModelStatus(status);
+}
+
+// The option values of an LP presolve on Rust data (lp_presolve.rs:
+// PresolveOptions)
+void rsLpPresolveOptions(const HighsOptions& options, void* out) {
+  struct LpPresolveOptions {
+    RsOptions o;
+    HighsInt reduction_limit;
+  };
+  LpPresolveOptions& p = *static_cast<LpPresolveOptions*>(out);
+  p.o = rsOptions(options);
+  p.reduction_limit = options.presolve_reduction_limit < 0
+                          ? HighsInt{-1}
+                          : options.presolve_reduction_limit;
 }
 
 }  // namespace presolve

@@ -116,6 +116,15 @@ pub fn c_stdout(s: &[u8]) {
     unsafe { put(stdout, s) }
 }
 
+/// printf("%s", s); fflush(stdout)
+pub fn c_stdout_flush(s: &[u8]) {
+    // SAFETY: as c_stdout
+    unsafe {
+        put(stdout, s);
+        fflush(stdout);
+    }
+}
+
 unsafe fn put(f: *mut File, s: &[u8]) {
     if !s.is_empty() {
         fwrite(s.as_ptr() as *const c_void, 1, s.len(), f);

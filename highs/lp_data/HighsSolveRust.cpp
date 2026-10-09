@@ -137,6 +137,21 @@ void highs_rs_assess_excessive_objective_bound_scaling(
     HighsInt* suggested_user_bound_scale);
 }
 
+// The options of solveLp (the solver object's parts are set by Rust)
+void rsSolveTemplate(const HighsOptions& options, void* out) {
+  RsSolve& c = *static_cast<RsSolve*>(out);
+  c = RsSolve{};
+  c.log = rsLog(options.log_options);
+  c.solver = {options.solver.data(), options.solver.size()};
+  c.run_crossover = {options.run_crossover.data(),
+                     options.run_crossover.size()};
+  c.run_centring = options.run_centring;
+  c.allow_unbounded_or_infeasible = options.allow_unbounded_or_infeasible;
+  c.highs_debug_level = options.highs_debug_level;
+  c.output_flag = options.log_options.output_flag;
+  c.log_dev_level = options.log_options.log_dev_level;
+}
+
 HighsStatus solveLp(HighsLpSolverObject& solver_object, const string message) {
   const HighsOptions& options = solver_object.options_;
   SolveCtx ctx{solver_object, nullptr, false};

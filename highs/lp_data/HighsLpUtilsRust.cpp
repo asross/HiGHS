@@ -63,6 +63,28 @@ static_assert(sizeof(RsMatVec) == 144, "Mat<RsVec, RsVec> in sparse.rs");
 static_assert(sizeof(RsScaleVec) == 88, "ScaleG<RsVec> in lp.rs");
 static_assert(sizeof(RsLpVec) == 456, "CppLp in lp.rs");
 
+static_assert(sizeof(RsBasisVec) == 80, "BasisG<RsVec> in interface.rs");
+
+RsBasisVec rsBasisVec(HighsBasis& b) {
+  return {b.valid,
+          b.alien,
+          b.useful,
+          b.was_alien,
+          b.debug_id,
+          b.debug_update_count,
+          rsByteVec(b.col_status),
+          rsByteVec(b.row_status)};
+}
+
+void rsBasisVecBack(const RsBasisVec& v, HighsBasis& b) {
+  b.valid = v.valid;
+  b.alien = v.alien;
+  b.useful = v.useful;
+  b.was_alien = v.was_alien;
+  b.debug_id = v.debug_id;
+  b.debug_update_count = v.debug_update_count;
+}
+
 RsMatVec rsMatVec(HighsSparseMatrix& a) {
   return {int(a.format_),   a.num_col_,       a.num_row_,
           rsVec(a.start_),  rsVec(a.p_end_),  rsVec(a.index_),

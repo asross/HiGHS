@@ -309,10 +309,13 @@ void HEkk::moveLp(HighsLpSolverObject& solver_object) {
 }
 
 void HEkk::movedLp(HighsLpSolverObject& solver_object) {
-  // Update the pointers to the HighsOptions and HighsTimer members of the
-  // Highs class, communicated by reference via the HighsLpSolverObject
-  this->setPointers(&solver_object.callback_, &solver_object.options_,
-                    &solver_object.timer_);
+  movedLp(solver_object.callback_, solver_object.options_,
+          solver_object.timer_);
+}
+
+void HEkk::movedLp(HighsCallback& callback, HighsOptions& options,
+                   HighsTimer& timer) {
+  this->setPointers(&callback, &options, &timer);
   // The row-wise matrix, the scaled space, and initialiseEkk if this has
   // not been done (it clears the simplex NLA)
   RustHost host{this};
@@ -662,21 +665,6 @@ RsVec<uint8_t> rsStatusVec(std::vector<HighsBasisStatus>& v) {
   return {&v, statusResize, reinterpret_cast<uint8_t*>(v.data()), v.size()};
 }
 
-// The log of an HFactor set up with these log options: no callbacks
-struct AppFactorLog {
-  bool output_flag, log_to_console;
-  HighsInt log_dev_level;
-  HighsLogOptions log_options;
-  explicit AppFactorLog(const HighsLogOptions& from) {
-    output_flag = *from.output_flag;
-    log_to_console = *from.log_to_console;
-    log_dev_level = *from.log_dev_level;
-    log_options.output_flag = &output_flag;
-    log_options.log_to_console = &log_to_console;
-    log_options.log_dev_level = &log_dev_level;
-    log_options.log_stream = from.log_stream;
-  }
-};
 
 }  // namespace
 
@@ -706,28 +694,32 @@ void HEkk::lpBack(HighsLp& lp, const bool matrix) const {
   }
 }
 
-static int64_t simplexAppOp(void* ctx, int code, int64_t arg, void* p) {
-  HighsLpSolverObject& so = *static_cast<HighsLpSolverObject*>(ctx);
-  HEkk& ekk = so.ekk_instance_;
+// The steps of solveLpSimplex on the HEkk shell (app.rs ops 1-4, 6-11),
+// with `lp` the incumbent LP
+int64_t rsSimplexShellOp(HEkk& ekk, HighsProfiling* profiling,
+                         HighsOptions& options, HighsCallback& callback,
+                         HighsTimer& timer, HighsLp& lp, int code,
+                         int64_t arg, void* p) {
   switch (code) {
     case 1:
-      if (so.profiling_) {
+      // arg: whether the HiGHS basis is valid
+      if (profiling) {
         HighsInt profiling_clock = -1;
-        if (so.options_.simplex_strategy == kSimplexStrategyPrimal) {
-          profiling_clock = so.basis_.valid ? kSubSolverPrSimplexBasis
-                                            : kSubSolverPrSimplexNoBasis;
+        if (options.simplex_strategy == kSimplexStrategyPrimal) {
+          profiling_clock =
+              arg ? kSubSolverPrSimplexBasis : kSubSolverPrSimplexNoBasis;
         } else {
-          profiling_clock = so.basis_.valid ? kSubSolverDuSimplexBasis
-                                            : kSubSolverDuSimplexNoBasis;
+          profiling_clock =
+              arg ? kSubSolverDuSimplexBasis : kSubSolverDuSimplexNoBasis;
         }
-        so.profiling_->start(profiling_clock);
+        profiling->start(profiling_clock);
       }
       return 0;
     case 2:
-      if (so.profiling_->sub_solver_) {
+      if (profiling->sub_solver_) {
         HighsInt profiling_clock = -1;
         HighsProfilingRecord* thread_record =
-            so.profiling_->getHighsProfilingRecord();
+            profiling->getHighsProfilingRecord();
         if (std::signbit(thread_record->start_time[kSubSolverDuSimplexBasis]))
           profiling_clock = kSubSolverDuSimplexBasis;
         if (std::signbit(
@@ -738,17 +730,15 @@ static int64_t simplexAppOp(void* ctx, int code, int64_t arg, void* p) {
         if (std::signbit(
                 thread_record->start_time[kSubSolverPrSimplexNoBasis]))
           profiling_clock = kSubSolverPrSimplexNoBasis;
-        so.profiling_->stop(profiling_clock);
+        profiling->stop(profiling_clock);
       }
       return 0;
     case 3:
       ekk.initialiseSimplexStats();
       return 0;
     case 4:
-      ekk.movedLp(so);
+      ekk.movedLp(callback, options, timer);
       return 0;
-    case 5:
-      return int64_t(ekk.setBasis(so.basis_));
     case 6:
       return int64_t(ekk.solve(arg != 0));
     case 7:
@@ -757,21 +747,70 @@ static int64_t simplexAppOp(void* ctx, int code, int64_t arg, void* p) {
     case 8:
       return ekk.proofOfPrimalInfeasibility();
     case 9:
-      ekk.setNlaPointersForLpAndScale(so.lp_);
+      ekk.setNlaPointersForLpAndScale(lp);
       return 0;
     case 10:
-      ekk.lpBack(so.lp_, arg != 0);
+      ekk.lpBack(lp, arg != 0);
       return 0;
     case 11:
       *static_cast<highs_rs::LpsEnv*>(p) = ekk.callEnv();
       return 0;
+  }
+  assert(false);
+  return 0;
+}
+
+static int64_t simplexAppOp(void* ctx, int code, int64_t arg, void* p) {
+  HighsLpSolverObject& so = *static_cast<HighsLpSolverObject*>(ctx);
+  switch (code) {
+    case 5:
+      return int64_t(so.ekk_instance_.setBasis(so.basis_));
     case 12:
       so.basis_.debug_origin_name.assign(static_cast<const char*>(p),
                                          size_t(arg));
       return 0;
   }
-  assert(false);
-  return 0;
+  return rsSimplexShellOp(so.ekk_instance_, so.profiling_, so.options_,
+                          so.callback_, so.timer_, so.lp_, code, arg, p);
+}
+
+void RsFactorLogStore::set(const HighsLogOptions& from) {
+  output_flag = *from.output_flag;
+  log_to_console = *from.log_to_console;
+  log_dev_level = *from.log_dev_level;
+  log_options.output_flag = &output_flag;
+  log_options.log_to_console = &log_to_console;
+  log_options.log_dev_level = &log_dev_level;
+  log_options.log_stream = from.log_stream;
+}
+
+// The options and logs of solveLpSimplex (the data are set by the
+// caller), the factor's log in `factor_log`
+static void simplexAppOptions(HighsOptions& options, HighsLp& lp,
+                              const HighsLogOptions& factor_log,
+                              RsSimplexApp& h) {
+  h.log = rsLog(options.log_options);
+  h.factor_log = rsLog(factor_log);
+  h.incumbent = rsLp(lp);
+  h.model_name = {const_cast<char*>(lp.model_name_.data()),
+                  lp.model_name_.size()};
+  h.simplex_strategy = &options.simplex_strategy;
+  h.dual_simplex_cost_perturbation_multiplier =
+      &options.dual_simplex_cost_perturbation_multiplier;
+  h.simplex_unscaled_solution_strategy =
+      options.simplex_unscaled_solution_strategy;
+  h.cost_scale_factor = options.cost_scale_factor;
+  h.simplex_dualize_strategy = options.simplex_dualize_strategy;
+  h.simplex_permute_strategy = options.simplex_permute_strategy;
+  h.lp_options = rsLpOptions(options);
+}
+
+void rsSimplexAppTemplate(HighsOptions& options, HighsLp& lp,
+                          RsFactorLogStore& factor_log, void* out) {
+  RsSimplexApp& h = *static_cast<RsSimplexApp*>(out);
+  h = RsSimplexApp{};
+  factor_log.set(options.log_options);
+  simplexAppOptions(options, lp, factor_log.log_options, h);
 }
 
 HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
@@ -779,16 +818,13 @@ HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
   HighsLp& lp = solver_object.lp_;
   HighsSolution& solution = solver_object.solution_;
   HighsBasis& basis = solver_object.basis_;
-  const AppFactorLog factor_log(options.log_options);
+  RsFactorLogStore factor_log;
+  factor_log.set(options.log_options);
   RsSimplexApp h;
-  h.log = rsLog(options.log_options);
-  h.factor_log = rsLog(factor_log.log_options);
+  simplexAppOptions(options, lp, factor_log.log_options, h);
   h.ctx = &solver_object;
   h.op = simplexAppOp;
   h.lps = solver_object.ekk_instance_.rs_;
-  h.incumbent = rsLp(lp);
-  h.model_name = {const_cast<char*>(lp.model_name_.data()),
-                  lp.model_name_.size()};
   h.model_status = &solver_object.model_status_;
   h.info = static_cast<HighsInfoStruct*>(&solver_object.highs_info_);
   h.value_valid = &solution.value_valid;
@@ -805,15 +841,6 @@ HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
   h.basis_debug_update_count = &basis.debug_update_count;
   h.col_status = rsStatusVec(basis.col_status);
   h.row_status = rsStatusVec(basis.row_status);
-  h.simplex_strategy = &options.simplex_strategy;
-  h.dual_simplex_cost_perturbation_multiplier =
-      &options.dual_simplex_cost_perturbation_multiplier;
-  h.simplex_unscaled_solution_strategy =
-      options.simplex_unscaled_solution_strategy;
-  h.cost_scale_factor = options.cost_scale_factor;
-  h.simplex_dualize_strategy = options.simplex_dualize_strategy;
-  h.simplex_permute_strategy = options.simplex_permute_strategy;
-  h.lp_options = rsLpOptions(options);
   return HighsStatus(highs_rs_solve_lp_simplex(&h));
 }
 

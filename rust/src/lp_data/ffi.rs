@@ -94,9 +94,9 @@ impl<T: Copy + Default> RsVec<T> {
     }
 }
 
-#[cfg(test)]
 pub mod rs_vec_test {
-    //! RsVec over a Rust Vec, for tests
+    //! RsVec over a Rust Vec (tests, and Rust data passed where C++
+    //! vectors are taken)
     use super::RsVec;
     unsafe extern "C" fn resize<T: Copy + Default>(v: *mut std::ffi::c_void, n: usize) -> *mut T {
         let v = &mut *(v as *mut Vec<T>);

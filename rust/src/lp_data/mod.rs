@@ -18,6 +18,8 @@ pub mod info;
 pub mod interface;
 pub mod ipx_glue;
 pub mod lp;
+pub mod lp_presolve;
+pub mod lp_run;
 pub mod lp_utils;
 pub mod sparse;
 pub mod model;

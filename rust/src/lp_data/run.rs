@@ -117,6 +117,7 @@ pub struct RunData {
 
 /// The option values read by the run, and the options it changes in place
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct ROptions {
     pub solver: RsStr,
     pub run_crossover: RsStr,
@@ -424,6 +425,44 @@ pub enum Op {
     /// The sizes of solution_'s and basis_'s vectors into p ([i64; 6])
     /// (arg 0); resized to the model (1)
     SolutionBasisSizes,
+    // The LP run on Rust data (lp_run.rs)
+    /// Copy the solution, basis, info and model status into the engine's
+    /// LpRun; the engine (a *mut LpSolver) into p
+    LpRustBegin,
+    /// Copy the engine's LpRun back
+    LpRustEnd,
+    /// The KKT check options into p (CKktOptions)
+    KktOptions,
+    /// solveLp's options into p (a CSolve)
+    SolveTemplate,
+    /// solveUnconstrainedLp's options into p (UnconTemplate)
+    UnconstrainedTemplate,
+    /// solveLpIpx's options, hooks and timer into p (a CIpxHost)
+    IpxTemplate,
+    /// solveLpCupdlp's parameters and print function into p
+    /// (PdlpTemplate)
+    PdlpTemplate,
+    /// Start (arg 1) or stop (0) the PDLP sub-solver clock
+    PdlpProfiling,
+    /// solveLpSimplex's options and logs into p (a CSimplexApp, with the
+    /// model LP as incumbent)
+    SimplexTemplate,
+    /// A step of solveLpSimplex on the HEkk shell: arg is (code << 32) |
+    /// its arg (HAppRust ops of app.rs)
+    SimplexShell,
+    /// A cancelled IPX task: C++ throws HighsTask::Interrupt once Rust
+    /// has returned
+    SetInterrupt,
+    /// The LP presolve's option values into p (lp_presolve.rs:
+    /// PresolveOptions)
+    PresolveOptions,
+    /// The factorization of the presolve's dependent equations (p:
+    /// lp_presolve.rs DependentEquations)
+    DependentEquations,
+    /// assessSmallValues of the matrix values in p (an RsMut)
+    AssessSmallValues,
+    /// The CLpOptions into p
+    LpOptions,
 }
 
 /// HighsTimer clocks and actions
@@ -439,6 +478,13 @@ const READ: i32 = 0;
 const START: i32 = 1;
 const STOP: i32 = 2;
 const RUNNING: i32 = 3;
+
+/// How the LP part of the run ends: through returnFromOptimizeModel
+/// with a status, or with a status directly (a step threw)
+pub(crate) enum LpEnd {
+    Ret(Status),
+    Raw(Status),
+}
 
 /// The Highs object
 #[repr(C)]
@@ -824,16 +870,10 @@ impl<'a> Run<'a> {
     pub(crate) fn optimize_lp(&self, mut return_status: Status, undo_mods: bool) -> Status {
         let c = self.c;
         let log = self.log();
-        let mut no_incumbent_lp_solution_or_basis = false;
         if !self.f.solver_ok[0] {
             self.warn_solver_invalid(b"LP");
         }
         let initial_time = self.read(Clock::Run);
-        let mut this_presolve_time = -1.0;
-        let mut this_solve_presolved_lp_time = -1.0;
-        let mut this_postsolve_time = -1.0;
-        let mut this_solve_original_lp_time = -1.0;
-        let mut postsolve_iteration_count: i32 = -1;
         let lp_no_solution_basis = self.f.ipm_no_crossover || self.f.solver_pdlp;
         // iCrash is not in Crestline
         if c.o.icrash && self.on() {
@@ -854,6 +894,51 @@ impl<'a> Run<'a> {
         } else {
             self.op0(Op::BasisClear);
         }
+        // The rest runs on Rust data (lp_data/lp_run.rs)
+        let incumbent = self.facts(0);
+        let _ = (incumbent, solver_will_use_basis);
+        let end = {
+            let mut lps: *mut crate::simplex::lp_solver::LpSolver = std::ptr::null_mut();
+            self.op(Op::LpRustBegin, 0, &mut lps as *mut _ as *mut c_void);
+            if self.ab() {
+                return Status::Error;
+            }
+            let mode = super::lp_run::LpMode { orig: c, lps, aborted: Cell::new(false) };
+            let c2 = mode.view();
+            // SAFETY: c2's pointers live for the call
+            let run2 = unsafe { Run::new(&c2) };
+            let end = run2.optimize_lp_tail(return_status, initial_time, lp_no_solution_basis);
+            let aborted = run2.ab() || mode.aborted.get();
+            self.op0(Op::LpRustEnd);
+            if aborted {
+                self.aborted.set(true);
+                LpEnd::Raw(Status::Error)
+            } else {
+                end
+            }
+        };
+        match end {
+            LpEnd::Ret(status) => self.return_from_optimize_model(status, undo_mods),
+            LpEnd::Raw(status) => status,
+        }
+    }
+
+    /// The part of optimize_lp from the solver choice on
+    pub(crate) fn optimize_lp_tail(
+        &self,
+        mut return_status: Status,
+        initial_time: f64,
+        lp_no_solution_basis: bool,
+    ) -> LpEnd {
+        let c = self.c;
+        let log = self.log();
+        let solver_will_use_basis = self.f.solver_will_use_basis;
+        let mut no_incumbent_lp_solution_or_basis = false;
+        let mut this_presolve_time = -1.0;
+        let mut this_solve_presolved_lp_time = -1.0;
+        let mut this_postsolve_time = -1.0;
+        let mut this_solve_original_lp_time = -1.0;
+        let mut postsolve_iteration_count: i32 = -1;
         let incumbent = self.facts(0);
         let unconstrained_lp = incumbent.num_nz == 0;
         let has_basis = self.get(c.basis_useful);
@@ -876,11 +961,11 @@ impl<'a> Run<'a> {
             }
             let call_status = self.solve_lp(0, lp_solve, &mut this_solve_original_lp_time);
             if self.ab() {
-                return Status::Error;
+                return LpEnd::Raw(Status::Error);
             }
             return_status = self.interpret(call_status, return_status, "callSolveLp");
             if return_status == Status::Error {
-                return self.return_from_optimize_model(return_status, undo_mods);
+                return LpEnd::Ret(return_status);
             }
         } else {
             // SAFETY: an option of the Highs object
@@ -894,7 +979,7 @@ impl<'a> Run<'a> {
             self.clock(Clock::Presolve, START);
             let presolve_status = self.run_presolve(true, false);
             if self.ab() {
-                return Status::Error;
+                return LpEnd::Raw(Status::Error);
             }
             // SAFETY: model_presolve_status_ of the Highs object
             unsafe { *c.presolve_status = presolve_status };
@@ -933,18 +1018,18 @@ impl<'a> Run<'a> {
                     self.op_msg(Op::SetEkkLpName, 0, name);
                     let call_status = self.solve_lp(0, message, &mut this_solve_original_lp_time);
                     if self.ab() {
-                        return Status::Error;
+                        return LpEnd::Raw(Status::Error);
                     }
                     return_status = self.interpret(call_status, return_status, "callSolveLp");
                     if return_status == Status::Error {
-                        return self.return_from_optimize_model(return_status, undo_mods);
+                        return LpEnd::Ret(return_status);
                     }
                 }
                 PS_REDUCED => {
                     let call_status = self.status_op(Op::PrepareReducedLp);
                     // Ignore any warning from clean bounds
                     if self.interpret(call_status, return_status, "cleanBounds") == Status::Error {
-                        return Status::Error;
+                        return LpEnd::Raw(Status::Error);
                     }
                     self.op0(Op::EkkClear);
                     self.op_msg(Op::SetEkkLpName, 0, "Presolved LP");
@@ -954,7 +1039,7 @@ impl<'a> Run<'a> {
                     let call_status =
                         self.solve_lp(1, "Solving the presolved LP", &mut this_solve_presolved_lp_time);
                         if self.ab() {
-                            return Status::Error;
+                            return LpEnd::Raw(Status::Error);
                         }
                     self.run_data().solve_time = this_solve_presolved_lp_time;
                     let mut threshold = 0.0;
@@ -965,7 +1050,7 @@ impl<'a> Run<'a> {
                     unsafe { *c.o.objective_bound = save_objective_bound };
                     return_status = self.interpret(call_status, return_status, "callSolveLp");
                     if return_status == Status::Error {
-                        return self.return_from_optimize_model(return_status, undo_mods);
+                        return LpEnd::Ret(return_status);
                     }
                     presolved_lp_pdlp_iteration_count = self.info().pdlp_iteration_count;
                     let ms = self.ms();
@@ -998,7 +1083,7 @@ impl<'a> Run<'a> {
                             model_status_string(self.ms())
                         );
                     }
-                    return self.return_from_optimize_model(return_status, undo_mods);
+                    return LpEnd::Ret(return_status);
                 }
                 PS_UNBOUNDED_OR_INFEASIBLE => {
                     if self.on() {
@@ -1011,7 +1096,7 @@ impl<'a> Run<'a> {
                     }
                     if c.o.allow_unbounded_or_infeasible {
                         self.set_status_and_clear(MS_UNBOUNDED_OR_INFEASIBLE);
-                        return self.return_from_optimize_model(return_status, undo_mods);
+                        return LpEnd::Ret(return_status);
                     }
                     self.op0(Op::SaveOptions);
                     self.op0(Op::OptionsPrimalSimplex);
@@ -1022,35 +1107,35 @@ impl<'a> Run<'a> {
                         &mut this_solve_original_lp_time,
                     );
                     if self.ab() {
-                        return Status::Error;
+                        return LpEnd::Raw(Status::Error);
                     }
                     self.op0(Op::RestoreOptions);
                     if return_status == Status::Error {
-                        return self.return_from_optimize_model(return_status, undo_mods);
+                        return LpEnd::Ret(return_status);
                     }
                     self.info().valid = true;
-                    return self.return_from_optimize_model(return_status, undo_mods);
+                    return LpEnd::Ret(return_status);
                 }
                 PS_TIMEOUT => {
                     self.set_status_and_clear(MS_TIME_LIMIT);
                     if self.dev_on() {
                         log_dev!(log, LogType::Warning, "Presolve reached timeout\n");
                     }
-                    return self.return_from_optimize_model(Status::Warning, undo_mods);
+                    return LpEnd::Ret(Status::Warning);
                 }
                 PS_OUT_OF_MEMORY => {
                     self.set_status_and_clear(MS_MEMORY_LIMIT);
                     if self.on() {
                         log_user!(log, LogType::Error, "Presolve fails due to memory allocation error\n");
                     }
-                    return self.return_from_optimize_model(Status::Error, undo_mods);
+                    return LpEnd::Ret(Status::Error);
                 }
                 _ => {
                     self.set_status_and_clear(MS_PRESOLVE_ERROR);
                     if self.dev_on() {
                         log_dev!(log, LogType::Error, "Presolve returned status %d\n", presolve_status);
                     }
-                    return self.return_from_optimize_model(Status::Error, undo_mods);
+                    return LpEnd::Ret(Status::Error);
                 }
             }
             // Postsolve
@@ -1077,7 +1162,7 @@ impl<'a> Run<'a> {
                 self.clock(Clock::Postsolve, START);
                 let postsolve_status = self.run_postsolve();
                 if self.ab() {
-                    return Status::Error;
+                    return LpEnd::Raw(Status::Error);
                 }
                 self.clock(Clock::Postsolve, STOP);
                 this_postsolve_time += self.read(Clock::Postsolve);
@@ -1099,7 +1184,7 @@ impl<'a> Run<'a> {
                         self.set(c.basis_useful, true);
                         self.op0(Op::TakeRecoveredBasis);
                         if self.op0(Op::DebugPostsolveSolution) != 0 {
-                            return self.return_from_optimize_model(Status::Error, undo_mods);
+                            return LpEnd::Ret(Status::Error);
                         }
                         self.op0(Op::SaveOptions);
                         let mut threshold = factor_pivot_threshold;
@@ -1118,13 +1203,13 @@ impl<'a> Run<'a> {
                             &mut this_solve_original_lp_time,
                         );
                         if self.ab() {
-                            return Status::Error;
+                            return LpEnd::Raw(Status::Error);
                         }
                         postsolve_iteration_count += self.info().simplex_iteration_count;
                         return_status = self.interpret(call_status, Status::Ok, "callSolveLp");
                         self.op0(Op::RestoreOptions);
                         if return_status == Status::Error {
-                            return self.return_from_optimize_model(return_status, undo_mods);
+                            return LpEnd::Ret(return_status);
                         }
                         self.run_data().num_simplex_iterations_after_postsolve = postsolve_iteration_count;
                         if postsolve_iteration_count > 0 && self.on() {
@@ -1141,7 +1226,7 @@ impl<'a> Run<'a> {
                         log_user!(log, LogType::Error, "Postsolve return status is %d\n", postsolve_status);
                     }
                     self.set_status_and_clear(MS_POSTSOLVE_ERROR);
-                    return self.return_from_optimize_model(Status::Error, undo_mods);
+                    return LpEnd::Ret(Status::Error);
                 }
             } else {
                 self.run_data().postsolve_time = 0.0;
@@ -1163,8 +1248,7 @@ impl<'a> Run<'a> {
                 postsolve_iteration_count,
             );
         }
-        return_status = status_from_model_status(self.ms());
-        self.return_from_optimize_model(return_status, undo_mods)
+        LpEnd::Ret(status_from_model_status(self.ms()))
     }
 
     /// The timing report at the end of calledOptimizeModel (dev log)
