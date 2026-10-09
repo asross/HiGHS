@@ -2911,7 +2911,11 @@ HighsStatus Highs::getIterate() {
   HighsStatus call_status = ekk_instance_.getIterate();
   if (call_status != HighsStatus::kOk) return call_status;
   // Get the corresponding HiGHS basis
+#ifdef HIGHS_RUST
   basis_ = ekk_instance_.getHighsBasis(model_r().lp_);
+#else
+  basis_ = ekk_instance_.getHighsBasis(model_w().lp_);
+#endif
   // Clear everything else
   invalidateModelStatusSolutionAndInfo();
   return returnFromHighs(HighsStatus::kOk);

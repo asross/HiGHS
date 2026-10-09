@@ -1895,7 +1895,11 @@ HighsStatus Highs::scaleRowInterface(const HighsInt row,
 // Get the basic variables, performing INVERT if necessary
 HighsStatus Highs::getBasicVariablesInterface(HighsInt* basic_variables) {
   HighsStatus return_status = HighsStatus::kOk;
+#ifdef HIGHS_RUST
   const HighsLp& lp = model_r().lp_;
+#else
+  HighsLp& lp = model_w().lp_;
+#endif
   HighsInt num_row = lp.num_row_;
   HighsInt num_col = lp.num_col_;
   HighsSimplexStatus& ekk_status = ekk_instance_.status_;
