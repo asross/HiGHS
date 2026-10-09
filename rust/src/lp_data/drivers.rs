@@ -292,6 +292,10 @@ impl Run<'_> {
                 }
             }
         }
+        if num_fixed > 0 {
+            // The fixings changed the model through its view
+            self.op(Op::LpView, 2, std::ptr::null_mut());
+        }
         let num_discrete = num_unfixed + num_fixed;
         let num_continuous = num_col - num_discrete;
         let mut call_run = true;

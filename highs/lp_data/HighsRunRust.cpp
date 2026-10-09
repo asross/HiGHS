@@ -302,7 +302,6 @@ int highs_rs_run_presolve(const RsHighs* h, bool force_lp_presolve,
                           bool force_presolve);
 int highs_rs_run_postsolve(const RsHighs* h);
 void highs_rs_lps_run_import(void* lps, const RsRunData* d);
-void highs_rs_lph_model_facts(highs_rs::LpHandle* h, RsFacts* out);
 void highs_rs_lps_run_export(void* lps, RsRunData* d);
 bool highs_rs_lps_presolve_export(void* lps, RsLpVec* lp, RsPresolveExport* out);
 }
@@ -457,19 +456,7 @@ HighsStatus rsFormBasis(Highs& h, HighsBasis& basis,
   return status;
 }
 
-HighsInt Highs::lpDim(const int which) const {
-  if (!lp_rs_newer_) {
-    const HighsLp& lp = model_cache_.lp_;
-    return which == 0   ? lp.num_col_
-           : which == 1 ? lp.num_row_
-                        : lp.a_matrix_.numNz();
-  }
-  int32_t d[3];
-  highs_rs::highs_rs_lph_model_dims(ekk_instance_.p, &d);
-  return d[which];
-}
-
-void Highs::syncLpFromRust() const {
+void Highs::lpFromRust() {
   HighsLp& lp = model_cache_.lp_;
   RsLpVec v = rsLpVec(lp);
   const char* name;
@@ -477,7 +464,7 @@ void Highs::syncLpFromRust() const {
   highs_rs::highs_rs_lph_export_model(ekk_instance_.p, &v, &name, &len);
   rsLpVecBack(v, lp);
   lp.model_name_.assign(name, len);
-  lp_rs_newer_ = false;
+  lp_cpp_newer_ = false;
 }
 
 // HIGHS_RS_CHECK_SYNC set: lpToRust checks that an engine model it does
@@ -487,7 +474,7 @@ static const bool kRsCheckSync = std::getenv("HIGHS_RS_CHECK_SYNC") != nullptr;
 void Highs::lpToRust() {
   const HighsLp& lp = model_cache_.lp_;
   if (!lp_cpp_newer_) {
-    if (kRsCheckSync && !lp_rs_newer_) {
+    if (kRsCheckSync) {
       const RsLp v = rsLp(lp);
       if (!highs_rs::highs_rs_lph_model_matches(ekk_instance_.p, &v,
                                                 lp.model_name_.data(),
@@ -496,7 +483,6 @@ void Highs::lpToRust() {
     }
     return;
   }
-  assert(!lp_rs_newer_);
   rsImportModel(ekk_instance_.p, lp);
   lp_cpp_newer_ = false;
 }
@@ -782,12 +768,6 @@ struct HighsRunRust {
         return 0;
       case RunOp::kFacts: {
         RsFacts& f = *static_cast<RsFacts*>(p);
-        if (!arg && h.lp_rs_newer_) {
-          // The engine's model's, without syncing the copy
-          highs_rs_lph_model_facts(h.ekk_instance_.p, &f);
-          f.is_qp = h.model_cache_.isQp();
-          return 0;
-        }
         const HighsLp& lp = lpOf(arg);
         f.num_col = lp.num_col_;
         f.num_row = lp.num_row_;
@@ -935,12 +915,6 @@ struct HighsRunRust {
         // debugRetainedDataOk is not checked in this build
         return 1;
       case RunOp::kLpDimensionsOk:
-        if (h.lp_rs_newer_) {
-          const RsLog log = rsLog(options.log_options);
-          const char* message = "returnFromHighs";
-          return highs_rs::highs_rs_lph_model_dimensions_ok(
-              h.ekk_instance_.p, &log, message, strlen(message));
-        }
         return lpDimensionsOk("returnFromHighs", h.model_r().lp_,
                               options.log_options);
       case RunOp::kEkkFactorCompatible:
@@ -986,6 +960,11 @@ struct HighsRunRust {
              : h.presolve_.info_.presolve_time) = *static_cast<double*>(p);
         return 0;
       case RunOp::kLpView:
+        if (arg == 2) {
+          // Rust changed the model's LP through its view
+          h.model_w();
+          return 0;
+        }
         *static_cast<RsLp*>(p) = rsLp(lpOf(arg));
         return 0;
       default:
@@ -1563,7 +1542,6 @@ struct HighsRunRust {
         highs_rs::LpHandle* e = h.ekk_instance_.p;
         highs_rs_lps_run_import(h.ekk_instance_.lps, &d);
         rsSyncOptions(e, options);
-        h.model_r();
         h.lpToRust();
         highs_rs::highs_rs_lph_set_profiling(e, h.profiling_);
         *static_cast<void**>(p) = e;

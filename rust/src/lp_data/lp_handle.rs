@@ -1456,6 +1456,10 @@ impl LpHandle {
             return self.lps.lp_factor_row_compatible(&env, self.model.num_row) as i64;
         }
         if is!(LpView) {
+            if arg == 2 {
+                // The view was changed: it is the handle's model
+                return 0;
+            }
             debug_assert_eq!(arg, 0);
             let v = self.model.view();
             // SAFETY: the run's CLp
@@ -2872,47 +2876,6 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_lph_set_nla_lp(p: *mut LpHandle, lp: *const CLp) {
         h(p).set_nla_cpp(&*lp);
-    }
-
-    /// The model's Facts (a Highs object's: is_qp is C++'s)
-    ///
-    /// # Safety
-    /// `out` writable; the model name viewed until the model changes
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_lph_model_facts(p: *mut LpHandle, out: *mut Facts) {
-        *out = h(p).facts();
-    }
-
-    /// The simplex NLA's LP is the handle's model
-    #[no_mangle]
-    pub extern "C" fn highs_rs_lph_set_nla_model(p: *mut LpHandle) {
-        h(p).set_nla_model();
-    }
-
-    /// The model's numbers of columns, rows and nonzeros
-    ///
-    /// # Safety
-    /// `out` writable
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_lph_model_dims(p: *mut LpHandle, out: *mut [i32; 3]) {
-        let m = &h(p).model;
-        *out = [m.num_col, m.num_row, m.a.num_nz()];
-    }
-
-    /// lpDimensionsOk of the model
-    ///
-    /// # Safety
-    /// `log` valid; `message` of `len` bytes
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_lph_model_dimensions_ok(
-        p: *mut LpHandle,
-        log: *const Log,
-        message: *const u8,
-        len: usize,
-    ) -> bool {
-        let m = &mut h(p).model;
-        let msg = String::from_utf8_lossy(sl(message, len as i32));
-        super::super::lp_utils::lp_dimensions_ok(&*log, &msg, &m.view())
     }
 
     /// HEkk::btran (transposed) / ftran, with the simplex NLA's LP set to

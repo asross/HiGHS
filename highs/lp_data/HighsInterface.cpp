@@ -1598,6 +1598,7 @@ struct RsIfaceCall {
   int (*op)(void* ctx, int code, int arg, const void* p, int n);
   void* lps;
   highs_rs::LpHandle* handle;
+  RsLpVec* cpp_lp;
   RsBasisVec* basis;
   RsIfaceOptions o;
   RsIndexCollection ic;
@@ -1621,19 +1622,22 @@ int highs_rs_iface_scale(RsIfaceCall* c, bool is_col, HighsInt ix,
 // The steps of the interfaces on the Highs object (a friend)
 struct HighsIfaceRust {
   Highs& h;
+  RsLpVec lp;
   RsBasisVec basis;
   RsIfaceCall call;
 
   HighsIfaceRust(Highs& highs, const HighsIndexCollection* ic) : h(highs) {
-    // The engine's model is edited: the C++ copy is then stale (the ops
-    // below touch only what is C++'s: the names, the Hessian)
+    // The engine's model is edited, and the edit mirrored on the C++
+    // copy (the ops below touch only what is C++'s: the names, the
+    // Hessian)
     h.lpToRust();
-    h.lp_rs_newer_ = true;
+    lp = rsLpVec(h.model_cache_.lp_);
     basis = rsBasisVec(h.basis_);
     call.ctx = this;
     call.op = op;
     call.lps = h.ekk_instance_.lps;
     call.handle = h.ekk_instance_.p;
+    call.cpp_lp = &lp;
     call.basis = &basis;
     const HighsOptions& o = h.options_;
     call.o = {rsLog(o.log_options), o.infinite_cost, o.infinite_bound,
@@ -1641,8 +1645,11 @@ struct HighsIfaceRust {
               o.allowed_matrix_scale_factor};
     if (ic) call.ic = rsIndexCollection(*ic);
   }
-  // The scalars back into the C++ basis
-  void back() { rsBasisVecBack(basis, h.basis_); }
+  // The scalars back into the C++ copy and basis
+  void back() {
+    rsLpVecBack(lp, h.model_cache_.lp_);
+    rsBasisVecBack(basis, h.basis_);
+  }
 
   // interface.rs: CSolutionValues
   struct SolutionValues {

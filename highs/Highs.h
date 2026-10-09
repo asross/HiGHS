@@ -1637,38 +1637,30 @@ class Highs {
   ICrashInfo icrash_info_;
 
 #ifdef HIGHS_RUST
-  // The model's LP data are the engine's (ekk_instance_'s model, an Lp of
-  // rust/src/lp_data/lp.rs); model_cache_ is their C++ copy, with the
-  // parts the Rust LP does not hold (the names and their hashes, the
-  // origin and objective names, the modifications, the Hessian). C++
-  // reads the model through model_r() and writes it through model_w();
-  // Rust code works on the engine's model after lpToRust().
-  mutable HighsModel model_cache_;
-  // The engine's model has changes the copy lacks
-  mutable bool lp_rs_newer_ = false;
+  // The model's LP data are the engine's model (ekk_instance_'s, an Lp
+  // of rust/src/lp_data/lp.rs), which the runs and the model edits work
+  // on. model_cache_ is the model the API hands out: the LP data's C++
+  // copy, kept current by every writer (callers hold the references
+  // getLp and getModel return across edits), and what the engine's model
+  // does not hold (the names and their hashes, the origin and objective
+  // names, the modifications, the Hessian). C++ reads the model through
+  // model_r(); C++ that changes the LP data goes through model_w(), and
+  // the engine's model takes the copy at the next lpToRust().
+  HighsModel model_cache_;
   // The copy has changes the engine's model lacks
   bool lp_cpp_newer_ = true;
-  // The copy takes the engine model's LP data
-  void syncLpFromRust() const;
-  // The copy, current
-  const HighsModel& model_r() const {
-    if (lp_rs_newer_) syncLpFromRust();
-    return model_cache_;
-  }
-  // The copy, current, to change: the engine's model takes it at the
-  // next lpToRust()
+  const HighsModel& model_r() const { return model_cache_; }
   HighsModel& model_w() {
-    model_r();
     lp_cpp_newer_ = true;
     return model_cache_;
   }
   // The engine's model, current
   void lpToRust();
-  // The model's dimensions (without syncing the copy)
-  HighsInt lpDim(const int which) const;
-  HighsInt lpNumCol() const { return lpDim(0); }
-  HighsInt lpNumRow() const { return lpDim(1); }
-  HighsInt lpNumNz() const { return lpDim(2); }
+  // The copy takes the engine model's LP data
+  void lpFromRust();
+  HighsInt lpNumCol() const { return model_cache_.lp_.num_col_; }
+  HighsInt lpNumRow() const { return model_cache_.lp_.num_row_; }
+  HighsInt lpNumNz() const { return model_cache_.lp_.a_matrix_.numNz(); }
   // The parts of the model's LP the engine's model does not hold (the
   // names and their hashes, the origin and objective names, the
   // modifications)

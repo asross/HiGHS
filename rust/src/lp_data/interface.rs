@@ -848,7 +848,7 @@ mod tests {
 pub mod ffi {
     use super::*;
     use crate::lp_data::ffi::{CIndexCollection, RsMut, RsVec};
-    use crate::lp_data::lp::LpCore;
+    use crate::lp_data::lp::{CppLp, LpCore};
     use crate::lp_data::lp_handle::LpHandle;
     use std::ffi::c_void;
 
@@ -950,13 +950,72 @@ pub mod ffi {
         }
     }
 
-    /// The data of an interface call: the model edited is the engine's
+    /// The data of an interface call: the model edited is the engine's,
+    /// and the edit is mirrored on its C++ copy (which the API hands out)
     #[repr(C)]
     pub struct CIfaceCall {
         pub host: CIfaceHost,
+        pub cpp_lp: *mut CppLp,
         pub basis: *mut CppBasis,
         pub o: IfaceOptions,
         pub ic: CIndexCollection,
+    }
+
+    /// The host of an edit's mirror on the C++ copy of the model: the
+    /// basis, names, Hessian, solution and engine were the edit's to
+    /// change, so it changes nothing (a scratch engine for the status
+    /// updates)
+    struct MirrorHost(Box<std::cell::UnsafeCell<LpSolver>>);
+
+    impl IfaceHost for MirrorHost {
+        fn lps(&self) -> &mut LpSolver {
+            // SAFETY: the scratch engine, borrowed between host calls
+            unsafe { &mut *self.0.get() }
+        }
+        fn names_resize(&mut self, _cols: bool, _num: i32) {}
+        fn names_delete(&mut self, _cols: bool, _kept: &[i32], _new_num: i32) {}
+        fn names_hash_clear(&mut self, _cols: bool) {}
+        fn invalidate(&mut self, _what: Invalidate) {}
+        fn feasible_wrt_bounds(&self, _columns: bool) -> bool {
+            false
+        }
+        fn ekk_nla_lp(&mut self) {}
+        fn ekk_clear_shell(&mut self) {}
+        fn hessian_complete(&mut self, _num_col: i32) {}
+        fn hessian_delete_cols(&mut self, _ic: &IndexCollection) {}
+    }
+
+    /// `$body` on the engine's model with the Highs object's basis and
+    /// host (its result), then on the C++ copy with a scratch basis, the
+    /// mirror host and no log: the edit is deterministic in the LP, so the
+    /// copy stays the engine model's at the edit's cost
+    macro_rules! edit {
+        ($c:ident, |$lp:ident, $basis:ident, $host:ident, $o:ident| $body:expr) => {{
+            let r = {
+                let $lp = $c.lp();
+                let $basis = &mut *$c.basis;
+                let $host = &mut $c.host;
+                let $o = &$c.o;
+                $body
+            };
+            {
+                let $lp = &mut *$c.cpp_lp;
+                let $basis = &mut BasisG::<Vec<u8>> {
+                    valid: false,
+                    alien: true,
+                    useful: false,
+                    was_alien: false,
+                    debug_id: 0,
+                    debug_update_count: 0,
+                    col_status: Vec::new(),
+                    row_status: Vec::new(),
+                };
+                let $host = &mut MirrorHost(Box::default());
+                let $o = &IfaceOptions { log: crate::lp_data::Log::none(), ..$c.o };
+                let _ = $body;
+            }
+            r
+        }};
     }
 
     impl CIfaceCall {
@@ -991,14 +1050,16 @@ pub mod ffi {
     ) -> i32 {
         use crate::ffi::sl;
         let c = &mut *c;
-        let (lp, basis) = (c.lp(), &mut *c.basis);
         let nz = num_nz.max(0);
         let (start, index, value) = if nz > 0 { (sl(start, num), sl(index, nz), sl(value, nz)) } else { (&[][..], &[][..], &[][..]) };
         if cols {
-            add_cols(lp, basis, &mut c.host, &c.o, num, sl(x0, num), sl(x1, num), sl(x2, num), num_nz, start, index, value)
-                as i32
+            let (cost, lower, upper) = (sl(x0, num), sl(x1, num), sl(x2, num));
+            edit!(c, |lp, basis, host, o| add_cols(lp, basis, host, o, num, cost, lower, upper, num_nz, start, index, value)
+                as i32)
         } else {
-            add_rows(lp, basis, &mut c.host, &c.o, num, sl(x1, num), sl(x2, num), num_nz, start, index, value) as i32
+            let (lower, upper) = (sl(x1, num), sl(x2, num));
+            edit!(c, |lp, basis, host, o| add_rows(lp, basis, host, o, num, lower, upper, num_nz, start, index, value)
+                as i32)
         }
     }
 
@@ -1009,14 +1070,13 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_iface_delete(c: *mut CIfaceCall, cols: bool) {
         let c = &mut *c;
-        let (lp, basis) = (c.lp(), &mut *c.basis);
-        let dim = if cols { lp.num_col } else { lp.num_row } as usize;
+        let dim = if cols { c.lp().num_col } else { c.lp().num_row } as usize;
         let renumber = {
             let ic = c.ic.view();
             if cols {
-                delete_cols(lp, basis, &mut c.host, &ic)
+                edit!(c, |lp, basis, host, _o| delete_cols(lp, basis, host, &ic))
             } else {
-                delete_rows(lp, basis, &mut c.host, &ic)
+                edit!(c, |lp, basis, host, _o| delete_rows(lp, basis, host, &ic))
             }
         };
         if renumber {
@@ -1040,9 +1100,11 @@ pub mod ffi {
     ) -> i32 {
         use crate::ffi::sl;
         let c = &mut *c;
-        let (lp, basis) = (c.lp(), &mut *c.basis);
         match what {
-            0 => change_costs_iface(lp, &mut c.host, &c.o, &c.ic.view(), sl(x0 as *const f64, num)) as i32,
+            0 => {
+                let (ic, cost) = (c.ic.view(), sl(x0 as *const f64, num));
+                edit!(c, |lp, _basis, host, o| change_costs_iface(lp, host, o, &ic, cost) as i32)
+            }
             1 | 2 => {
                 let (lower, upper) = (sl(x0 as *const f64, num), sl(x1, num));
                 let (local_lower, local_upper) = if c.ic.is_set {
@@ -1052,9 +1114,21 @@ pub mod ffi {
                     (lower.to_vec(), upper.to_vec())
                 };
                 let ic = c.ic.view();
-                change_bounds_iface(lp, basis, &mut c.host, &c.o, &ic, what == 1, local_lower, local_upper) as i32
+                edit!(c, |lp, basis, host, o| change_bounds_iface(
+                    lp,
+                    basis,
+                    host,
+                    o,
+                    &ic,
+                    what == 1,
+                    local_lower.clone(),
+                    local_upper.clone()
+                ) as i32)
             }
-            _ => change_integrality_iface(lp, &mut c.host, &c.ic.view(), sl(x0 as *const u8, num)) as i32,
+            _ => {
+                let (ic, integrality) = (c.ic.view(), sl(x0 as *const u8, num));
+                edit!(c, |lp, _basis, host, _o| change_integrality_iface(lp, host, &ic, integrality) as i32)
+            }
         }
     }
 
@@ -1065,7 +1139,7 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_iface_change_coefficient(c: *mut CIfaceCall, row: i32, col: i32, value: f64) {
         let c = &mut *c;
-        change_coefficient(c.lp(), &mut *c.basis, &mut c.host, &c.o, row, col, value);
+        edit!(c, |lp, basis, host, o| change_coefficient(lp, basis, host, o, row, col, value));
     }
 
     /// Highs::scaleColInterface (`is_col`) or scaleRowInterface
@@ -1075,7 +1149,6 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn highs_rs_iface_scale(c: *mut CIfaceCall, is_col: bool, ix: i32, scale: f64) -> i32 {
         let c = &mut *c;
-        let log = c.o.log;
-        scale_col_row(c.lp(), &mut *c.basis, &mut c.host, &log, is_col, ix, scale) as i32
+        edit!(c, |lp, basis, host, o| scale_col_row(lp, basis, host, &o.log, is_col, ix, scale) as i32)
     }
 }

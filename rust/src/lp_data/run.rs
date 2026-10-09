@@ -285,7 +285,8 @@ pub enum Op {
     ClearReducedIntegrality,
     /// presolve_.info_.presolve_time (arg 0) / postsolve_time (1) = *p
     PresolveTime,
-    /// The view of model_.lp_ (rsLp) into p (CLp)
+    /// The view of model_.lp_ (arg 0, rsLp) or of the reduced LP (1) into p
+    /// (CLp); arg 2: Rust changed the model through its view
     LpView,
     // drivers.rs
     /// The MIP solver of callSolveMip (the user's solution kept, solver
@@ -1319,13 +1320,14 @@ impl<'a> Run<'a> {
 
     /// Highs::infeasibleBoundsOk
     pub(crate) fn infeasible_bounds_ok(&self) -> bool {
+        let mut changed = false;
         let mut lp = std::mem::MaybeUninit::<CLp>::uninit();
         self.op(Op::LpView, 0, lp.as_mut_ptr() as *mut c_void);
         // SAFETY: filled by C++ with model_.lp_'s arrays, which nothing
         // else touches during the call
         let lp = unsafe { lp.assume_init() };
         let o = &self.c.o;
-        unsafe {
+        let ok = unsafe {
             infeasible_bounds_ok(
                 self.log(),
                 self.on(),
@@ -1334,8 +1336,13 @@ impl<'a> Run<'a> {
                 o.primal_feasibility_tolerance,
                 o.mip_feasibility_tolerance,
                 o.solve_relaxation,
+                &mut changed,
             )
+        };
+        if changed {
+            self.op(Op::LpView, 2, std::ptr::null_mut());
         }
+        ok
     }
 
     /// Highs::runPresolve
@@ -1744,6 +1751,7 @@ pub fn infeasible_bounds_ok(
     pft: f64,
     mft: f64,
     solve_relaxation: bool,
+    changed: &mut bool,
 ) -> bool {
     use super::var_type::{INTEGER, SEMI_CONTINUOUS, SEMI_INTEGER};
     let [col_lower, col_upper, row_lower, row_upper] = bounds;
@@ -1777,6 +1785,8 @@ pub fn infeasible_bounds_ok(
             infeasible_bound_ok(log, on, &mut n, "Row", i, &mut row_lower[i], &mut row_upper[i], pft, false);
         }
     }
+    // Only the rectified bounds change
+    *changed = n.num_ok > 0;
     if n.num_ok > 0 && on {
         log_user!(log, LogType::Info, "Model has %d small inconsistent bound(s): rectified\n", n.num_ok);
     }
@@ -1857,6 +1867,7 @@ mod tests {
         let mut rl = [1.0 + 1e-9];
         let mut ru = [1.0];
         let integrality = [0, 0, 0, 3, 1];
+        let mut changed = false;
         let ok = infeasible_bounds_ok(
             &Log::none(),
             false,
@@ -1865,7 +1876,9 @@ mod tests {
             1e-7,
             1e-6,
             false,
+            &mut changed,
         );
+        assert!(changed);
         // Column 2 is infeasible; column 4 only after inward rounding,
         // which leaves the model's bounds
         assert!(!ok);
