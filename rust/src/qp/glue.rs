@@ -2,12 +2,13 @@
 //! (the Hessian check, the Instance with the square Hessian, the Settings
 //! from the options and their logging), solveqp's quass2highs and phase 1
 //! (computeStartingPointHighs: the hot start check, or a feasibility LP
-//! solved by a separate Highs, then the starting active set).
+//! solved by a silent LP solver, an LpHandle, as the C++ ran a separate
+//! Highs, then the starting active set).
 //!
 //! C++ (highs/qpsolver/QpRust.cpp) passes the LP and Hessian views, the
 //! options, the Highs solution, basis, model status and info in place, and
-//! one `op` per step on a C++ object: the profiling clock, the timer,
-//! sizing the solution and basis, and the phase 1 LP solve.
+//! one `op` per step on a C++ object: the profiling clock, the timer and
+//! sizing the solution and basis.
 
 use super::vector::{MatrixBase, QpVector};
 use super::{solve, BasisStatus, Callbacks, Instance, ModelStatus, Phase1Start, Settings};
@@ -25,8 +26,6 @@ const OP_PROFILING_STOP: i32 = 1;
 const OP_TIMER_READ: i32 = 2;
 /// Size the solution and basis to the LP, out: COut
 const OP_RESIZE: i32 = 3;
-/// The phase 1 LP, out: CPhase1
-const OP_PHASE1: i32 = 4;
 
 // HighsModelStatus
 const MS_NOTSET: i32 = 0;
@@ -45,23 +44,6 @@ const BASIC: u8 = 1;
 const UPPER: u8 = 2;
 const ZERO: u8 = 3;
 const NONBASIC: u8 = 4;
-
-/// The phase 1 LP solve: its time limit in, the outcome out (the basis
-/// and solution copied into the Rust buffers, at most their lengths)
-#[repr(C)]
-pub struct CPhase1 {
-    pub time_limit: f64,
-    pub run_error: bool,
-    pub model_status: i32,
-    pub simplex_iteration_count: i32,
-    pub col_status: RsMut<u8>,
-    pub row_status: RsMut<u8>,
-    pub col_value: RsMut<f64>,
-    pub row_value: RsMut<f64>,
-    /// The sizes of the basis' vectors
-    pub num_col_status: usize,
-    pub num_row_status: usize,
-}
 
 /// What callSolveQp works on (QpRust.cpp: RsQpHost)
 #[repr(C)]
@@ -232,6 +214,68 @@ fn infeasibility_count(lower: &[f64], upper: &[f64], value: &[f64], tol: f64) ->
     num
 }
 
+/// The outcome of the phase 1 LP
+struct Phase1Lp {
+    model_status: i32,
+    simplex_iteration_count: i32,
+    col_status: Vec<u8>,
+    row_status: Vec<u8>,
+    col_value: Vec<f64>,
+    row_value: Vec<f64>,
+}
+
+/// The feasibility LP of computeStartingPointHighs (the QP's constraints,
+/// zero costs) solved by a silent LP solver with presolve and the time
+/// left, as the C++ passModel'd it to a silent Highs; None if the run
+/// failed. The basis and solution only for an optimal LP
+///
+/// # Safety
+/// The LP view valid
+unsafe fn phase1_lp(v: &CLp, time_limit: f64) -> Option<Phase1Lp> {
+    use crate::lp_data::lp::Lp;
+    use crate::lp_data::lp_handle::LpHandle;
+    use crate::lp_data::opts::OptValue;
+    let mut h = LpHandle::new();
+    h.set_option("output_flag", OptValue::Bool(false));
+    h.set_option("presolve", OptValue::Str(b"on"));
+    h.set_option("time_limit", OptValue::Double(time_limit));
+    let mut lp = Lp::default();
+    let g = &mut lp.g;
+    g.num_col = v.num_col;
+    g.num_row = v.num_row;
+    let nc = v.num_col as usize;
+    g.col_cost = vec![0.0; nc];
+    g.col_lower = v.col_lower.get().to_vec();
+    g.col_upper = v.col_upper.get().to_vec();
+    g.row_lower = v.row_lower.get().to_vec();
+    g.row_upper = v.row_upper.get().to_vec();
+    g.a.start = v.a.start.get().to_vec();
+    g.a.index = v.a.index.get().to_vec();
+    g.a.value = v.a.value.get().to_vec();
+    // (passModel's status is not checked, as in the C++)
+    h.pass_model(lp);
+    if h.run_lp() == Status::Error {
+        return None;
+    }
+    let model_status = h.model_status();
+    let mut p = Phase1Lp {
+        model_status,
+        simplex_iteration_count: h.info().simplex_iteration_count,
+        col_status: Vec::new(),
+        row_status: Vec::new(),
+        col_value: Vec::new(),
+        row_value: Vec::new(),
+    };
+    if model_status == MS_OPTIMAL {
+        let (b, s) = (&h.basis().b, h.solution());
+        p.col_status = b.col_status.clone();
+        p.row_status = b.row_status.clone();
+        p.col_value = s.col_value.clone();
+        p.row_value = s.row_value.clone();
+    }
+    Some(p)
+}
+
 /// computeStartingPointHighs: the start and the phase 1 iterations
 fn compute_starting_point(h: &CQpHost, inst: &Bounds, settings: &Settings) -> (Phase1Start, i32) {
     let (n, m) = (inst.var_lo.len(), inst.con_lo.len());
@@ -262,26 +306,11 @@ fn compute_starting_point(h: &CQpHost, inst: &Bounds, settings: &Settings) -> (P
     } else {
         let time = h.op(OP_TIMER_READ, std::ptr::null_mut());
         let left = settings.time_limit - time;
-        lp_col_status = vec![0u8; n];
-        lp_row_status = vec![0u8; m];
-        lp_col_value = vec![0.0; n];
-        lp_row_value = vec![0.0; m];
-        let mut p = CPhase1 {
-            time_limit: if left < 0.001 { 0.001 } else { left },
-            run_error: false,
-            model_status: 0,
-            simplex_iteration_count: 0,
-            col_status: RsMut { ptr: lp_col_status.as_mut_ptr(), len: n },
-            row_status: RsMut { ptr: lp_row_status.as_mut_ptr(), len: m },
-            col_value: RsMut { ptr: lp_col_value.as_mut_ptr(), len: n },
-            row_value: RsMut { ptr: lp_row_value.as_mut_ptr(), len: m },
-            num_col_status: 0,
-            num_row_status: 0,
-        };
-        h.op(OP_PHASE1, &mut p as *mut CPhase1 as *mut c_void);
-        if p.run_error {
+        // SAFETY: the host's LP view
+        let p = unsafe { phase1_lp(&h.lp, if left < 0.001 { 0.001 } else { left }) };
+        let Some(p) = p else {
             return (empty(ModelStatus::Error), iterations);
-        }
+        };
         status = match p.model_status {
             MS_OPTIMAL => ModelStatus::NotSet,
             MS_INFEASIBLE => ModelStatus::Infeasible,
@@ -293,8 +322,20 @@ fn compute_starting_point(h: &CQpHost, inst: &Bounds, settings: &Settings) -> (P
         if status != ModelStatus::NotSet {
             return (empty(status), iterations);
         }
-        lp_col_status.truncate(p.num_col_status);
-        lp_row_status.truncate(p.num_row_status);
+        // The basis' statuses as they are; the values copied into vectors
+        // of the LP's dimensions
+        lp_col_status = p.col_status;
+        lp_row_status = p.row_status;
+        lp_col_value = vec![0.0; n];
+        lp_row_value = vec![0.0; m];
+        for (x, &v) in lp_col_value.iter_mut().zip(&p.col_value) {
+            *x = v;
+        }
+        for (x, &v) in lp_row_value.iter_mut().zip(&p.row_value) {
+            *x = v;
+        }
+        lp_col_status.truncate(n);
+        lp_row_status.truncate(m);
         (&lp_col_status, &lp_row_status, &lp_col_value, &lp_row_value)
     };
     let tol = if have_starting_point { 0.0 } else { 1e-4 };

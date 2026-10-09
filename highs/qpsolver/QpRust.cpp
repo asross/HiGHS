@@ -7,8 +7,8 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /**@file qpsolver/QpRust.cpp
  * @brief Highs::callSolveQp with the QP glue in Rust (rust/src/qp/glue.rs):
- * the views, the profiling clock, the timer, sizing the solution and
- * basis, and the phase 1 LP solve
+ * the views, the profiling clock, the timer and sizing the solution and
+ * basis
  */
 #include "lp_data/HighsRust.h"
 
@@ -19,16 +19,6 @@ namespace {
 struct RsQpSolutionOut {
   RsMut<double> col_value, col_dual, row_value, row_dual;
   RsMut<uint8_t> col_status, row_status;
-};
-
-struct RsQpPhase1 {
-  double time_limit;
-  bool run_error;
-  int model_status;
-  HighsInt simplex_iteration_count;
-  RsMut<uint8_t> col_status, row_status;
-  RsMut<double> col_value, row_value;
-  size_t num_col_status, num_row_status;
 };
 
 struct RsQpHost {
@@ -63,48 +53,6 @@ RsMut<uint8_t> qpGlueStatus(const std::vector<HighsBasisStatus>& s) {
           s.size()};
 }
 
-template <typename T, typename F>
-void qpGluePut(RsMut<T> to, const std::vector<F>& from) {
-  for (size_t i = 0; i < to.len && i < from.size(); i++)
-    to.ptr[i] = static_cast<T>(from[i]);
-}
-
-// The feasibility LP of computeStartingPointHighs, solved by a silent Highs
-void qpGluePhase1(QpGlueCtx& c, RsQpPhase1& p) {
-  Highs highs;
-  highs.setOptionValue("output_flag", false);
-  highs.setOptionValue("presolve", kHighsOnString);
-  highs.setOptionValue("time_limit", p.time_limit);
-  HighsLp lp;
-  lp.a_matrix_.index_ = c.lp.a_matrix_.index_;
-  lp.a_matrix_.start_ = c.lp.a_matrix_.start_;
-  lp.a_matrix_.value_ = c.lp.a_matrix_.value_;
-  lp.a_matrix_.format_ = MatrixFormat::kColwise;
-  lp.col_cost_.assign(c.lp.num_col_, 0.0);
-  lp.col_lower_ = c.lp.col_lower_;
-  lp.col_upper_ = c.lp.col_upper_;
-  lp.row_lower_ = c.lp.row_lower_;
-  lp.row_upper_ = c.lp.row_upper_;
-  lp.num_col_ = c.lp.num_col_;
-  lp.num_row_ = c.lp.num_row_;
-  highs.passModel(lp);
-  if (highs.run() == HighsStatus::kError) {
-    p.run_error = true;
-    return;
-  }
-  p.model_status = int(highs.getModelStatus());
-  p.simplex_iteration_count = highs.getInfo().simplex_iteration_count;
-  if (highs.getModelStatus() != HighsModelStatus::kOptimal) return;
-  const HighsBasis& basis = highs.getBasis();
-  const HighsSolution& solution = highs.getSolution();
-  qpGluePut(p.col_status, basis.col_status);
-  qpGluePut(p.row_status, basis.row_status);
-  qpGluePut(p.col_value, solution.col_value);
-  qpGluePut(p.row_value, solution.row_value);
-  p.num_col_status = basis.col_status.size();
-  p.num_row_status = basis.row_status.size();
-}
-
 double qpGlueOp(void* ctx, int code, void* out) {
   QpGlueCtx& c = *static_cast<QpGlueCtx*>(ctx);
   switch (code) {
@@ -133,9 +81,6 @@ double qpGlueOp(void* ctx, int code, void* out) {
       o.row_status = qpGlueStatus(c.basis.row_status);
       break;
     }
-    case 4:
-      qpGluePhase1(c, *static_cast<RsQpPhase1*>(out));
-      break;
   }
   return 0;
 }
