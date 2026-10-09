@@ -1587,6 +1587,13 @@ impl LpSolver {
         };
         self.factor.setup(lp.num_col, lp.num_row, lp.num_row, &a_start, UPDATE_METHOD_FT);
         self.sh.status.has_nla = true;
+        // A factor just set up has no INVERT. HEkk could keep
+        // has_fresh_invert over undualize after a failed solve, so that
+        // computeFactor skipped the build and the solve used the empty
+        // factor (vol1 with dualize and presolve: Not Set in C++, a panic
+        // in FTRAN in Rust)
+        self.sh.status.has_invert = false;
+        self.sh.status.has_fresh_invert = false;
     }
 
     /// HEkk::lpFactorRowCompatible(expected_num_row)

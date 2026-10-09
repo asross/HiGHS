@@ -469,6 +469,12 @@ pub fn dualize(lps: &mut LpSolver, log: &Log) {
     s.has_basis = false;
     s.has_ar_matrix = false;
     s.has_nla = false;
+    // The factor is of the primal LP's basis matrix, of other dimensions:
+    // INVERT must be redone (undualize clears it too). The C++ HEkk kept
+    // has_invert and solved with the stale factor (vol1 with presolve:
+    // undefined behaviour in C++, model status Not Set; a panic in Rust)
+    s.has_invert = false;
+    s.has_fresh_invert = false;
     log_user!(log, LogType::Info, "Solving dual LP with %d columns", dual_num_col);
     if num_upper_bound_col + num_upper_bound_row != 0 {
         log_user!(log, LogType::Info, " [%d extra from", dual_num_col - d.original_num_row);
@@ -487,12 +493,12 @@ pub fn dualize(lps: &mut LpSolver, log: &Log) {
 }
 
 /// HEkk::undualize: the LP and basis of the primal, then a solve from the
-/// basis (an `op`; its status is not used by the caller); returns whether
-/// it undualized
-fn undualize(h: &CSimplexApp) -> bool {
+/// basis (an `op`), or from a logical basis if `from_basis` is false;
+/// returns the status of that solve if it undualized
+fn undualize(h: &CSimplexApp, from_basis: bool) -> Option<Status> {
     let lps = h.lps();
     if !lps.sh.status.is_dualized {
-        return false;
+        return None;
     }
     let dual_num_col = lps.lp.num_col;
     let d = std::mem::take(&mut lps.dz);
@@ -532,12 +538,12 @@ fn undualize(h: &CSimplexApp) -> bool {
     let s = &mut lps.sh.status;
     s.is_dualized = false;
     s.has_dual_steepest_edge_weights = false;
-    s.has_basis = true;
+    s.has_basis = from_basis;
     s.has_ar_matrix = false;
     s.has_nla = false;
     s.has_invert = false;
     let iteration_count0 = lps.sh.iteration_count;
-    h.status(OP_SOLVE, 0);
+    let solve_status = h.status(OP_SOLVE, 0);
     let primal_solve_iteration_count = h.lps().sh.iteration_count - iteration_count0;
     let name = String::from_utf8_lossy(&h.lps().lp.model_name).into_owned();
     log_user!(
@@ -547,7 +553,25 @@ fn undualize(h: &CSimplexApp) -> bool {
         name.as_str(),
         primal_solve_iteration_count
     );
-    true
+    Some(solve_status)
+}
+
+/// undualize after the solve of the dual LP: whether it undualized. The
+/// C++ ignores the status of the solve from the undualized basis; when the
+/// dual LP's solve failed (vol1 with presolve: a rank deficient basis in
+/// its primal clean-up) its basis is not used: the primal LP is solved
+/// from a logical basis, and that solve decides the status (the C++
+/// solves from the failed basis and returns Not Set)
+fn undualized(h: &CSimplexApp, return_status: &mut Status) -> bool {
+    match undualize(h, *return_status != Status::Error) {
+        Some(s) => {
+            if *return_status == Status::Error {
+                *return_status = s;
+            }
+            true
+        }
+        None => false,
+    }
 }
 
 /// HEkk::unpermute (permuting is not done)
@@ -655,8 +679,7 @@ pub fn solve_lp_simplex(h: &mut CSimplexApp) -> Status {
         return_status = h.status(OP_SOLVE, 0);
         solved_unscaled_lp = true;
         unpermute(h);
-        // (undualize's status is not used)
-        dualized = undualize(h);
+        dualized = undualized(h, &mut return_status);
         if h.cost_scale_factor != 0 {
             let cost_scale_factor = 2f64.powi(-h.cost_scale_factor);
             log_dev!(log, LogType::Info, "Objective = %11.4g\n", cost_scale_factor * h.lps().sh.info.dual_objective_value);
@@ -672,7 +695,7 @@ pub fn solve_lp_simplex(h: &mut CSimplexApp) -> Status {
             // Solve the scaled LP!
             return_status = h.status(OP_SOLVE, 0);
             unpermute(h);
-            dualized = undualize(h);
+            dualized = undualized(h, &mut return_status);
             if h.cost_scale_factor != 0 {
                 let cost_scale_factor = 2f64.powi(-h.cost_scale_factor);
                 log_dev!(log, LogType::Info, "Objective = %11.4g\n", cost_scale_factor * h.lps().sh.info.dual_objective_value);

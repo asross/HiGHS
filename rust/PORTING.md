@@ -51,9 +51,16 @@ file readers in parallel. IPX, PDLP and QP last.
   invalid when dualizing and undualizing, so they are recomputed. Results:
   correct statuses (refinery and vol1 are Infeasible; the C++ says Unknown),
   other paths differ on 6 of 82 check instances with dualize and presolve
-  off. With dualize and presolve on, vol1's reduced LP still fails: the
-  C++ ends with model status Not Set (reading stale data), the Rust panics
-  in the factor (an assertion on the basis' row count).
+  off. With dualize and presolve on, the primal clean-up of vol1's
+  reduced dual LP fails on a rank deficient basis; undualize then kept
+  has_fresh_invert, so the solve from the undualized basis skipped INVERT
+  and used a factor just set up for the primal LP's dimensions (the C++
+  reads stale data and ends with Not Set; the Rust panicked in FTRAN).
+  Setting up the simplex NLA now clears has_invert and has_fresh_invert,
+  dualize clears them too, and when the dual LP's solve fails the primal
+  LP is solved from a logical basis and that solve's status is returned:
+  vol1 is Infeasible. With dualize on, presolve on or off, every check
+  instance has the default run's model status, and no panics.
 
 ## Rules for each step
 
