@@ -8,6 +8,7 @@ use super::ffi::CLp;
 use super::{Log, LogType, Status, INF};
 use crate::factor::{AMatrix, HFactor};
 use crate::log_dev;
+use crate::simplex::lp_solver::LpSolver;
 use std::ffi::c_void;
 
 const BASIC: u8 = 1;
@@ -68,31 +69,29 @@ pub fn accommodate_alien_basis(factor_log: &Log, lp: &CLp, col_status: &mut [u8]
 }
 
 // The ops of formSimplexLpBasisAndFactor (HighsSolutionRust.cpp)
-const OP_ENSURE_COLWISE: i32 = 0;
-/// considerScaling(options, lp)
-const OP_CONSIDER_SCALING: i32 = 1;
-/// The LP view into `out` (a CLp)
-const OP_LP_VIEW: i32 = 2;
-const OP_UNAPPLY_SCALE: i32 = 3;
-/// ekk_instance.moveLp(solver_object)
+/// ekk_instance.moveLp(solver_object) after the copy of the LP (the
+/// pointers and the engine's checks)
 const OP_MOVE_LP: i32 = 4;
-/// ekk_instance.status_.has_basis
-const OP_EKK_HAS_BASIS: i32 = 5;
 /// ekk_instance.setBasis(basis): the HighsStatus
 const OP_EKK_SET_BASIS: i32 = 6;
 /// ekk_instance.initialiseSimplexLpBasisAndFactor(arg): the HighsStatus
 const OP_EKK_INITIALISE: i32 = 7;
-/// lp.moveBackLpAndUnapplyScaling(ekk_lp) if lp.is_moved_
-const OP_MOVE_BACK: i32 = 8;
+/// The incumbent LP takes the engine LP's scale
+const OP_LP_BACK: i32 = 8;
 
-/// What formSimplexLpBasisAndFactor works on
+/// What formSimplexLpBasisAndFactor works on: the incumbent LP (copied
+/// into the simplex engine's LP, which is scaled), the basis and the C++
+/// steps
 #[repr(C)]
 pub struct CFormHost {
     pub ctx: *mut c_void,
     pub op: unsafe extern "C" fn(*mut c_void, i32, i32, *mut c_void) -> i32,
     pub log: Log,
     pub factor_log: Log,
-    pub is_scaled: *const bool,
+    pub lps: *mut LpSolver,
+    pub incumbent: CLp,
+    pub model_name: super::ffi::RsMut<u8>,
+    pub lp_options: super::ffi::CLpOptions,
     pub basis_valid: bool,
     pub basis_useful: bool,
     pub basis_alien: *mut bool,
@@ -105,6 +104,17 @@ impl CFormHost {
         // SAFETY: the host's op with its context
         unsafe { (self.op)(self.ctx, code, arg, out) }
     }
+    #[allow(clippy::mut_from_ref)]
+    fn lps<'a>(&self) -> &'a mut LpSolver {
+        // SAFETY: the C++ HEkk's engine; no borrow is held across an op
+        unsafe { &mut *self.lps }
+    }
+    /// formSimplexLpBasisAndFactorReturn: the LP is unscaled, and the
+    /// incumbent takes its scale
+    fn move_back(&self) {
+        self.lps().lp.unapply_scale();
+        self.op(OP_LP_BACK, 0, std::ptr::null_mut());
+    }
 }
 
 /// formSimplexLpBasisAndFactor: returns the HighsStatus
@@ -113,35 +123,36 @@ impl CFormHost {
 /// The host's pointers and views valid, the op with its context
 pub unsafe fn form_simplex_lp_basis_and_factor(h: &CFormHost, only_from_known_basis: bool) -> Status {
     let none = std::ptr::null_mut();
-    h.op(OP_ENSURE_COLWISE, 0, none);
-    let passed_scaled = *h.is_scaled;
+    // The incumbent (made column-wise by C++) is copied into the engine
+    h.lps().lp.import(&h.incumbent, h.model_name.get());
+    let passed_scaled = h.lps().lp.is_scaled;
     if !passed_scaled {
-        h.op(OP_CONSIDER_SCALING, 0, none);
+        crate::simplex::app::consider_scaling(&h.lp_options, &mut h.lps().lp);
     }
     let check_basis = *h.basis_alien || (!h.basis_valid && h.basis_useful);
     if check_basis {
         *h.basis_alien = true;
-        let mut lp = std::mem::zeroed::<CLp>();
-        h.op(OP_LP_VIEW, 0, &mut lp as *mut CLp as *mut c_void);
+        let lp = h.lps().lp.view();
         accommodate_alien_basis(&h.factor_log, &lp, h.col_status.get_mut(), h.row_status.get_mut());
         *h.basis_alien = false;
         if !passed_scaled {
-            h.op(OP_UNAPPLY_SCALE, 0, none);
+            h.lps().lp.unapply_scale();
         }
+        h.op(OP_LP_BACK, 0, none);
         return Status::Ok;
     }
     h.op(OP_MOVE_LP, 0, none);
     let mut return_status = Status::Ok;
-    if h.op(OP_EKK_HAS_BASIS, 0, none) == 0 {
+    if !h.lps().sh.status.has_basis {
         let call_status = status(h.op(OP_EKK_SET_BASIS, 0, none));
         return_status = h.log.interpret(call_status, return_status, "setBasis");
         if return_status == Status::Error {
-            h.op(OP_MOVE_BACK, 0, none);
+            h.move_back();
             return return_status;
         }
     }
     let call_status = status(h.op(OP_EKK_INITIALISE, only_from_known_basis as i32, none));
-    h.op(OP_MOVE_BACK, 0, none);
+    h.move_back();
     if call_status != Status::Ok {
         Status::Error
     } else {
@@ -164,14 +175,3 @@ pub unsafe extern "C" fn highs_rs_form_simplex_lp_basis_and_factor(h: *const CFo
     form_simplex_lp_basis_and_factor(&*h, only_from_known_basis) as i32
 }
 
-/// # Safety
-/// The LP view and statuses valid (at least num_col / num_row long)
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_accommodate_alien_basis(
-    factor_log: *const Log,
-    lp: *const CLp,
-    col_status: super::ffi::RsMut<u8>,
-    row_status: super::ffi::RsMut<u8>,
-) {
-    accommodate_alien_basis(&*factor_log, &*lp, col_status.get_mut(), row_status.get_mut());
-}

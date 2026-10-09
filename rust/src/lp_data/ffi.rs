@@ -133,6 +133,7 @@ impl RsName {
 
 /// HighsSparseMatrix
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CMatrix {
     pub format: i32,
     pub num_col: i32,
@@ -162,6 +163,7 @@ impl CMatrix {
 /// HighsLp's numerical data and scaling (HighsRust.h: rsLp). Scalars that
 /// Rust changes are copied back by C++ (rsLpBack).
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct CLp {
     pub num_col: i32,
     pub num_row: i32,

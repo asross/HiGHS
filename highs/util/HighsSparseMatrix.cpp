@@ -63,6 +63,7 @@ void HighsSparseMatrix::clear() {
   this->start_.assign(1, 0);
 }
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::exactResize() {
   if (this->isColwise()) {
     this->start_.resize(this->num_col_ + 1);
@@ -80,6 +81,7 @@ void HighsSparseMatrix::exactResize() {
   this->index_.resize(num_nz);
   this->value_.resize(num_nz);
 }
+#endif
 
 bool HighsSparseMatrix::isRowwise() const {
   return this->format_ == MatrixFormat::kRowwise ||
@@ -122,6 +124,7 @@ void HighsSparseMatrix::setFormat(const MatrixFormat desired_format) {
   assert(this->format_ == desired_format);
 }
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::ensureColwise() {
   assert(this->formatOk());
   if (this->isColwise()) return;
@@ -176,7 +179,9 @@ void HighsSparseMatrix::ensureColwise() {
   assert((HighsInt)this->index_.size() >= num_nz);
   assert((HighsInt)this->value_.size() >= num_nz);
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::ensureRowwise() {
   assert(this->formatOk());
   if (this->isRowwise()) return;
@@ -230,7 +235,9 @@ void HighsSparseMatrix::ensureRowwise() {
   assert((HighsInt)this->index_.size() >= num_nz);
   assert((HighsInt)this->value_.size() >= num_nz);
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::addVec(const HighsInt num_nz, const HighsInt* index,
                                const double* value, const double multiple) {
   HighsInt num_vec = 0;
@@ -253,7 +260,9 @@ void HighsSparseMatrix::addVec(const HighsInt num_nz, const HighsInt* index,
     this->num_row_++;
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::addCols(const HighsSparseMatrix new_cols,
                                 const int8_t* in_partition) {
   assert(new_cols.isColwise());
@@ -377,7 +386,9 @@ void HighsSparseMatrix::addCols(const HighsSparseMatrix new_cols,
     this->num_col_ += num_new_col;
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::addRows(const HighsSparseMatrix new_rows,
                                 const int8_t* in_partition) {
   assert(new_rows.isRowwise());
@@ -542,6 +553,7 @@ void HighsSparseMatrix::addRows(const HighsSparseMatrix new_rows,
   // Update the number of rows
   this->num_row_ += num_new_row;
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HighsSparseMatrix::getCol(const HighsInt iCol, HighsInt& num_nz,
@@ -571,6 +583,7 @@ void HighsSparseMatrix::getCol(const HighsInt iCol, HighsInt& num_nz,
 }
 #endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::getRow(const HighsInt iRow, HighsInt& num_nz,
                                HighsInt* index, double* value) const {
   assert(iRow >= 0 && iRow < this->num_row_);
@@ -596,7 +609,9 @@ void HighsSparseMatrix::getRow(const HighsInt iRow, HighsInt& num_nz,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::deleteCols(
     const HighsIndexCollection& index_collection) {
   assert(this->formatOk());
@@ -660,7 +675,9 @@ void HighsSparseMatrix::deleteCols(
   // Update the number of columns
   this->num_col_ = new_num_col;
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::deleteRows(
     const HighsIndexCollection& index_collection) {
   assert(this->formatOk());
@@ -738,6 +755,7 @@ void HighsSparseMatrix::deleteRows(
   // Update the number of rows
   this->num_row_ = new_num_row;
 }
+#endif
 
 HighsStatus HighsSparseMatrix::assessStart(const HighsLogOptions& log_options) {
   // Identify main dimensions
@@ -829,12 +847,15 @@ void HighsSparseMatrix::assessSmallValues(const HighsLogOptions& log_options,
                       this->value_, false, "");
 }
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 bool HighsSparseMatrix::hasLargeValue(const double large_matrix_value) {
   for (HighsInt iEl = 0; iEl < this->numNz(); iEl++)
     if (std::abs(this->value_[iEl]) >= large_matrix_value) return true;
   return false;
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::considerColScaling(
     const HighsInt max_scale_factor_exponent, double* col_scale) {
   const double log2 = log(2.0);
@@ -871,7 +892,9 @@ void HighsSparseMatrix::considerColScaling(
     assert(1 == 0);
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::considerRowScaling(
     const HighsInt max_scale_factor_exponent, double* row_scale) {
   const double log2 = log(2.0);
@@ -908,7 +931,9 @@ void HighsSparseMatrix::considerRowScaling(
     assert(1 == 0);
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::scaleCol(const HighsInt col, const double colScale) {
   assert(this->formatOk());
   assert(col >= 0);
@@ -927,7 +952,9 @@ void HighsSparseMatrix::scaleCol(const HighsInt col, const double colScale) {
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::scaleRow(const HighsInt row, const double rowScale) {
   assert(this->formatOk());
   assert(row >= 0);
@@ -946,7 +973,9 @@ void HighsSparseMatrix::scaleRow(const HighsInt row, const double rowScale) {
       this->value_[iEl] *= rowScale;
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::applyScale(const HighsScale& scale) {
   assert(this->formatOk());
   if (this->isColwise()) {
@@ -967,7 +996,9 @@ void HighsSparseMatrix::applyScale(const HighsScale& scale) {
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::applyColScale(const HighsScale& scale) {
   assert(this->formatOk());
   if (this->isColwise()) {
@@ -984,7 +1015,9 @@ void HighsSparseMatrix::applyColScale(const HighsScale& scale) {
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::applyRowScale(const HighsScale& scale) {
   assert(this->formatOk());
   if (this->isColwise()) {
@@ -1001,6 +1034,7 @@ void HighsSparseMatrix::applyRowScale(const HighsScale& scale) {
     }
   }
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HighsSparseMatrix::unapplyScale(const HighsScale& scale) {
@@ -1056,6 +1090,7 @@ void HighsSparseMatrix::createSlice(const HighsSparseMatrix& matrix,
 }
 #endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::createRowwise(const HighsSparseMatrix& matrix) {
   assert(matrix.formatOk());
   assert(matrix.isColwise());
@@ -1104,6 +1139,7 @@ void HighsSparseMatrix::createRowwise(const HighsSparseMatrix& matrix) {
   this->num_col_ = num_col;
   this->num_row_ = num_row;
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HighsSparseMatrix::createColwise(const HighsSparseMatrix& matrix) {
@@ -1156,6 +1192,7 @@ void HighsSparseMatrix::createColwise(const HighsSparseMatrix& matrix) {
 }
 #endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::alphaProductPlusY(const double alpha,
                                           const std::vector<double>& x,
                                           std::vector<double>& y,
@@ -1186,7 +1223,9 @@ void HighsSparseMatrix::alphaProductPlusY(const double alpha,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::product(vector<double>& result,
                                 const vector<double>& row) const {
   assert(this->formatOk());
@@ -1206,7 +1245,9 @@ void HighsSparseMatrix::product(vector<double>& result,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::productTranspose(vector<double>& result,
                                          const vector<double>& col) const {
   assert(this->formatOk());
@@ -1226,7 +1267,9 @@ void HighsSparseMatrix::productTranspose(vector<double>& result,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::productQuad(vector<double>& result,
                                     const vector<double>& row,
                                     const HighsInt debug_report) const {
@@ -1252,7 +1295,9 @@ void HighsSparseMatrix::productQuad(vector<double>& result,
     }
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::productTransposeQuad(
     vector<double>& result, const vector<double>& row,
     const HighsInt debug_report) const {
@@ -1278,6 +1323,7 @@ void HighsSparseMatrix::productTransposeQuad(
       result[iCol] = double(value[iCol]);
   }
 }
+#endif
 
 void HighsSparseMatrix::productTransposeQuad(
     vector<double>& result_value, vector<HighsInt>& result_index,
@@ -1327,6 +1373,7 @@ void HighsSparseMatrix::productTransposeQuad(
   }
 }
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::createRowwisePartitioned(
     const HighsSparseMatrix& matrix, const int8_t* in_partition) {
   assert(matrix.formatOk());
@@ -1397,7 +1444,9 @@ void HighsSparseMatrix::createRowwisePartitioned(
   this->num_col_ = num_col;
   this->num_row_ = num_row;
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 bool HighsSparseMatrix::debugPartitionOk(const int8_t* in_partition) const {
   assert(this->format_ == MatrixFormat::kRowwisePartitioned);
   bool ok = true;
@@ -1420,6 +1469,7 @@ bool HighsSparseMatrix::debugPartitionOk(const int8_t* in_partition) const {
   }
   return ok;
 }
+#endif
 
 #ifdef HIGHS_RUST
 extern "C" {
@@ -1655,6 +1705,7 @@ void HighsSparseMatrix::update(const HighsInt var_in, const HighsInt var_out,
 }
 #endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 double HighsSparseMatrix::computeDot(const std::vector<double>& array,
                                      const HighsInt use_col) const {
   assert(this->isColwise());
@@ -1668,7 +1719,9 @@ double HighsSparseMatrix::computeDot(const std::vector<double>& array,
   }
   return result;
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/sparse.rs
 void HighsSparseMatrix::collectAj(HVector& column, const HighsInt use_col,
                                   const double multiplier) const {
   assert(this->isColwise());
@@ -1689,6 +1742,7 @@ void HighsSparseMatrix::collectAj(HVector& column, const HighsInt use_col,
     column.array[iRow] = (fabs(value1) < kHighsTiny) ? kHighsZero : value1;
   }
 }
+#endif
 
 #ifndef HIGHS_RUST
 void HighsSparseMatrix::priceByRowDenseResult(
@@ -1799,3 +1853,218 @@ void HighsSparseMatrix::debugReportRowPrice(const HighsInt iRow,
   }
   printf("\n");
 }
+
+#ifdef HIGHS_RUST
+// The layout changes, edits, scalings and double-double products are Rust
+// (rust/src/lp_data/sparse.rs), on the vectors in place
+#include "lp_data/HighsRust.h"
+
+extern "C" {
+void highs_rs_mat_layout(RsMatVec* m, int what);
+void highs_rs_mat_add_vec(RsMatVec* m, HighsInt num_nz, const HighsInt* index,
+                          const double* value, double multiple);
+void highs_rs_mat_add(RsMatVec* m, bool cols, const RsMatrix* add);
+HighsInt highs_rs_mat_get_row(const RsMatVec* m, HighsInt row, HighsInt* index,
+                              double* value);
+void highs_rs_mat_delete(RsMatVec* m, bool cols, const RsIndexCollection* ic);
+void highs_rs_mat_create_rowwise(RsMatVec* m, const RsMatrix* from,
+                                 bool partitioned, const int8_t* partition);
+bool highs_rs_mat_has_large_value(const RsMatVec* m, double large_value);
+void highs_rs_mat_scale(RsMatVec* m, int what, const double* col,
+                        const double* row, HighsInt ix, double s);
+void highs_rs_mat_product_quad(const RsMatVec* m, bool transpose,
+                               const double* x, double* result);
+void highs_rs_mat_collect_aj(const RsMatVec* m, HighsInt use_col,
+                             double multiplier, double* array, HighsInt* index,
+                             HighsInt* count);
+void highs_rs_mat_product(const RsMatVec* m, int what, double alpha,
+                          const double* x, double* result);
+double highs_rs_mat_compute_dot(const RsMatVec* m, const double* array,
+                                size_t n, HighsInt use_col);
+}
+
+static RsMatrix rsMatrixOf(const HighsSparseMatrix& a) {
+  return {int(a.format_),  a.num_col_,       a.num_row_,
+          rsMut(a.start_), rsMut(a.p_end_),  rsMut(a.index_),
+          rsMut(a.value_)};
+}
+
+// A call on this matrix's vectors, its scalars copied back
+struct MatCall {
+  HighsSparseMatrix& a;
+  RsMatVec v;
+  explicit MatCall(HighsSparseMatrix& m) : a(m), v(rsMatVec(m)) {}
+  ~MatCall() { rsMatVecBack(v, a); }
+};
+
+void HighsSparseMatrix::exactResize() {
+  MatCall c(*this);
+  highs_rs_mat_layout(&c.v, 2);
+}
+
+void HighsSparseMatrix::ensureColwise() {
+  MatCall c(*this);
+  highs_rs_mat_layout(&c.v, 0);
+}
+
+void HighsSparseMatrix::ensureRowwise() {
+  MatCall c(*this);
+  highs_rs_mat_layout(&c.v, 1);
+}
+
+void HighsSparseMatrix::addVec(const HighsInt num_nz, const HighsInt* index,
+                               const double* value, const double multiple) {
+  MatCall c(*this);
+  highs_rs_mat_add_vec(&c.v, num_nz, index, value, multiple);
+}
+
+void HighsSparseMatrix::addCols(const HighsSparseMatrix new_cols,
+                                const int8_t* in_partition) {
+  assert(new_cols.isColwise());
+  assert(this->format_ != MatrixFormat::kRowwisePartitioned);
+  (void)in_partition;
+  const RsMatrix add = rsMatrixOf(new_cols);
+  MatCall c(*this);
+  highs_rs_mat_add(&c.v, true, &add);
+}
+
+void HighsSparseMatrix::addRows(const HighsSparseMatrix new_rows,
+                                const int8_t* in_partition) {
+  assert(new_rows.isRowwise());
+  assert(this->format_ != MatrixFormat::kRowwisePartitioned);
+  (void)in_partition;
+  const RsMatrix add = rsMatrixOf(new_rows);
+  MatCall c(*this);
+  highs_rs_mat_add(&c.v, false, &add);
+}
+
+void HighsSparseMatrix::getRow(const HighsInt iRow, HighsInt& num_nz,
+                               HighsInt* index, double* value) const {
+  assert(iRow >= 0 && iRow < this->num_row_);
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  num_nz = highs_rs_mat_get_row(&v, iRow, index, value);
+}
+
+void HighsSparseMatrix::deleteCols(
+    const HighsIndexCollection& index_collection) {
+  assert(!this->isRowwise());
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  MatCall c(*this);
+  highs_rs_mat_delete(&c.v, true, &ic);
+}
+
+void HighsSparseMatrix::deleteRows(
+    const HighsIndexCollection& index_collection) {
+  const RsIndexCollection ic = rsIndexCollection(index_collection);
+  MatCall c(*this);
+  highs_rs_mat_delete(&c.v, false, &ic);
+}
+
+bool HighsSparseMatrix::hasLargeValue(const double large_matrix_value) {
+  const RsMatVec v = rsMatVec(*this);
+  return highs_rs_mat_has_large_value(&v, large_matrix_value);
+}
+
+void HighsSparseMatrix::scaleCol(const HighsInt col, const double colScale) {
+  MatCall c(*this);
+  highs_rs_mat_scale(&c.v, 3, nullptr, nullptr, col, colScale);
+}
+
+void HighsSparseMatrix::scaleRow(const HighsInt row, const double rowScale) {
+  MatCall c(*this);
+  highs_rs_mat_scale(&c.v, 4, nullptr, nullptr, row, rowScale);
+}
+
+void HighsSparseMatrix::applyScale(const HighsScale& scale) {
+  MatCall c(*this);
+  highs_rs_mat_scale(&c.v, 0, scale.col.data(), scale.row.data(), 0, 0);
+}
+
+void HighsSparseMatrix::applyColScale(const HighsScale& scale) {
+  MatCall c(*this);
+  highs_rs_mat_scale(&c.v, 1, scale.col.data(), nullptr, 0, 0);
+}
+
+void HighsSparseMatrix::applyRowScale(const HighsScale& scale) {
+  MatCall c(*this);
+  highs_rs_mat_scale(&c.v, 2, nullptr, scale.row.data(), 0, 0);
+}
+
+void HighsSparseMatrix::createRowwise(const HighsSparseMatrix& matrix) {
+  assert(matrix.isColwise());
+  const RsMatrix from = rsMatrixOf(matrix);
+  MatCall c(*this);
+  highs_rs_mat_create_rowwise(&c.v, &from, false, nullptr);
+}
+
+void HighsSparseMatrix::createRowwisePartitioned(
+    const HighsSparseMatrix& matrix, const int8_t* in_partition) {
+  assert(matrix.isColwise());
+  const RsMatrix from = rsMatrixOf(matrix);
+  MatCall c(*this);
+  highs_rs_mat_create_rowwise(&c.v, &from, true, in_partition);
+}
+
+void HighsSparseMatrix::productQuad(vector<double>& result,
+                                    const vector<double>& row,
+                                    const HighsInt debug_report) const {
+  assert((int)row.size() >= this->num_col_);
+  (void)debug_report;
+  result.assign(this->num_row_, 0.0);
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  highs_rs_mat_product_quad(&v, false, row.data(), result.data());
+}
+
+void HighsSparseMatrix::productTransposeQuad(
+    vector<double>& result, const vector<double>& row,
+    const HighsInt debug_report) const {
+  assert((int)row.size() >= this->num_row_);
+  (void)debug_report;
+  result.assign(this->num_col_, 0.0);
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  highs_rs_mat_product_quad(&v, true, row.data(), result.data());
+}
+
+void HighsSparseMatrix::alphaProductPlusY(const double alpha,
+                                          const std::vector<double>& x,
+                                          std::vector<double>& y,
+                                          const bool transpose) const {
+  assert(x.size() >=
+         static_cast<size_t>(transpose ? this->num_row_ : this->num_col_));
+  assert(y.size() >=
+         static_cast<size_t>(transpose ? this->num_col_ : this->num_row_));
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  highs_rs_mat_product(&v, transpose ? 3 : 2, alpha, x.data(), y.data());
+}
+
+void HighsSparseMatrix::product(vector<double>& result,
+                                const vector<double>& row) const {
+  assert((int)row.size() >= this->num_col_);
+  result.assign(this->num_row_, 0.0);
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  highs_rs_mat_product(&v, 0, 0, row.data(), result.data());
+}
+
+void HighsSparseMatrix::productTranspose(vector<double>& result,
+                                         const vector<double>& col) const {
+  assert((int)col.size() >= this->num_row_);
+  result.assign(this->num_col_, 0.0);
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  highs_rs_mat_product(&v, 1, 0, col.data(), result.data());
+}
+
+double HighsSparseMatrix::computeDot(const std::vector<double>& array,
+                                     const HighsInt use_col) const {
+  assert(this->isColwise());
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  return highs_rs_mat_compute_dot(&v, array.data(), array.size(), use_col);
+}
+
+void HighsSparseMatrix::collectAj(HVector& column, const HighsInt use_col,
+                                  const double multiplier) const {
+  assert(this->isColwise());
+  const RsMatVec v = rsMatVec(const_cast<HighsSparseMatrix&>(*this));
+  highs_rs_mat_collect_aj(&v, use_col, multiplier, column.array.data(),
+                          column.index.data(), &column.count);
+}
+#endif

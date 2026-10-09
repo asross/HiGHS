@@ -20,11 +20,21 @@
 void HighsSimplexAnalysis::setup(const std::string lp_name, const HighsLp& lp,
                                  const HighsOptions& options,
                                  const HighsInt simplex_iteration_count_) {
+  setup(lp_name, lp.num_col_, lp.num_row_, lp.model_name_, options,
+        simplex_iteration_count_);
+}
+
+void HighsSimplexAnalysis::setup(const std::string lp_name,
+                                 const HighsInt num_col,
+                                 const HighsInt num_row,
+                                 const std::string& model_name,
+                                 const HighsOptions& options,
+                                 const HighsInt simplex_iteration_count_) {
   // Copy Problem size
-  numRow = lp.num_row_;
-  numCol = lp.num_col_;
+  numRow = num_row;
+  numCol = num_col;
   numTot = numRow + numCol;
-  model_name_ = lp.model_name_;
+  model_name_ = model_name;
   lp_name_ = lp_name;
   // Set up analysis logic short-cuts
 #ifdef HIGHS_RUST

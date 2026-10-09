@@ -315,7 +315,10 @@ struct RsFormHost {
   void* ctx;
   int (*op)(void* ctx, int code, int arg, void* out);
   RsLog log, factor_log;
-  const bool* is_scaled;
+  void* lps;
+  RsLp incumbent;
+  RsMut<char> model_name;
+  RsLpOptions lp_options;
   bool basis_valid, basis_useful;
   bool* basis_alien;
   RsMut<uint8_t> col_status, row_status;
@@ -324,9 +327,6 @@ struct RsFormHost {
 extern "C" {
 int highs_rs_form_simplex_lp_basis_and_factor(const RsFormHost* host,
                                               bool only_from_known_basis);
-void highs_rs_accommodate_alien_basis(const RsLog* factor_log, const RsLp* lp,
-                                      RsMut<uint8_t> col_status,
-                                      RsMut<uint8_t> row_status);
 }
 
 namespace {
@@ -348,31 +348,16 @@ struct FactorLog {
 
 int formBasisOp(void* ctx, int code, int arg, void* out) {
   HighsLpSolverObject& so = *static_cast<HighsLpSolverObject*>(ctx);
-  HighsLp& lp = so.lp_;
   switch (code) {
-    case 0:
-      lp.ensureColwise();
-      break;
-    case 1:
-      considerScaling(so.options_, lp);
-      break;
-    case 2:
-      *static_cast<RsLp*>(out) = rsLp(lp);
-      break;
-    case 3:
-      lp.unapplyScale();
-      break;
     case 4:
-      so.ekk_instance_.moveLp(so);
+      so.ekk_instance_.movedLp(so);
       break;
-    case 5:
-      return so.ekk_instance_.status_.has_basis;
     case 6:
       return int(so.ekk_instance_.setBasis(so.basis_));
     case 7:
       return int(so.ekk_instance_.initialiseSimplexLpBasisAndFactor(arg != 0));
     case 8:
-      if (lp.is_moved_) lp.moveBackLpAndUnapplyScaling(so.ekk_instance_.lp_);
+      so.ekk_instance_.lpBack(so.lp_, false);
       break;
   }
   return 0;
@@ -383,12 +368,18 @@ HighsStatus formSimplexLpBasisAndFactor(HighsLpSolverObject& solver_object,
                                         const bool only_from_known_basis) {
   const FactorLog factor_log(solver_object.options_.log_options);
   HighsBasis& basis = solver_object.basis_;
+  HighsLp& lp = solver_object.lp_;
+  lp.ensureColwise();
   RsFormHost h;
   h.ctx = &solver_object;
   h.op = formBasisOp;
   h.log = rsLog(solver_object.options_.log_options);
   h.factor_log = rsLog(factor_log.log_options);
-  h.is_scaled = &solver_object.lp_.is_scaled_;
+  h.lps = solver_object.ekk_instance_.rs_;
+  h.incumbent = rsLp(lp);
+  h.model_name = {const_cast<char*>(lp.model_name_.data()),
+                  lp.model_name_.size()};
+  h.lp_options = rsLpOptions(solver_object.options_);
   h.basis_valid = basis.valid;
   h.basis_useful = basis.useful;
   h.basis_alien = &basis.alien;
@@ -398,13 +389,4 @@ HighsStatus formSimplexLpBasisAndFactor(HighsLpSolverObject& solver_object,
       highs_rs_form_simplex_lp_basis_and_factor(&h, only_from_known_basis));
 }
 
-void accommodateAlienBasis(HighsLpSolverObject& solver_object) {
-  assert(solver_object.basis_.alien);
-  const FactorLog factor_log(solver_object.options_.log_options);
-  const RsLog log = rsLog(factor_log.log_options);
-  const RsLp v = rsLp(solver_object.lp_);
-  highs_rs_accommodate_alien_basis(&log, &v,
-                                   rsStatus(solver_object.basis_.col_status),
-                                   rsStatus(solver_object.basis_.row_status));
-}
 #endif

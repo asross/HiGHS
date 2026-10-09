@@ -808,7 +808,8 @@ pub fn assess_matrix(
 }
 
 // Simplex scale strategies
-const SCALE_CHOOSE: i32 = 1;
+pub const SCALE_OFF: i32 = 0;
+pub const SCALE_CHOOSE: i32 = 1;
 const SCALE_EQUILIBRATION: i32 = 2;
 const SCALE_FORCED_EQUILIBRATION: i32 = 3;
 

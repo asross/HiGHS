@@ -24,12 +24,13 @@ class HighsLpSolverObject;
 #include "simplex/HEkkRust.h"
 
 // HEkk is a shell of the Rust-owned simplex engine (rust/src/simplex/
-// lp_solver.rs): it keeps the LP moved in from the Highs object, the
-// pointers to the options, callback and timer, the analysis, the LP of the
-// simplex NLA, the dualization data and the records the API returns by
-// reference; the rest is Rust's. The scalars that C++ reads and writes
-// (status_, info_, model_status_, ...) are references into the Rust
-// object.
+// lp_solver.rs), which owns the LP being solved (a copy of the C++ LP,
+// made by moveLp; solveLpSimplex and dualization are Rust too,
+// rust/src/simplex/app.rs). The shell keeps the pointers to the options,
+// callback and timer, the analysis, a C++ LP of the simplex NLA and the
+// records the API returns by reference. The scalars that C++ reads and
+// writes (status_, info_, model_status_, ...) are references into the
+// Rust object.
 class HEkk {
  public:
   HEkk();
@@ -39,21 +40,30 @@ class HEkk {
 
   void clear();
   void clearEkkLp();
-  void clearEkkDualize();
   void clearRayRecords();
   void invalidate();
   void updateStatus(LpAction action);
   void setNlaPointersForLpAndScale(const HighsLp& lp);
   void btran(HVector& rhs, const double expected_density);
   void ftran(HVector& rhs, const double expected_density);
+  // Copy the solver object's LP into the engine, then movedLp
   void moveLp(HighsLpSolverObject& solver_object);
+  // The pointers to the solver object's options, callback and timer, and
+  // the engine's checks of its (copied) LP
+  void movedLp(HighsLpSolverObject& solver_object);
+  // What clear() clears on the C++ side (after the engine cleared itself)
+  void clearShell() { clearCpp(); }
+  // The environment of a call into the engine (for Rust)
+  highs_rs::LpsEnv callEnv() const;
+  // A C++ LP takes the engine LP's scale (and with `matrix` its
+  // constraint matrix, which an undualized LP rebuilt)
+  void lpBack(HighsLp& lp, const bool matrix) const;
+  // The engine LP's dimensions
+  HighsInt lpNumCol() const;
+  HighsInt lpNumRow() const;
   void setPointers(HighsCallback* callback, HighsOptions* options,
                    HighsTimer* timer);
 
-  HighsStatus dualize();
-  HighsStatus undualize();
-  HighsStatus permute();
-  HighsStatus unpermute();
   HighsStatus solve(const bool force_phase2 = false);
   HighsStatus setBasis();
   HighsStatus setBasis(const HighsBasis& highs_basis);
@@ -68,13 +78,11 @@ class HEkk {
   void unscaleSimplex(const HighsLp& incumbent_lp);
   bool proofOfPrimalInfeasibility();
 
-  HighsSolution getSolution();
   HighsBasis getHighsBasis(HighsLp& use_lp) const;
   double computeBasisCondition(const HighsLp& lp, const bool exact = false,
                                const bool report = false) const;
-  double computeBasisCondition() const {
-    return computeBasisCondition(this->lp_, false, false);
-  }
+  // Of the engine's LP
+  double computeBasisCondition() const;
   HighsStatus initialiseSimplexLpBasisAndFactor(
       const bool only_from_known_basis = false);
   bool lpFactorRowCompatible() const;
@@ -125,7 +133,6 @@ class HEkk {
   HighsTimer* timer_;
   HighsSimplexAnalysis analysis_;
 
-  HighsLp lp_;
   std::string lp_name_;
 
   // The Rust simplex engine and its shared scalars
@@ -151,19 +158,6 @@ class HEkk {
   std::vector<double> primal_phase1_dual_;
   HighsSimplexStats simplex_stats_;
 
-  // Data to be retained when dualizing
-  HighsInt original_num_col_;
-  HighsInt original_num_row_;
-  HighsInt original_num_nz_;
-  double original_offset_;
-  vector<double> original_col_cost_;
-  vector<double> original_col_lower_;
-  vector<double> original_col_upper_;
-  vector<double> original_row_lower_;
-  vector<double> original_row_upper_;
-  vector<HighsInt> upper_bound_col_;
-  vector<HighsInt> upper_bound_row_;
-
  private:
   struct RustHost;
   // The factor's log options: a copy of the options' log flags made when
@@ -184,6 +178,8 @@ class HEkk {
   // Take what a solve or INVERT left in the Rust records
   void takeRustOut();
   void setNlaLp(const HighsLp& lp);
+  // The simplex NLA's LP is the engine's
+  void setNlaEngineLp();
   HighsStatus returnFromEkkSolve(const HighsStatus return_status,
                                  const highs_rs::LpsSolveOut& out);
 };

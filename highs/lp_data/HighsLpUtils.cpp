@@ -942,6 +942,7 @@ HighsStatus userScaleStatus(const HighsLogOptions& log_options,
 
 #endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs, simplex/app.rs
 bool considerScaling(const HighsOptions& options, HighsLp& lp) {
   // Indicate whether new scaling has been determined in the return value.
   bool new_scaling = false;
@@ -981,6 +982,7 @@ bool considerScaling(const HighsOptions& options, HighsLp& lp) {
   assert(lp.scale_.has_scaling == lp.is_scaled_);
   return new_scaling;
 }
+#endif
 
 #ifndef HIGHS_RUST
 void scaleLp(const HighsOptions& options, HighsLp& lp,
@@ -1671,6 +1673,7 @@ void unscaleSolution(HighsSolution& solution, const HighsScale& scale) {
 }
 #endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs, simplex/app.rs
 void appendColsToLpVectors(HighsLp& lp, const HighsInt num_new_col,
                            const vector<double>& colCost,
                            const vector<double>& colLower,
@@ -1698,7 +1701,9 @@ void appendColsToLpVectors(HighsLp& lp, const HighsInt num_new_col,
     if (have_integrality) lp.integrality_[iCol] = HighsVarType::kContinuous;
   }
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs, simplex/app.rs
 void appendRowsToLpVectors(HighsLp& lp, const HighsInt num_new_row,
                            const vector<double>& rowLower,
                            const vector<double>& rowUpper) {
@@ -1718,6 +1723,7 @@ void appendRowsToLpVectors(HighsLp& lp, const HighsInt num_new_row,
     if (have_names) lp.row_names_[iRow] = "";
   }
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)
@@ -1888,6 +1894,7 @@ void changeLpCosts(HighsLp& lp, const HighsIndexCollection& index_collection,
 
 #endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs, simplex/app.rs
 void changeLpColBounds(HighsLp& lp,
                        const HighsIndexCollection& index_collection,
                        const vector<double>& new_col_lower,
@@ -1895,7 +1902,9 @@ void changeLpColBounds(HighsLp& lp,
   changeBounds(lp.col_lower_, lp.col_upper_, index_collection, new_col_lower,
                new_col_upper);
 }
+#endif
 
+#ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs, simplex/app.rs
 void changeLpRowBounds(HighsLp& lp,
                        const HighsIndexCollection& index_collection,
                        const vector<double>& new_row_lower,
@@ -1903,6 +1912,7 @@ void changeLpRowBounds(HighsLp& lp,
   changeBounds(lp.row_lower_, lp.row_upper_, index_collection, new_row_lower,
                new_row_upper);
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/edit.rs)

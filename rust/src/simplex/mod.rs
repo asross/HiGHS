@@ -1,3 +1,4 @@
+pub mod app;
 pub mod basis_records;
 pub mod dual;
 pub mod dual_rhs;

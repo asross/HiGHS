@@ -69,6 +69,21 @@ RsVec<T> rsVec(std::vector<T>& v) {
   return {&v, rsVecResize<T>, v.data(), v.size()};
 }
 
+// A byte-sized enum vector (HighsVarType, HighsBasisStatus) that Rust may
+// resize as bytes
+template <typename T>
+uint8_t* rsByteVecResize(void* v, size_t n) {
+  static_assert(sizeof(T) == 1, "a byte-sized type");
+  std::vector<T>& x = *static_cast<std::vector<T>*>(v);
+  x.resize(n);
+  return reinterpret_cast<uint8_t*>(x.data());
+}
+template <typename T>
+RsVec<uint8_t> rsByteVec(std::vector<T>& v) {
+  return {&v, rsByteVecResize<T>, reinterpret_cast<uint8_t*>(v.data()),
+          v.size()};
+}
+
 // Names (a vector of strings) as "%s" prints them (rust/src/lp_data/
 // ffi.rs RsName), kept alive by the list
 struct RsName {
@@ -152,6 +167,37 @@ struct RsLp {
   bool is_scaled, is_moved, has_infinite_cost;
 };
 RsLp rsLp(const HighsLp& lp);
+
+// A HighsLp that Rust edits in place (rust/src/lp_data/lp.rs CppLp): its
+// vectors are resized through C++, its scalars copied back by
+// rsLpVecBack
+struct RsMatVec {
+  int format;
+  HighsInt num_col, num_row;
+  RsVec<HighsInt> start, p_end, index;
+  RsVec<double> value;
+};
+struct RsScaleVec {
+  HighsInt strategy;
+  bool has_scaling;
+  HighsInt num_col, num_row;
+  double cost;
+  RsVec<double> col, row;
+};
+struct RsLpVec {
+  HighsInt num_col, num_row;
+  RsVec<double> col_cost, col_lower, col_upper, row_lower, row_upper;
+  RsMatVec a;
+  int sense;
+  double offset;
+  RsVec<uint8_t> integrality;
+  RsScaleVec scale;
+  bool is_scaled, is_moved, has_infinite_cost;
+};
+RsMatVec rsMatVec(HighsSparseMatrix& a);
+void rsMatVecBack(const RsMatVec& v, HighsSparseMatrix& a);
+RsLpVec rsLpVec(HighsLp& lp);
+void rsLpVecBack(const RsLpVec& v, HighsLp& lp);
 // Copy back the scalars Rust may change
 void rsLpBack(const RsLp& v, HighsLp& lp);
 

@@ -26,6 +26,11 @@
 #include "simplex/HEkk.h"
 #include "simplex/HSimplex.h"
 
+#ifdef HIGHS_RUST
+// solveLpSimplex is Rust (rust/src/simplex/app.rs), called through
+// simplex/HEkkRust.cpp
+HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object);
+#else
 // Single method to solve an LP with the simplex method. Solves the
 // scaled LP then analyses the unscaled solution. If it doesn't satisfy
 // the required tolerances, tolerances for the scaled LP are
@@ -544,4 +549,5 @@ inline HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
   return_status = highsStatusFromHighsModelStatus(model_status);
   return returnFromSolveLpSimplex(solver_object, return_status);
 }
+#endif  // HIGHS_RUST
 #endif

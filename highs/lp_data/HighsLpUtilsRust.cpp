@@ -59,6 +59,61 @@ RsLp rsLp(const HighsLp& lp) {
   return v;
 }
 
+static_assert(sizeof(RsMatVec) == 144, "Mat<RsVec, RsVec> in sparse.rs");
+static_assert(sizeof(RsScaleVec) == 88, "ScaleG<RsVec> in lp.rs");
+static_assert(sizeof(RsLpVec) == 456, "CppLp in lp.rs");
+
+RsMatVec rsMatVec(HighsSparseMatrix& a) {
+  return {int(a.format_),   a.num_col_,       a.num_row_,
+          rsVec(a.start_),  rsVec(a.p_end_),  rsVec(a.index_),
+          rsVec(a.value_)};
+}
+
+void rsMatVecBack(const RsMatVec& v, HighsSparseMatrix& a) {
+  a.format_ = MatrixFormat(v.format);
+  a.num_col_ = v.num_col;
+  a.num_row_ = v.num_row;
+}
+
+RsLpVec rsLpVec(HighsLp& lp) {
+  RsLpVec v;
+  v.num_col = lp.num_col_;
+  v.num_row = lp.num_row_;
+  v.col_cost = rsVec(lp.col_cost_);
+  v.col_lower = rsVec(lp.col_lower_);
+  v.col_upper = rsVec(lp.col_upper_);
+  v.row_lower = rsVec(lp.row_lower_);
+  v.row_upper = rsVec(lp.row_upper_);
+  v.a = rsMatVec(lp.a_matrix_);
+  v.sense = int(lp.sense_);
+  v.offset = lp.offset_;
+  v.integrality = rsByteVec(lp.integrality_);
+  HighsScale& s = lp.scale_;
+  v.scale = {s.strategy, s.has_scaling, s.num_col,     s.num_row,
+             s.cost,     rsVec(s.col),  rsVec(s.row)};
+  v.is_scaled = lp.is_scaled_;
+  v.is_moved = lp.is_moved_;
+  v.has_infinite_cost = lp.has_infinite_cost_;
+  return v;
+}
+
+void rsLpVecBack(const RsLpVec& v, HighsLp& lp) {
+  lp.num_col_ = v.num_col;
+  lp.num_row_ = v.num_row;
+  rsMatVecBack(v.a, lp.a_matrix_);
+  lp.sense_ = ObjSense(v.sense);
+  lp.offset_ = v.offset;
+  HighsScale& s = lp.scale_;
+  s.strategy = v.scale.strategy;
+  s.has_scaling = v.scale.has_scaling;
+  s.num_col = v.scale.num_col;
+  s.num_row = v.scale.num_row;
+  s.cost = v.scale.cost;
+  lp.is_scaled_ = v.is_scaled;
+  lp.is_moved_ = v.is_moved;
+  lp.has_infinite_cost_ = v.has_infinite_cost;
+}
+
 void rsLpBack(const RsLp& v, HighsLp& lp) {
   lp.scale_.strategy = v.scale_strategy;
   lp.scale_.has_scaling = v.scale_has_scaling;
@@ -150,23 +205,6 @@ HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
   return HighsStatus(highs_rs_clean_bounds(&v, &o));
 }
 
-void scaleLp(const HighsOptions& options, HighsLp& lp,
-             const bool force_scaling) {
-  lp.clearScaling();
-  // Scaling not well defined for models with no columns
-  assert(lp.num_col_ > 0);
-  lp.scale_.col.assign(lp.num_col_, 1);
-  lp.scale_.row.assign(lp.num_row_, 1);
-  RsLp v = rsLp(lp);
-  const RsLpOptions o = rsLpOptions(options);
-  const bool scaled = highs_rs_scale_lp(&v, &o, force_scaling);
-  rsLpBack(v, lp);
-  if (!scaled) {
-    const HighsInt strategy = lp.scale_.strategy;
-    lp.clearScale();
-    lp.scale_.strategy = strategy;
-  }
-}
 
 void HighsLp::applyScale() {
   RsLp v = rsLp(*this);
@@ -231,19 +269,6 @@ void reportPresolveReductions(const HighsLogOptions& log_options,
 
 // Model modification internals (rust/src/lp_data/edit.rs)
 extern "C" {
-void highs_rs_change_values(int which, const RsIndexCollection* ic,
-                            RsMut<double> a, RsMut<double> b,
-                            RsMut<double> new_a, RsMut<double> new_b);
-void highs_rs_change_integrality(const RsIndexCollection* ic,
-                                 RsMut<uint8_t> integrality,
-                                 RsMut<uint8_t> new_integrality);
-void highs_rs_delete_scale(const RsIndexCollection* ic, RsMut<double> scale);
-int64_t highs_rs_change_matrix_coefficient(RsMut<HighsInt> start,
-                                           RsMut<HighsInt> index,
-                                           RsMut<double> value,
-                                           HighsInt num_col, HighsInt row,
-                                           HighsInt col, double new_value,
-                                           bool zero_new_value);
 double highs_rs_get_coefficient(RsMut<HighsInt> start, RsMut<HighsInt> index,
                                 RsMut<double> value, HighsInt major,
                                 HighsInt minor);
@@ -259,77 +284,11 @@ void highs_rs_calculate_col_duals_quad(RsMut<HighsInt> start,
                                        RsMut<double> col_dual);
 }
 
-static const RsMut<double> kRsNone = {nullptr, 0};
 
-void deleteScale(vector<double>& scale,
-                 const HighsIndexCollection& index_collection) {
-  assert(ok(index_collection));
-  const RsIndexCollection ic = rsIndexCollection(index_collection);
-  highs_rs_delete_scale(&ic, rsMut(scale));
-}
 
-void changeLpMatrixCoefficient(HighsLp& lp, const HighsInt row,
-                               const HighsInt col, const double new_value,
-                               const bool zero_new_value) {
-  assert(0 <= row && row < lp.num_row_);
-  assert(0 <= col && col < lp.num_col_);
-  HighsSparseMatrix& a = lp.a_matrix_;
-  // Room for an inserted entry; the C++ only resizes when inserting
-  const size_t old_size = a.index_.size();
-  const size_t num_nz = a.start_[lp.num_col_];
-  a.index_.resize(std::max(old_size, num_nz + 1));
-  a.value_.resize(std::max(old_size, num_nz + 1));
-  const int64_t new_num_nz = highs_rs_change_matrix_coefficient(
-      rsMut(a.start_), rsMut(a.index_), rsMut(a.value_), lp.num_col_, row, col,
-      new_value, zero_new_value);
-  const size_t size = new_num_nz < 0 ? old_size : size_t(new_num_nz);
-  a.index_.resize(size);
-  a.value_.resize(size);
-}
 
-HighsStatus changeLpIntegrality(HighsLp& lp,
-                                const HighsIndexCollection& index_collection,
-                                const vector<HighsVarType>& new_integrality,
-                                const HighsOptions options) {
-  assert(ok(index_collection));
-  HighsInt from_k;
-  HighsInt to_k;
-  limits(index_collection, from_k, to_k);
-  if (from_k > to_k) return HighsStatus::kOk;
-  if (lp.integrality_.size() == 0)
-    lp.integrality_.assign(lp.num_col_, HighsVarType::kContinuous);
-  assert(HighsInt(lp.integrality_.size()) == lp.num_col_);
-  const RsIndexCollection ic = rsIndexCollection(index_collection);
-  highs_rs_change_integrality(&ic, rsMut(lp.integrality_),
-                              rsMut(new_integrality));
-  if (!lp.isMip()) lp.integrality_.clear();
-  return HighsStatus::kOk;
-}
 
-void changeLpCosts(HighsLp& lp, const HighsIndexCollection& index_collection,
-                   const vector<double>& new_col_cost,
-                   const double infinite_cost) {
-  assert(ok(index_collection));
-  HighsInt from_k;
-  HighsInt to_k;
-  limits(index_collection, from_k, to_k);
-  if (from_k > to_k) return;
-  const RsIndexCollection ic = rsIndexCollection(index_collection);
-  highs_rs_change_values(0, &ic, rsMut(lp.col_cost_), kRsNone,
-                         rsMut(new_col_cost), kRsNone);
-  if (lp.has_infinite_cost_)
-    lp.has_infinite_cost_ = lp.hasInfiniteCost(infinite_cost);
-}
 
-void changeBounds(vector<double>& lower, vector<double>& upper,
-                  const HighsIndexCollection& index_collection,
-                  const vector<double>& new_lower,
-                  const vector<double>& new_upper) {
-  assert(ok(index_collection));
-  const RsIndexCollection ic = rsIndexCollection(index_collection);
-  highs_rs_change_values(1, &ic, rsMut(lower), rsMut(upper), rsMut(new_lower),
-                         rsMut(new_upper));
-}
 
 void getLpMatrixCoefficient(const HighsLp& lp, const HighsInt Xrow,
                             const HighsInt Xcol, double* val) {

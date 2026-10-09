@@ -1,10 +1,11 @@
 //! The simplex engine's data, owned by Rust: everything that HEkk
-//! (highs/simplex/HEkk.h) held but the LP itself and the pointers to the C++
-//! options, callback, timer and analysis. The LP (HEkk::lp_) is still a C++
-//! HighsLp, moved in from the Highs object for a solve, so every call that
-//! reads it gets a view of it ([`LpsEnv::lp`]), with the option values and
-//! the C++ host functions; the C++ HEkk is a shell that owns an
-//! [`LpSolver`] and forwards to it (highs/simplex/HEkkRust.cpp).
+//! (highs/simplex/HEkk.h) held but the pointers to the C++ options,
+//! callback, timer and analysis. The LP being solved ([`LpSolver::lp`]) is
+//! a Rust copy of the C++ HighsLp (made by HEkk::moveLp, scaled and
+//! dualized in place by solveLpSimplex, simplex/app.rs); every call gets a
+//! view of it ([`LpsEnv::lp`], filled by [`LpSolver::env_of`]) with the
+//! option values and the C++ host functions. The C++ HEkk is a shell that
+//! owns an [`LpSolver`] and forwards to it (highs/simplex/HEkkRust.cpp).
 //!
 //! The simplex kernels (ekk.rs, hekk.rs, dual.rs, primal.rs) work on
 //! [`CEkk`] / [`CHekk`] views of pointers: [`LpSolver::c_ekk`] and
@@ -37,6 +38,7 @@ use crate::factor::HFactor;
 use crate::ffi::CHVec;
 use crate::hvector::OwnedHVec;
 use crate::lp_data::ffi::{CIndexCollection, CLp, RsMut};
+use crate::lp_data::lp::{rs, Lp};
 use crate::sprintf;
 use crate::util::hash;
 use crate::util::random::HighsRandom;
@@ -348,6 +350,7 @@ pub struct LpsOptions {
 /// NLA (dimensions and scale factors), the option values and the host
 /// functions. Mirrored by LpsEnv in highs/simplex/HEkkRust.h
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct LpsEnv {
     pub lp: CLp,
     pub model_name: RsMut<u8>,
@@ -462,6 +465,31 @@ pub struct LpSolver {
     build_synthetic_tick: f64,
     total_synthetic_tick: f64,
     pub records: BasisRecords,
+    /// HEkk's LP (HEkk::lp_), copied from the C++ LP being solved
+    pub lp: Lp,
+    /// Whether the simplex NLA's LP is `lp` (else a C++ LP, whose
+    /// dimensions and scale factors come with each call), and whether its
+    /// scale factors apply (decided when it is set, as HSimplexNla::scale_)
+    nla_rust: bool,
+    nla_rust_scale: bool,
+    /// What dualize keeps to undualize
+    pub dz: Dualized,
+}
+
+/// What HEkk::dualize keeps (original_* and upper_bound_*)
+#[derive(Clone, Default)]
+pub struct Dualized {
+    pub original_num_col: i32,
+    pub original_num_row: i32,
+    pub original_num_nz: i32,
+    pub original_offset: f64,
+    pub original_col_cost: Vec<f64>,
+    pub original_col_lower: Vec<f64>,
+    pub original_col_upper: Vec<f64>,
+    pub original_row_lower: Vec<f64>,
+    pub original_row_upper: Vec<f64>,
+    pub upper_bound_col: Vec<i32>,
+    pub upper_bound_row: Vec<i32>,
 }
 
 /// The result of a solve
@@ -608,6 +636,10 @@ impl Default for LpSolver {
             build_synthetic_tick: 0.0,
             total_synthetic_tick: 0.0,
             records: BasisRecords::default(),
+            lp: Lp::default(),
+            nla_rust: false,
+            nla_rust_scale: false,
+            dz: Dualized::default(),
         };
         s.clear_ekk_data_info();
         s
@@ -615,11 +647,39 @@ impl Default for LpSolver {
 }
 
 impl LpSolver {
+    /// A call's environment with this solver's LP (and, if it is the NLA's
+    /// LP, its dimensions and the scale factors that apply)
+    pub fn env_of(&mut self, e: &LpsEnv) -> LpsEnv {
+        let mut env = *e;
+        env.lp = self.lp.view();
+        env.model_name = rs(&mut self.lp.model_name);
+        if self.nla_rust {
+            let lp = &mut self.lp;
+            env.nla_num_col = lp.num_col;
+            env.nla_num_row = lp.num_row;
+            env.nla_has_scale = self.nla_rust_scale;
+            let none = RsMut { ptr: std::ptr::null_mut(), len: 0 };
+            env.nla_col_scale = if env.nla_has_scale { rs(&mut lp.scale.col) } else { none };
+            env.nla_row_scale = if env.nla_has_scale { rs(&mut lp.scale.row) } else { none };
+        }
+        env
+    }
+
+    /// The simplex NLA's LP is this solver's (`rust`) or a C++ one
+    /// (HEkk::setNlaPointersForLpAndScale)
+    pub fn set_nla_rust(&mut self, rust: bool) {
+        self.nla_rust = rust;
+        self.nla_rust_scale = rust && self.lp.scale.has_scaling && !self.lp.is_scaled;
+        self.sh.nla_lp_set = true;
+    }
+
     // ---- Clearing and invalidation ----
 
-    /// HEkk::clear but its C++ parts (the LP, its name, the pointers and
-    /// the dualization data)
+    /// HEkk::clear but its C++ parts (the LP's name and the pointers)
     pub fn clear(&mut self) {
+        self.lp.clear();
+        self.dz = Dualized::default();
+        self.nla_rust = false;
         self.clear_ekk_data();
         self.clear_ekk_dual_edge_weight_data();
         self.basis.clear();
@@ -631,6 +691,7 @@ impl LpSolver {
     /// HSimplexNla::clear (the factor and the saved iterate are kept)
     fn clear_nla(&mut self) {
         self.sh.nla_lp_set = false;
+        self.nla_rust = false;
         self.nla_build_synthetic_tick = 0.0;
     }
 
@@ -2263,12 +2324,16 @@ mod ffi {
 
     #[no_mangle]
     pub extern "C" fn highs_rs_lps_move_lp(p: *mut LpSolver, env: *const LpsEnv) -> bool {
-        s(p).move_lp(en(env))
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        solver.move_lp(&env)
     }
 
     #[no_mangle]
     pub extern "C" fn highs_rs_lps_set_basis_logical(p: *mut LpSolver, env: *const LpsEnv) {
-        s(p).set_basis_logical(en(env));
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        solver.set_basis_logical(&env);
     }
 
     /// # Safety
@@ -2284,11 +2349,12 @@ mod ffi {
         origin: *const u8,
         origin_len: usize,
     ) {
-        let env = en(env);
+        let solver = s(p);
+        let env = solver.env_of(en(env));
         let col = crate::ffi::sl(col_status, env.lp.num_col);
         let row = crate::ffi::sl(row_status, env.lp.num_row);
         let origin = String::from_utf8_lossy(crate::ffi::sl(origin, origin_len as i32));
-        s(p).set_basis(env, col, row, debug_id, debug_update_count, &origin);
+        solver.set_basis(&env, col, row, debug_id, debug_update_count, &origin);
     }
 
     /// The statuses of HEkk::getHighsBasis(use_lp) (sized by the caller),
@@ -2309,11 +2375,13 @@ mod ffi {
         origin: *mut *const u8,
         origin_len: *mut usize,
     ) {
-        let lp = &*use_lp;
+        let solver = s(p);
+        let lp = if use_lp.is_null() { solver.lp.view() } else { *use_lp };
         let col = crate::ffi::sl_mut(col_status, lp.num_col);
         let row = crate::ffi::sl_mut(row_status, lp.num_row);
-        let solver = s(p);
-        let (id, count) = solver.get_highs_basis(lp, sense, col, row);
+        let _ = sense;
+        let sense = solver.lp.sense;
+        let (id, count) = solver.get_highs_basis(&lp, sense, col, row);
         *debug_id = id;
         *debug_update_count = count;
         *origin = solver.basis.debug_origin_name.as_ptr();
@@ -2331,10 +2399,11 @@ mod ffi {
         row_value: *mut f64,
         row_dual: *mut f64,
     ) {
-        let env = en(env);
+        let solver = s(p);
+        let env = solver.env_of(en(env));
         let (nc, nr) = (env.lp.num_col, env.lp.num_row);
-        s(p).get_solution(
-            env,
+        solver.get_solution(
+            &env,
             crate::ffi::sl_mut(col_value, nc),
             crate::ffi::sl_mut(col_dual, nc),
             crate::ffi::sl_mut(row_value, nr),
@@ -2358,7 +2427,10 @@ mod ffi {
         lp: *const CLp,
         out: *mut UnscaledInfeasibilities,
     ) {
-        s(p).get_unscaled_infeasibilities(en(env), &*lp, &mut *out);
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        let lp = if lp.is_null() { env.lp } else { *lp };
+        solver.get_unscaled_infeasibilities(&env, &lp, &mut *out);
     }
 
     #[no_mangle]
@@ -2388,37 +2460,15 @@ mod ffi {
         s(p).flip_nonbasic_move(var as usize);
     }
 
-    /// # Safety
-    /// The bound arrays valid for their lengths
-    #[no_mangle]
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe extern "C" fn highs_rs_lps_undualize_basis(
-        p: *mut LpSolver,
-        dual_num_col: i32,
-        num_col: i32,
-        num_row: i32,
-        col_lower: *const f64,
-        col_upper: *const f64,
-        row_lower: *const f64,
-        row_upper: *const f64,
-    ) -> i32 {
-        use crate::ffi::sl;
-        s(p).undualize_basis(
-            dual_num_col,
-            sl(col_lower, num_col),
-            sl(col_upper, num_col),
-            sl(row_lower, num_row),
-            sl(row_upper, num_row),
-        )
-    }
-
     #[no_mangle]
     pub extern "C" fn highs_rs_lps_initialise_basis_and_factor(
         p: *mut LpSolver,
         env: *const LpsEnv,
         only_from_known_basis: bool,
     ) -> i32 {
-        s(p).initialise_simplex_lp_basis_and_factor(en(env), only_from_known_basis)
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        solver.initialise_simplex_lp_basis_and_factor(&env, only_from_known_basis)
     }
 
     #[no_mangle]
@@ -2427,7 +2477,9 @@ mod ffi {
         env: *const LpsEnv,
         expected_num_row: i32,
     ) -> bool {
-        s(p).lp_factor_row_compatible(en(env), expected_num_row)
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        solver.lp_factor_row_compatible(&env, expected_num_row)
     }
 
     /// # Safety
@@ -2440,7 +2492,9 @@ mod ffi {
         expected_density: f64,
         transposed: bool,
     ) {
-        s(p).nla_solve(en(env), &mut *rhs, expected_density, transposed);
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        solver.nla_solve(&env, &mut *rhs, expected_density, transposed);
     }
 
     #[no_mangle]
@@ -2465,18 +2519,28 @@ mod ffi {
         exact: bool,
         report: bool,
     ) -> f64 {
-        let name = String::from_utf8_lossy(crate::ffi::sl(name, name_len as i32));
-        s(p).compute_basis_condition(en(env), &*lp, &name, exact, report)
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        let (lp, name) = if lp.is_null() {
+            (env.lp, String::from_utf8_lossy(&solver.lp.model_name).into_owned())
+        } else {
+            (*lp, String::from_utf8_lossy(crate::ffi::sl(name, name_len as i32)).into_owned())
+        };
+        solver.compute_basis_condition(&env, &lp, &name, exact, report)
     }
 
     #[no_mangle]
     pub extern "C" fn highs_rs_lps_proof_of_primal_infeasibility(p: *mut LpSolver, env: *const LpsEnv) -> bool {
-        s(p).proof_of_primal_infeasibility(en(env))
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        solver.proof_of_primal_infeasibility(&env)
     }
 
     #[no_mangle]
     pub extern "C" fn highs_rs_lps_solve(p: *mut LpSolver, env: *const LpsEnv, force_phase2: bool) -> LpsSolveOut {
-        s(p).solve(en(env), force_phase2)
+        let solver = s(p);
+        let env = solver.env_of(en(env));
+        solver.solve(&env, force_phase2)
     }
 
     #[no_mangle]
@@ -2566,6 +2630,51 @@ mod ffi {
             nonbasic_move: rm(&mut solver.basis.nonbasic_move),
             basic_index: rm(&mut solver.basis.basic_index),
         };
+    }
+
+    /// Copy a C++ LP into the solver's (HEkk::moveLp's move)
+    ///
+    /// # Safety
+    /// `lp` a valid view, `name` valid for `name_len` bytes
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lps_import_lp(p: *mut LpSolver, lp: *const CLp, name: *const u8, name_len: usize) {
+        s(p).lp.import(&*lp, crate::ffi::sl(name, name_len as i32));
+    }
+
+    /// A view of the solver's LP, valid until it changes
+    ///
+    /// # Safety
+    /// `out` valid
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lps_lp_view(p: *mut LpSolver, out: *mut CLp) {
+        *out = s(p).lp.view();
+    }
+
+    /// The model name of the solver's LP
+    ///
+    /// # Safety
+    /// `out` valid
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lps_model_name(p: *mut LpSolver, out: *mut RsMut<u8>) {
+        *out = rs(&mut s(p).lp.model_name);
+    }
+
+    /// HEkk::clearEkkLp's LP part
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lps_clear_lp(p: *mut LpSolver) {
+        s(p).lp.clear();
+    }
+
+    /// The simplex NLA's LP is the solver's (`rust`) or a C++ LP
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lps_set_nla_rust(p: *mut LpSolver, rust: bool) {
+        s(p).set_nla_rust(rust);
+    }
+
+    /// HEkk::lp_.num_row_ = num_row (the rows' data are not kept)
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lps_set_lp_num_row(p: *mut LpSolver, num_row: i32) {
+        s(p).lp.num_row = num_row;
     }
 
     /// The factor's row count (HFactor::num_row)

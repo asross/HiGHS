@@ -248,12 +248,15 @@ void highs_rs_lps_resize_basis(void* p, HighsInt num_tot);
 void highs_rs_lps_append_basic_rows(void* p, HighsInt num_col,
                                     HighsInt num_row, HighsInt new_num_row);
 void highs_rs_lps_flip_nonbasic_move(void* p, HighsInt var);
-HighsInt highs_rs_lps_undualize_basis(void* p, HighsInt dual_num_col,
-                                      HighsInt num_col, HighsInt num_row,
-                                      const double* col_lower,
-                                      const double* col_upper,
-                                      const double* row_lower,
-                                      const double* row_upper);
+// The engine's LP: a copy of a C++ LP, a view, its model name, clearing it
+void highs_rs_lps_import_lp(void* p, const RsLp* lp, const char* name,
+                            size_t name_len);
+void highs_rs_lps_lp_view(void* p, RsLp* out);
+void highs_rs_lps_model_name(void* p, RsMut<char>* out);
+void highs_rs_lps_clear_lp(void* p);
+void highs_rs_lps_set_lp_num_row(void* p, HighsInt num_row);
+// The simplex NLA's LP is the engine's (else a C++ LP passed with each call)
+void highs_rs_lps_set_nla_rust(void* p, bool rust);
 int highs_rs_lps_initialise_basis_and_factor(void* p,
                                              const highs_rs::LpsEnv* env,
                                              bool only_from_known_basis);

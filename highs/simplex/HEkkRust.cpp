@@ -20,6 +20,7 @@
 #include <cstdio>
 
 #include "lp_data/HighsLpSolverObject.h"
+#include "simplex/HApp.h"
 #include "parallel/HighsParallel.h"
 #include "simplex/HSimplex.h"
 #include "simplex/HSimplexDebug.h"
@@ -47,7 +48,8 @@ static_assert(offsetof(highs_rs::HEkkShared, status) == 124,
 struct HEkk::RustHost {
   HEkk* ekk;
 
-  static HEkk& e(void* ctx) { return *static_cast<RustHost*>(ctx)->ekk; }
+  // The host functions' context is the HEkk
+  static HEkk& e(void* ctx) { return *static_cast<HEkk*>(ctx); }
 
   static void log(void* ctx, int channel, int type, const char* msg) {
     const HEkk& ekk = e(ctx);
@@ -92,7 +94,7 @@ struct HEkk::RustHost {
     HEkk& ekk = e(ctx);
     const std::vector<std::pair<HighsInt, double>> data(work_data,
                                                         work_data + work_count);
-    const HighsInt num_tot = ekk.lp_.num_col_ + ekk.lp_.num_row_;
+    const HighsInt num_tot = ekk.lpNumCol() + ekk.lpNumRow();
     HighsInt n;
     const double* work_dual = highs_rs_lps_work_dual(ekk.rs_, &n);
     if (kind == 1) {
@@ -122,11 +124,7 @@ HEkk::HEkk()
       debug_initial_build_synthetic_tick_(
           sh_.debug_initial_build_synthetic_tick),
       nla_lp_(nullptr),
-      nla_scale_(nullptr),
-      original_num_col_(0),
-      original_num_row_(0),
-      original_num_nz_(0),
-      original_offset_(0.0) {
+      nla_scale_(nullptr) {
   factor_log_options_.output_flag = &factor_log_data_.output_flag;
   factor_log_options_.log_to_console = &factor_log_data_.log_to_console;
   factor_log_options_.log_dev_level = &factor_log_data_.log_dev_level;
@@ -135,10 +133,8 @@ HEkk::HEkk()
 HEkk::~HEkk() { highs_rs_lps_free(rs_); }
 
 highs_rs::LpsEnv HEkk::rsEnv(RustHost& host) const {
-  highs_rs::LpsEnv env;
-  env.lp = rsLp(lp_);
-  env.model_name = {const_cast<char*>(lp_.model_name_.data()),
-                    lp_.model_name_.size()};
+  // The LP and its name are the engine's (filled by Rust)
+  highs_rs::LpsEnv env{};
   const bool nla = sh_.nla_lp_set && nla_lp_ != nullptr;
   env.nla_num_col = nla ? nla_lp_->num_col_ : 0;
   env.nla_num_row = nla ? nla_lp_->num_row_ : 0;
@@ -196,7 +192,8 @@ highs_rs::LpsEnv HEkk::rsEnv(RustHost& host) const {
     o.less_infeasible_dse_choose_row = options.less_infeasible_DSE_choose_row;
     o.simplex_keep_random_vectors = options.simplex_keep_random_vectors;
   }
-  env.host.ctx = &host;
+  (void)host;
+  env.host.ctx = const_cast<HEkk*>(this);
   env.host.log = RustHost::log;
   env.host.timer_read = RustHost::timerRead;
   env.host.interrupt = RustHost::interrupt;
@@ -223,7 +220,6 @@ void HEkk::snapshotFactorLog() {
 // What clear() clears on the C++ side
 void HEkk::clearCpp() {
   clearEkkLp();
-  clearEkkDualize();
   callback_ = nullptr;
   options_ = nullptr;
   timer_ = nullptr;
@@ -238,18 +234,20 @@ void HEkk::clear() {
 }
 
 void HEkk::clearEkkLp() {
-  lp_.clear();
+  highs_rs_lps_clear_lp(rs_);
   lp_name_ = "";
 }
 
-void HEkk::clearEkkDualize() {
-  original_col_cost_.clear();
-  original_col_lower_.clear();
-  original_col_upper_.clear();
-  original_row_lower_.clear();
-  original_row_upper_.clear();
-  upper_bound_col_.clear();
-  upper_bound_row_.clear();
+HighsInt HEkk::lpNumCol() const {
+  RsLp v;
+  highs_rs_lps_lp_view(rs_, &v);
+  return v.num_col;
+}
+
+HighsInt HEkk::lpNumRow() const {
+  RsLp v;
+  highs_rs_lps_lp_view(rs_, &v);
+  return v.num_row;
 }
 
 void HEkk::clearRayRecords() { highs_rs_lps_clear_ray_records(rs_); }
@@ -271,7 +269,13 @@ void HEkk::updateStatus(LpAction action) {
 void HEkk::setNlaLp(const HighsLp& lp) {
   nla_lp_ = &lp;
   nla_scale_ = lp.scale_.has_scaling && !lp.is_scaled_ ? &lp.scale_ : nullptr;
-  sh_.nla_lp_set = true;
+  highs_rs_lps_set_nla_rust(rs_, false);
+}
+
+void HEkk::setNlaEngineLp() {
+  nla_lp_ = nullptr;
+  nla_scale_ = nullptr;
+  highs_rs_lps_set_nla_rust(rs_, true);
 }
 
 void HEkk::setNlaPointersForLpAndScale(const HighsLp& lp) {
@@ -296,10 +300,15 @@ void HEkk::ftran(HVector& rhs, const double expected_density) {
 }
 
 void HEkk::moveLp(HighsLpSolverObject& solver_object) {
-  // Move the incumbent LP to EKK
-  HighsLp& incumbent_lp = solver_object.lp_;
-  this->lp_ = std::move(incumbent_lp);
-  incumbent_lp.is_moved_ = true;
+  // Copy the incumbent LP to the engine
+  const HighsLp& incumbent_lp = solver_object.lp_;
+  const RsLp v = rsLp(incumbent_lp);
+  highs_rs_lps_import_lp(rs_, &v, incumbent_lp.model_name_.data(),
+                         incumbent_lp.model_name_.size());
+  movedLp(solver_object);
+}
+
+void HEkk::movedLp(HighsLpSolverObject& solver_object) {
   // Update the pointers to the HighsOptions and HighsTimer members of the
   // Highs class, communicated by reference via the HighsLpSolverObject
   this->setPointers(&solver_object.callback_, &solver_object.options_,
@@ -322,410 +331,18 @@ void HEkk::setPointers(HighsCallback* callback, HighsOptions* options,
   this->analysis_.timer_ = this->timer_;
 }
 
-HighsStatus HEkk::dualize() {
-  assert(lp_.a_matrix_.isColwise());
-  original_num_col_ = lp_.num_col_;
-  original_num_row_ = lp_.num_row_;
-  original_num_nz_ = lp_.a_matrix_.numNz();
-  original_offset_ = lp_.offset_;
-  original_col_cost_ = lp_.col_cost_;
-  original_col_lower_ = lp_.col_lower_;
-  original_col_upper_ = lp_.col_upper_;
-  original_row_lower_ = lp_.row_lower_;
-  original_row_upper_ = lp_.row_upper_;
-  // Reserve space for simple dual
-  lp_.col_cost_.reserve(original_num_row_);
-  lp_.col_lower_.reserve(original_num_row_);
-  lp_.col_upper_.reserve(original_num_row_);
-  lp_.row_lower_.reserve(original_num_col_);
-  lp_.row_upper_.reserve(original_num_col_);
-  // Invalidate the original data
-  lp_.col_cost_.resize(0);
-  lp_.col_lower_.resize(0);
-  lp_.col_upper_.resize(0);
-  lp_.row_lower_.resize(0);
-  lp_.row_upper_.resize(0);
-  // The bulk of the constraint matrix of the dual LP is the transpose
-  // of the primal constraint matrix. This is obtained row-wise by
-  // copying the matrix and flipping the dimensions
-  HighsSparseMatrix dual_matrix = lp_.a_matrix_;
-  dual_matrix.num_row_ = original_num_col_;
-  dual_matrix.num_col_ = original_num_row_;
-  dual_matrix.format_ = MatrixFormat::kRowwise;
-  // The primal_bound_value vector accumulates the values of the
-  // finite bounds on variables - or zero for a free variable - used
-  // later to compute the offset and shift for the costs. Many of
-  // these components will be zero - all for the case x>=0 - so
-  // maintain a list of the nonzeros and corresponding indices. Don't
-  // reserve space since they may not be needed
-  vector<double> primal_bound_value;
-  vector<HighsInt> primal_bound_index;
-  const double inf = kHighsInf;
-  for (HighsInt iCol = 0; iCol < original_num_col_; iCol++) {
-    const double cost = original_col_cost_[iCol];
-    const double lower = original_col_lower_[iCol];
-    const double upper = original_col_upper_[iCol];
-    double primal_bound = inf;
-    double row_lower = inf;
-    double row_upper = -inf;
-    if (lower == upper) {
-      // Fixed
-      primal_bound = lower;
-      // Dual activity a^Ty is free, implying dual for primal column
-      // (slack for dual row) is free
-      row_lower = -inf;
-      row_upper = inf;
-    } else if (!highs_isInfinity(-lower)) {
-      // Finite lower bound so boxed or lower
-      if (!highs_isInfinity(upper)) {
-        // Finite upper bound so boxed
-        //
-        // Treat as lower
-        primal_bound = lower;
-        // Dual activity a^Ty is bounded above by cost, implying dual
-        // for primal column (slack for dual row) is non-negative
-        row_lower = -inf;
-        row_upper = cost;
-        // Treat upper bound as additional constraint
-        upper_bound_col_.push_back(iCol);
-      } else {
-        // Lower (since upper bound is infinite)
-        primal_bound = lower;
-        // Dual activity a^Ty is bounded above by cost, implying dual
-        // for primal column (slack for dual row) is non-negative
-        row_lower = -inf;
-        row_upper = cost;
-      }
-    } else if (!highs_isInfinity(upper)) {
-      // Upper
-      primal_bound = upper;
-      // Dual activity a^Ty is bounded below by cost, implying dual
-      // for primal column (slack for dual row) is non-positive
-      row_lower = cost;
-      row_upper = inf;
-    } else {
-      // FREE
-      //
-      // Dual activity a^Ty is fixed by cost, implying dual for primal
-      // column (slack for dual row) is fixed at zero
-      primal_bound = 0;
-      row_lower = cost;
-      row_upper = cost;
-    }
-    assert(row_lower < inf);
-    assert(row_upper > -inf);
-    assert(primal_bound < inf);
-    lp_.row_lower_.push_back(row_lower);
-    lp_.row_upper_.push_back(row_upper);
-    if (primal_bound) {
-      primal_bound_value.push_back(primal_bound);
-      primal_bound_index.push_back(iCol);
-    }
-  }
-  for (HighsInt iRow = 0; iRow < original_num_row_; iRow++) {
-    double lower = original_row_lower_[iRow];
-    double upper = original_row_upper_[iRow];
-    double col_cost = inf;
-    double col_lower = inf;
-    double col_upper = -inf;
-    if (lower == upper) {
-      // Equality constraint
-      //
-      // Dual variable has primal RHS as cost and is free
-      col_cost = lower;
-      col_lower = -inf;
-      col_upper = inf;
-    } else if (!highs_isInfinity(-lower)) {
-      // Finite lower bound so boxed or lower
-      if (!highs_isInfinity(upper)) {
-        // Finite upper bound so boxed
-        //
-        // Treat as lower
-        col_cost = lower;
-        col_lower = 0;
-        col_upper = inf;
-        // Treat upper bound as additional constraint
-        upper_bound_row_.push_back(iRow);
-      } else {
-        // Lower (since upper bound is infinite)
-        col_cost = lower;
-        col_lower = 0;
-        col_upper = inf;
-      }
-    } else if (!highs_isInfinity(upper)) {
-      // Upper
-      col_cost = upper;
-      col_lower = -inf;
-      col_upper = 0;
-    } else {
-      // FREE
-      // Shouldn't get free rows, but handle them anyway
-      col_cost = 0;
-      col_lower = 0;
-      col_upper = 0;
-    }
-    assert(col_lower < inf);
-    assert(col_upper > -inf);
-    assert(col_cost < inf);
-    lp_.col_cost_.push_back(col_cost);
-    lp_.col_lower_.push_back(col_lower);
-    lp_.col_upper_.push_back(col_upper);
-  }
-  vector<HighsInt>& start = lp_.a_matrix_.start_;
-  vector<HighsInt>& index = lp_.a_matrix_.index_;
-  vector<double>& value = lp_.a_matrix_.value_;
-  // Boxed variables and constraints yield extra columns in the dual LP
-  HighsSparseMatrix extra_columns;
-  extra_columns.ensureColwise();
-  extra_columns.num_row_ = original_num_col_;
-  HighsInt num_upper_bound_col = upper_bound_col_.size();
-  HighsInt num_upper_bound_row = upper_bound_row_.size();
-  double one = 1;
-  for (HighsInt iX = 0; iX < num_upper_bound_col; iX++) {
-    HighsInt iCol = upper_bound_col_[iX];
-    const double upper = original_col_upper_[iCol];
-    extra_columns.addVec(1, &iCol, &one);
-    lp_.col_cost_.push_back(upper);
-    lp_.col_lower_.push_back(-inf);
-    lp_.col_upper_.push_back(0);
-  }
-
-  if (num_upper_bound_row) {
-    // Need to identify the submatrix of constraint matrix rows
-    // corresponding to those with a row index in
-    // upper_bound_row_. When identifying numbers of entries in each
-    // row of submatrix, use indirection to get corresponding row
-    // index, with a dummy row for rows not in the submatrix.
-    HighsInt dummy_row = num_upper_bound_row;
-    vector<HighsInt> indirection;
-    vector<HighsInt> count;
-    indirection.assign(original_num_row_, dummy_row);
-    count.assign(num_upper_bound_row + 1, 0);
-    HighsInt extra_iRow = 0;
-    for (HighsInt iX = 0; iX < num_upper_bound_row; iX++) {
-      HighsInt iRow = upper_bound_row_[iX];
-      indirection[iRow] = extra_iRow++;
-      double upper = original_row_upper_[iRow];
-      lp_.col_cost_.push_back(upper);
-      lp_.col_lower_.push_back(-inf);
-      lp_.col_upper_.push_back(0);
-    }
-    for (HighsInt iEl = 0; iEl < original_num_nz_; iEl++)
-      count[indirection[index[iEl]]]++;
-    extra_columns.start_.resize(num_upper_bound_col + num_upper_bound_row + 1);
-    for (HighsInt iRow = 0; iRow < num_upper_bound_row; iRow++) {
-      extra_columns.start_[num_upper_bound_col + iRow + 1] =
-          extra_columns.start_[num_upper_bound_col + iRow] + count[iRow];
-      count[iRow] = extra_columns.start_[num_upper_bound_col + iRow];
-    }
-    HighsInt extra_columns_num_nz =
-        extra_columns.start_[num_upper_bound_col + num_upper_bound_row];
-    extra_columns.index_.resize(extra_columns_num_nz);
-    extra_columns.value_.resize(extra_columns_num_nz);
-    for (HighsInt iCol = 0; iCol < original_num_col_; iCol++) {
-      for (HighsInt iEl = start[iCol]; iEl < start[iCol + 1]; iEl++) {
-        HighsInt iRow = indirection[index[iEl]];
-        if (iRow < num_upper_bound_row) {
-          HighsInt extra_columns_iEl = count[iRow];
-          assert(extra_columns_iEl < extra_columns_num_nz);
-          extra_columns.index_[extra_columns_iEl] = iCol;
-          extra_columns.value_[extra_columns_iEl] = value[iEl];
-          count[iRow]++;
-        }
-      }
-    }
-    extra_columns.num_col_ += num_upper_bound_row;
-  }
-  // Incorporate the cost shift by subtracting A*primal_bound from the
-  // cost vector; compute the objective offset
-  double delta_offset = 0;
-  for (size_t iX = 0; iX < primal_bound_index.size(); iX++) {
-    HighsInt iCol = primal_bound_index[iX];
-    double multiplier = primal_bound_value[iX];
-    delta_offset += multiplier * original_col_cost_[iCol];
-    for (HighsInt iEl = start[iCol]; iEl < start[iCol + 1]; iEl++)
-      lp_.col_cost_[index[iEl]] -= multiplier * value[iEl];
-  }
-  if (extra_columns.num_col_) {
-    // Incorporate the cost shift by subtracting
-    // extra_columns*primal_bound from the cost vector for the extra
-    // dual variables
-    //
-    // Have to scatter the packed primal bound values into a
-    // full-length vector
-    //
-    // ToDo Make this more efficient?
-    vector<double> primal_bound;
-    primal_bound.assign(original_num_col_, 0);
-    for (size_t iX = 0; iX < primal_bound_index.size(); iX++)
-      primal_bound[primal_bound_index[iX]] = primal_bound_value[iX];
-
-    for (HighsInt iCol = 0; iCol < extra_columns.num_col_; iCol++) {
-      double cost = lp_.col_cost_[original_num_row_ + iCol];
-      for (HighsInt iEl = extra_columns.start_[iCol];
-           iEl < extra_columns.start_[iCol + 1]; iEl++)
-        cost -=
-            primal_bound[extra_columns.index_[iEl]] * extra_columns.value_[iEl];
-      lp_.col_cost_[original_num_row_ + iCol] = cost;
-    }
-  }
-  lp_.offset_ += delta_offset;
-  // Copy the row-wise dual LP constraint matrix and transpose it.
-  // ToDo Make this more efficient
-  lp_.a_matrix_ = dual_matrix;
-  lp_.a_matrix_.ensureColwise();
-  // Add the extra columns to the dual LP constraint matrix
-  lp_.a_matrix_.addCols(extra_columns);
-
-  HighsInt dual_num_col =
-      original_num_row_ + num_upper_bound_col + num_upper_bound_row;
-  HighsInt dual_num_row = original_num_col_;
-  assert(dual_num_col == (int)lp_.col_cost_.size());
-  assert(lp_.a_matrix_.num_col_ == dual_num_col);
-  const bool ignore_scaling = true;
-  if (!ignore_scaling) {
-    // Flip any scale factors
-    if (lp_.scale_.has_scaling) {
-      std::vector<double> temp_scale = lp_.scale_.row;
-      lp_.scale_.row = lp_.scale_.col;
-      lp_.scale_.col = temp_scale;
-      lp_.scale_.num_col = dual_num_col;
-      lp_.scale_.num_row = dual_num_row;
-    }
-  }
-  // Change optimization sense
-  if (lp_.sense_ == ObjSense::kMinimize) {
-    lp_.sense_ = ObjSense::kMaximize;
-  } else {
-    lp_.sense_ = ObjSense::kMinimize;
-  }
-  // Flip LP dimensions
-  lp_.num_col_ = dual_num_col;
-  lp_.num_row_ = dual_num_row;
-  status_.is_dualized = true;
-  // The LP's dimensions change, so the dual edge weights no longer fit it
-  // (the C++ HEkk kept them and read past the end of the weight vector on
-  // the clean-up solve after undualize)
-  status_.has_dual_steepest_edge_weights = false;
-  status_.has_basis = false;
-  status_.has_ar_matrix = false;
-  status_.has_nla = false;
-  highsLogUser(options_->log_options, HighsLogType::kInfo,
-               "Solving dual LP with %d columns", (int)dual_num_col);
-  if (num_upper_bound_col + num_upper_bound_row) {
-    highsLogUser(options_->log_options, HighsLogType::kInfo, " [%d extra from",
-                 (int)dual_num_col - original_num_row_);
-    if (num_upper_bound_col)
-      highsLogUser(options_->log_options, HighsLogType::kInfo,
-                   " %d boxed variable(s)", (int)num_upper_bound_col);
-    if (num_upper_bound_col && num_upper_bound_row)
-      highsLogUser(options_->log_options, HighsLogType::kInfo, " and");
-    if (num_upper_bound_row)
-      highsLogUser(options_->log_options, HighsLogType::kInfo,
-                   " %d boxed constraint(s)", (int)num_upper_bound_row);
-    highsLogUser(options_->log_options, HighsLogType::kInfo, "]");
-  }
-  highsLogUser(options_->log_options, HighsLogType::kInfo, " and %d rows\n",
-               (int)dual_num_row);
-  //  reportLp(options_->log_options, lp_, HighsLogType::kVerbose);
-  return HighsStatus::kOk;
-}
-
-
-HighsStatus HEkk::undualize() {
-  if (!this->status_.is_dualized) return HighsStatus::kOk;
-  HighsInt dual_num_col = lp_.num_col_;
-  // The primal basis from the basis of the dual LP
-  const HighsInt num_basic_variables = highs_rs_lps_undualize_basis(
-      rs_, dual_num_col, original_num_col_, original_num_row_,
-      original_col_lower_.data(), original_col_upper_.data(),
-      original_row_lower_.data(), original_row_upper_.data());
-  // Change optimization sense
-  if (lp_.sense_ == ObjSense::kMinimize) {
-    lp_.sense_ = ObjSense::kMaximize;
-  } else {
-    lp_.sense_ = ObjSense::kMinimize;
-  }
-  // Flip LP dimensions
-  lp_.num_col_ = original_num_col_;
-  lp_.num_row_ = original_num_row_;
-  // Restore the original offset
-  lp_.offset_ = original_offset_;
-  // Copy back the costs and bounds
-  lp_.col_cost_ = original_col_cost_;
-  lp_.col_lower_ = original_col_lower_;
-  lp_.col_upper_ = original_col_upper_;
-  lp_.row_lower_ = original_row_lower_;
-  lp_.row_upper_ = original_row_upper_;
-  // The primal constraint matrix is available row-wise as the first
-  // original_num_row_ vectors of the dual constraint matrix
-  HighsSparseMatrix primal_matrix;
-  primal_matrix.start_.resize(original_num_row_ + 1);
-  primal_matrix.index_.resize(original_num_nz_);
-  primal_matrix.value_.resize(original_num_nz_);
-
-  for (HighsInt iCol = 0; iCol < original_num_row_ + 1; iCol++)
-    primal_matrix.start_[iCol] = lp_.a_matrix_.start_[iCol];
-  for (HighsInt iEl = 0; iEl < original_num_nz_; iEl++) {
-    primal_matrix.index_[iEl] = lp_.a_matrix_.index_[iEl];
-    primal_matrix.value_[iEl] = lp_.a_matrix_.value_[iEl];
-  }
-  primal_matrix.num_col_ = original_num_col_;
-  primal_matrix.num_row_ = original_num_row_;
-  primal_matrix.format_ = MatrixFormat::kRowwise;
-  // Copy the row-wise primal LP constraint matrix and transpose it.
-  lp_.a_matrix_ = primal_matrix;
-  lp_.a_matrix_.ensureColwise();
-  assert(lp_.num_col_ == original_num_col_);
-  assert(lp_.num_row_ == original_num_row_);
-  assert(lp_.a_matrix_.numNz() == original_num_nz_);
-  bool num_basic_variables_ok = num_basic_variables == original_num_row_;
-  if (!num_basic_variables_ok)
-    printf("HEkk::undualize: Have %d basic variables, not %d\n",
-           (int)num_basic_variables, (int)original_num_row_);
-  assert(num_basic_variables_ok);
-
-  // Clear the data retained when solving dual LP
-  clearEkkDualize();
-  status_.is_dualized = false;
-  // The LP's dimensions change, so the dual edge weights no longer fit it
-  // (the C++ HEkk kept them and read past the end of the weight vector on
-  // the clean-up solve after undualize)
-  status_.has_dual_steepest_edge_weights = false;
-  // Now solve with this basis. Should just be a case of reinverting
-  // and re-solving for optimal primal and dual values, but
-  // numerically marginal LPs will need clean-up
-  status_.has_basis = true;
-  status_.has_ar_matrix = false;
-  status_.has_nla = false;
-  status_.has_invert = false;
-  HighsInt primal_solve_iteration_count = -iteration_count_;
-  HighsStatus return_status = solve();
-  primal_solve_iteration_count += iteration_count_;
-  highsLogUser(options_->log_options, HighsLogType::kInfo,
-               "Solving the primal LP (%s) using the optimal basis of its dual "
-               "required %d simplex iterations\n",
-               lp_.model_name_.c_str(), (int)primal_solve_iteration_count);
-  return return_status;
-}
-
-HighsStatus HEkk::permute() {
-  assert(1 == 0);
-  return HighsStatus::kError;
-}
-
-HighsStatus HEkk::unpermute() {
-  if (!this->status_.is_permuted) return HighsStatus::kOk;
-  assert(1 == 0);
-  return HighsStatus::kError;
-}
-
 HighsStatus HEkk::solve(const bool force_phase2) {
   // initialiseAnalysis
-  analysis_.setup(lp_name_, lp_, *options_, iteration_count_);
+  RsLp v;
+  highs_rs_lps_lp_view(rs_, &v);
+  RsMut<char> name;
+  highs_rs_lps_model_name(rs_, &name);
+  analysis_.setup(lp_name_, v.num_col, v.num_row,
+                  std::string(name.ptr, name.len), *options_,
+                  iteration_count_);
   // The solve sets up the simplex NLA for this LP
   snapshotFactorLog();
-  setNlaLp(lp_);
+  setNlaEngineLp();
   RustHost host{this};
   const highs_rs::LpsEnv env = rsEnv(host);
   const highs_rs::LpsSolveOut out = highs_rs_lps_solve(rs_, &env, force_phase2);
@@ -820,7 +437,7 @@ void HEkk::addRows(const HighsLp& lp,
                    const HighsSparseMatrix& scaled_ar_matrix) {
   // Update the number of rows in the simplex LP so that it's
   // consistent with simplex basis information
-  this->lp_.num_row_ = lp.num_row_;
+  highs_rs_lps_set_lp_num_row(rs_, lp.num_row_);
   // New rows come in with basic logicals, which leaves the DSE weights
   // of the existing rows unchanged: kept over the clear of kNewRows
   highs_rs_lps_add_rows(rs_, lp.num_row_ - scaled_ar_matrix.num_row_,
@@ -852,22 +469,6 @@ bool HEkk::proofOfPrimalInfeasibility() {
   return highs_rs_lps_proof_of_primal_infeasibility(rs_, &env);
 }
 
-HighsSolution HEkk::getSolution() {
-  HighsSolution solution;
-  solution.col_value.resize(lp_.num_col_);
-  solution.col_dual.resize(lp_.num_col_);
-  solution.row_value.resize(lp_.num_row_);
-  solution.row_dual.resize(lp_.num_row_);
-  RustHost host{this};
-  const highs_rs::LpsEnv env = rsEnv(host);
-  highs_rs_lps_get_solution(rs_, &env, solution.col_value.data(),
-                            solution.col_dual.data(), solution.row_value.data(),
-                            solution.row_dual.data());
-  solution.value_valid = true;
-  solution.dual_valid = true;
-  return solution;
-}
-
 HighsBasis HEkk::getHighsBasis(HighsLp& use_lp) const {
   HighsBasis highs_basis;
   highs_basis.col_status.resize(use_lp.num_col_);
@@ -877,7 +478,7 @@ HighsBasis HEkk::getHighsBasis(HighsLp& use_lp) const {
   const char* origin;
   size_t origin_len;
   highs_rs_lps_get_highs_basis(
-      rs_, &lp, (int)lp_.sense_,
+      rs_, &lp, 0,
       reinterpret_cast<uint8_t*>(highs_basis.col_status.data()),
       reinterpret_cast<uint8_t*>(highs_basis.row_status.data()),
       &highs_basis.debug_id, &highs_basis.debug_update_count, &origin,
@@ -906,7 +507,7 @@ HighsStatus HEkk::initialiseSimplexLpBasisAndFactor(
   if (only_from_known_basis) assert(status_.has_basis);
   // The simplex NLA is set up for this LP
   snapshotFactorLog();
-  setNlaLp(lp_);
+  setNlaEngineLp();
   RustHost host{this};
   const highs_rs::LpsEnv env = rsEnv(host);
   const HighsStatus status = HighsStatus(
@@ -916,7 +517,14 @@ HighsStatus HEkk::initialiseSimplexLpBasisAndFactor(
 }
 
 bool HEkk::lpFactorRowCompatible() const {
-  return lpFactorRowCompatible(this->lp_.num_row_);
+  return lpFactorRowCompatible(lpNumRow());
+}
+
+double HEkk::computeBasisCondition() const {
+  RustHost host{const_cast<HEkk*>(this)};
+  const highs_rs::LpsEnv env = rsEnv(host);
+  return highs_rs_lps_basis_condition(rs_, &env, nullptr, nullptr, 0, false,
+                                      false);
 }
 
 bool HEkk::lpFactorRowCompatible(const HighsInt expectedNumRow) const {
@@ -1011,6 +619,202 @@ highs_rs::RangingSlices HEkk::rangingSlices() {
   highs_rs::RangingSlices s;
   highs_rs_lps_ranging_slices(rs_, &s);
   return s;
+}
+
+highs_rs::LpsEnv HEkk::callEnv() const {
+  RustHost host{const_cast<HEkk*>(this)};
+  return rsEnv(host);
+}
+
+// solveLpSimplex (rust/src/simplex/app.rs): the solver object's data in
+// place and the steps on the C++ objects
+namespace {
+
+struct RsSimplexApp {
+  RsLog log, factor_log;
+  void* ctx;
+  int64_t (*op)(void*, int, int64_t, void*);
+  void* lps;
+  RsLp incumbent;
+  RsMut<char> model_name;
+  HighsModelStatus* model_status;
+  HighsInfoStruct* info;
+  bool *value_valid, *dual_valid;
+  RsVec<double> col_value, col_dual, row_value, row_dual;
+  bool *basis_valid, *basis_alien, *basis_useful, *basis_was_alien;
+  HighsInt *basis_debug_id, *basis_debug_update_count;
+  RsVec<uint8_t> col_status, row_status;
+  HighsInt* simplex_strategy;
+  double* dual_simplex_cost_perturbation_multiplier;
+  HighsInt simplex_unscaled_solution_strategy, cost_scale_factor,
+      simplex_dualize_strategy, simplex_permute_strategy;
+  RsLpOptions lp_options;
+};
+
+uint8_t* statusResize(void* v, size_t n) {
+  std::vector<HighsBasisStatus>& x =
+      *static_cast<std::vector<HighsBasisStatus>*>(v);
+  x.resize(n);
+  return reinterpret_cast<uint8_t*>(x.data());
+}
+
+RsVec<uint8_t> rsStatusVec(std::vector<HighsBasisStatus>& v) {
+  return {&v, statusResize, reinterpret_cast<uint8_t*>(v.data()), v.size()};
+}
+
+// The log of an HFactor set up with these log options: no callbacks
+struct AppFactorLog {
+  bool output_flag, log_to_console;
+  HighsInt log_dev_level;
+  HighsLogOptions log_options;
+  explicit AppFactorLog(const HighsLogOptions& from) {
+    output_flag = *from.output_flag;
+    log_to_console = *from.log_to_console;
+    log_dev_level = *from.log_dev_level;
+    log_options.output_flag = &output_flag;
+    log_options.log_to_console = &log_to_console;
+    log_options.log_dev_level = &log_dev_level;
+    log_options.log_stream = from.log_stream;
+  }
+};
+
+}  // namespace
+
+extern "C" int highs_rs_solve_lp_simplex(RsSimplexApp* h);
+
+void HEkk::lpBack(HighsLp& lp, const bool matrix) const {
+  RsLp v;
+  highs_rs_lps_lp_view(rs_, &v);
+  HighsScale& scale = lp.scale_;
+  scale.strategy = v.scale_strategy;
+  scale.has_scaling = v.scale_has_scaling;
+  scale.num_col = v.scale_num_col;
+  scale.num_row = v.scale_num_row;
+  scale.cost = v.scale_cost;
+  scale.col.assign(v.scale_col.ptr, v.scale_col.ptr + v.scale_col.len);
+  scale.row.assign(v.scale_row.ptr, v.scale_row.ptr + v.scale_row.len);
+  lp.is_scaled_ = v.is_scaled;
+  if (matrix) {
+    HighsSparseMatrix& a = lp.a_matrix_;
+    a.format_ = MatrixFormat(v.a.format);
+    a.num_col_ = v.a.num_col;
+    a.num_row_ = v.a.num_row;
+    a.start_.assign(v.a.start.ptr, v.a.start.ptr + v.a.start.len);
+    a.p_end_.assign(v.a.p_end.ptr, v.a.p_end.ptr + v.a.p_end.len);
+    a.index_.assign(v.a.index.ptr, v.a.index.ptr + v.a.index.len);
+    a.value_.assign(v.a.value.ptr, v.a.value.ptr + v.a.value.len);
+  }
+}
+
+static int64_t simplexAppOp(void* ctx, int code, int64_t arg, void* p) {
+  HighsLpSolverObject& so = *static_cast<HighsLpSolverObject*>(ctx);
+  HEkk& ekk = so.ekk_instance_;
+  switch (code) {
+    case 1:
+      if (so.profiling_) {
+        HighsInt profiling_clock = -1;
+        if (so.options_.simplex_strategy == kSimplexStrategyPrimal) {
+          profiling_clock = so.basis_.valid ? kSubSolverPrSimplexBasis
+                                            : kSubSolverPrSimplexNoBasis;
+        } else {
+          profiling_clock = so.basis_.valid ? kSubSolverDuSimplexBasis
+                                            : kSubSolverDuSimplexNoBasis;
+        }
+        so.profiling_->start(profiling_clock);
+      }
+      return 0;
+    case 2:
+      if (so.profiling_->sub_solver_) {
+        HighsInt profiling_clock = -1;
+        HighsProfilingRecord* thread_record =
+            so.profiling_->getHighsProfilingRecord();
+        if (std::signbit(thread_record->start_time[kSubSolverDuSimplexBasis]))
+          profiling_clock = kSubSolverDuSimplexBasis;
+        if (std::signbit(
+                thread_record->start_time[kSubSolverDuSimplexNoBasis]))
+          profiling_clock = kSubSolverDuSimplexNoBasis;
+        if (std::signbit(thread_record->start_time[kSubSolverPrSimplexBasis]))
+          profiling_clock = kSubSolverPrSimplexBasis;
+        if (std::signbit(
+                thread_record->start_time[kSubSolverPrSimplexNoBasis]))
+          profiling_clock = kSubSolverPrSimplexNoBasis;
+        so.profiling_->stop(profiling_clock);
+      }
+      return 0;
+    case 3:
+      ekk.initialiseSimplexStats();
+      return 0;
+    case 4:
+      ekk.movedLp(so);
+      return 0;
+    case 5:
+      return int64_t(ekk.setBasis(so.basis_));
+    case 6:
+      return int64_t(ekk.solve(arg != 0));
+    case 7:
+      ekk.clear();
+      return 0;
+    case 8:
+      return ekk.proofOfPrimalInfeasibility();
+    case 9:
+      ekk.setNlaPointersForLpAndScale(so.lp_);
+      return 0;
+    case 10:
+      ekk.lpBack(so.lp_, arg != 0);
+      return 0;
+    case 11:
+      *static_cast<highs_rs::LpsEnv*>(p) = ekk.callEnv();
+      return 0;
+    case 12:
+      so.basis_.debug_origin_name.assign(static_cast<const char*>(p),
+                                         size_t(arg));
+      return 0;
+  }
+  assert(false);
+  return 0;
+}
+
+HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
+  HighsOptions& options = solver_object.options_;
+  HighsLp& lp = solver_object.lp_;
+  HighsSolution& solution = solver_object.solution_;
+  HighsBasis& basis = solver_object.basis_;
+  const AppFactorLog factor_log(options.log_options);
+  RsSimplexApp h;
+  h.log = rsLog(options.log_options);
+  h.factor_log = rsLog(factor_log.log_options);
+  h.ctx = &solver_object;
+  h.op = simplexAppOp;
+  h.lps = solver_object.ekk_instance_.rs_;
+  h.incumbent = rsLp(lp);
+  h.model_name = {const_cast<char*>(lp.model_name_.data()),
+                  lp.model_name_.size()};
+  h.model_status = &solver_object.model_status_;
+  h.info = static_cast<HighsInfoStruct*>(&solver_object.highs_info_);
+  h.value_valid = &solution.value_valid;
+  h.dual_valid = &solution.dual_valid;
+  h.col_value = rsVec(solution.col_value);
+  h.col_dual = rsVec(solution.col_dual);
+  h.row_value = rsVec(solution.row_value);
+  h.row_dual = rsVec(solution.row_dual);
+  h.basis_valid = &basis.valid;
+  h.basis_alien = &basis.alien;
+  h.basis_useful = &basis.useful;
+  h.basis_was_alien = &basis.was_alien;
+  h.basis_debug_id = &basis.debug_id;
+  h.basis_debug_update_count = &basis.debug_update_count;
+  h.col_status = rsStatusVec(basis.col_status);
+  h.row_status = rsStatusVec(basis.row_status);
+  h.simplex_strategy = &options.simplex_strategy;
+  h.dual_simplex_cost_perturbation_multiplier =
+      &options.dual_simplex_cost_perturbation_multiplier;
+  h.simplex_unscaled_solution_strategy =
+      options.simplex_unscaled_solution_strategy;
+  h.cost_scale_factor = options.cost_scale_factor;
+  h.simplex_dualize_strategy = options.simplex_dualize_strategy;
+  h.simplex_permute_strategy = options.simplex_permute_strategy;
+  h.lp_options = rsLpOptions(options);
+  return HighsStatus(highs_rs_solve_lp_simplex(&h));
 }
 
 void HighsSimplexStats::report(FILE* file, std::string message) const {
