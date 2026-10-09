@@ -2380,17 +2380,8 @@ HighsCliqueTable::~HighsCliqueTable() { highs_rs::highs_rs_clique_free(rs_); }
 void HighsCliqueTable::setPresolveFlag(bool inPresolve) {
   highs_rs::highs_rs_clique_set(rs_, 0, inPresolve);
 }
-bool HighsCliqueTable::getPresolveFlag() const {
-  return highs_rs::highs_rs_clique_get(rs_, 0);
-}
 HighsInt HighsCliqueTable::getNumEntries() const {
   return highs_rs::highs_rs_clique_get(rs_, 1);
-}
-HighsInt HighsCliqueTable::getNumFixings() const {
-  return highs_rs::highs_rs_clique_get(rs_, 2);
-}
-HighsInt HighsCliqueTable::numCliques() const {
-  return highs_rs::highs_rs_clique_get(rs_, 3);
 }
 bool HighsCliqueTable::isFull() const { return highs_rs::highs_rs_clique_get(rs_, 4); }
 void HighsCliqueTable::setMaxEntries(HighsInt numNz) {
@@ -2406,9 +2397,6 @@ void HighsCliqueTable::setAllowParallel(const bool allowParallel) {
 HighsRandom& HighsCliqueTable::getRandgen() {
   return *highs_rs::highs_rs_clique_randgen(rs_);
 }
-HighsInt HighsCliqueTable::numCliques(CliqueVar v) const {
-  return highs_rs::highs_rs_clique_num_cliques_var(rs_, v);
-}
 
 const HighsCliqueTable::Substitution* HighsCliqueTable::getSubstitution(
     HighsInt col) const {
@@ -2416,36 +2404,11 @@ const HighsCliqueTable::Substitution* HighsCliqueTable::getSubstitution(
       highs_rs::highs_rs_clique_substitution(rs_, col));
 }
 
-void HighsCliqueTable::resolveSubstitution(CliqueVar& v) const {
-  highs_rs::highs_rs_clique_resolve_subst(rs_, &v);
-}
-
-void HighsCliqueTable::resolveSubstitution(HighsInt& col, double& val,
-                                           double& offset) const {
-  highs_rs::highs_rs_clique_resolve_subst_val(rs_, &col, &val, &offset);
-}
-
-bool HighsCliqueTable::haveCommonClique(CliqueVar v1, CliqueVar v2) {
-  return highs_rs::highs_rs_clique_have_common(rs_, nullptr, v1, v2);
-}
-
-bool HighsCliqueTable::haveCommonClique(int64_t& numQueries, CliqueVar v1,
-                                        CliqueVar v2) const {
-  return highs_rs::highs_rs_clique_have_common(rs_, &numQueries, v1, v2);
-}
-
 std::pair<const HighsCliqueTable::CliqueVar*, HighsInt>
 HighsCliqueTable::findCommonClique(CliqueVar v1, CliqueVar v2) {
   HighsInt len;
   const CliqueVar* p = highs_rs::highs_rs_clique_find_common(rs_, v1, v2, &len);
   return {p, len};
-}
-
-void HighsCliqueTable::doAddClique(const CliqueVar* cliquevars,
-                                   HighsInt numcliquevars, bool equality,
-                                   HighsInt origin) {
-  highs_rs::highs_rs_clique_do_add_clique(rs_, cliquevars, numcliquevars, equality,
-                                origin);
 }
 
 void HighsCliqueTable::addClique(const HighsMipSolver& mipsolver,
@@ -2456,10 +2419,6 @@ void HighsCliqueTable::addClique(const HighsMipSolver& mipsolver,
   highs_rs::CliqueMip m = highs_rs::cliqueMip(mipsolver);
   highs_rs::highs_rs_clique_add_clique(rs_, &d, &m, cliquevars, numcliquevars, equality,
                              origin);
-}
-
-void HighsCliqueTable::removeClique(HighsInt cliqueid) {
-  highs_rs::highs_rs_clique_remove_clique(rs_, cliqueid);
 }
 
 void HighsCliqueTable::cliquePartition(std::vector<CliqueVar>& clqVars,
@@ -2476,12 +2435,6 @@ void HighsCliqueTable::cliquePartition(const std::vector<double>& objective,
   partitionStart.resize(highs_rs::highs_rs_clique_partition(
       rs_, objective.data(), objective.size(), clqVars.data(), clqVars.size(),
       partitionStart.data()));
-}
-
-bool HighsCliqueTable::foundCover(HighsDomain& globaldom, CliqueVar v1,
-                                  CliqueVar v2) {
-  highs_rs::CliqueDom d = highs_rs::cliqueDom(globaldom);
-  return highs_rs::highs_rs_clique_found_cover(rs_, &d, v1, v2);
 }
 
 void HighsCliqueTable::extractCliques(HighsMipSolver& mipsolver,
@@ -2588,14 +2541,6 @@ void HighsCliqueTable::addImplications(HighsDomain& domain, HighsInt col,
                                        HighsInt val) {
   highs_rs::CliqueDom d = highs_rs::cliqueDom(domain);
   highs_rs::highs_rs_clique_add_implications(rs_, &d, col, val);
-}
-
-HighsInt HighsCliqueTable::getNumImplications(HighsInt col) const {
-  return highs_rs::highs_rs_clique_num_implications(rs_, col, -1);
-}
-
-HighsInt HighsCliqueTable::getNumImplications(HighsInt col, bool val) const {
-  return highs_rs::highs_rs_clique_num_implications(rs_, col, val);
 }
 
 void HighsCliqueTable::runCliqueMerging(HighsDomain& globaldomain) {

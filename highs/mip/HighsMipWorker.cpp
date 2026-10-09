@@ -114,6 +114,7 @@ bool HighsMipWorker::addIncumbent(const std::vector<double>& sol, double solobj,
 #endif
 }
 
+#ifndef HIGHS_RUST
 std::pair<bool, double> HighsMipWorker::transformNewIntegerFeasibleSolution(
     const std::vector<double>& sol) const {
   HighsSolution solution;
@@ -149,6 +150,7 @@ std::pair<bool, double> HighsMipWorker::transformNewIntegerFeasibleSolution(
 
   return std::make_pair(feasible, transformed_solobj);
 }
+#endif
 
 bool HighsMipWorker::trySolution(const std::vector<double>& solution,
                                  const int solution_source) {
@@ -199,6 +201,7 @@ void HighsMipWorker::resetSepaStats() {
   sepa_stats.sepa_lp_iterations = 0;
 }
 
+#ifndef HIGHS_RUST
 void HighsMipWorker::updateHeurStatsLpIters(int64_t lp_iters,
                                             int64_t total_repair_lp,
                                             int64_t total_repair_lp_feasible,
@@ -208,16 +211,21 @@ void HighsMipWorker::updateHeurStatsLpIters(int64_t lp_iters,
   heur_stats.total_repair_lp_feasible += total_repair_lp_feasible;
   heur_stats.total_repair_lp_iterations += total_repair_lp_iters;
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsMipWorker::updateHeurStatsInfeasObservations(double fixingRate) {
   heur_stats.infeasObservations += fixingRate;
   ++heur_stats.numInfeasObservations;
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HighsMipWorker::updateHeurStatsSuccessObservations(double fixingRate) {
   heur_stats.successObservations += fixingRate;
   ++heur_stats.numSuccessObservations;
 }
+#endif
 
 void HighsMipWorker::getHeurStatsValues(
     int64_t& total_repair_lp, int64_t& total_repair_lp_feasible,

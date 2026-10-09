@@ -100,6 +100,27 @@ unsafe fn targets(opts: *const c_void, dev: bool, t: i32) -> Option<Targets> {
     Some(Targets { file, console, callback })
 }
 
+/// The log file of a C++ HighsLogOptions (null if none)
+///
+/// # Safety
+/// `opts` is a HighsLogOptions
+pub unsafe fn log_options_stream(opts: *const c_void) -> *mut File {
+    (*(opts as *const LogOptionsHead)).log_stream
+}
+
+/// A message (with its prefix) to a log file, as highsLogUser writes it;
+/// nothing if `f` is null or stdout
+///
+/// # Safety
+/// `f` an open C file or null
+pub unsafe fn to_log_file(f: *mut File, prefix: &[u8], msg: &[u8]) {
+    if !f.is_null() && f != stdout {
+        put(f, prefix);
+        put(f, msg);
+        fflush(f);
+    }
+}
+
 /// Whether highsLogUser (dev = 0) or highsLogDev (dev = 1) prints a
 /// message of type t, so the C++ formats it only then
 ///

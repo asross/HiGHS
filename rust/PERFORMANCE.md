@@ -10,6 +10,31 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-09, stage 4: the Highs object's engine is an LpHandle
+
+`perf.py <rust-port HIGHS_RUST highs (24cb955a63)> <this build's highs>
+--reps 3` (two MIP comparison runs in the background): the Highs object's
+LP runs are made on its `LpHandle` (the model LP and option values are
+copied into the handle at the start of each LP run, the C++ HEkk shell
+and the C++ steps of the engine and the solvers' templates are gone), and
+the dead C++ is deleted. All 32 cases same path; geomean 1.009 (MIP
+1.007, LP dual 1.006, LP primal 1.004, IPM 1.004, PDLP 1.020, read model
+1.025), within the noise of a loaded machine: the per-run copy of the
+model is O(nnz) once per LP run (the engine copied it into its own LP
+before too).
+
+Against the pure C++ build (same session), every case same path:
+
+| Group | Geomean Rust / C++ |
+|---|---|
+| MIP | 0.864 |
+| LP dual simplex | 0.750 |
+| LP primal simplex | 0.944 |
+| IPM (IPX) | 0.926 |
+| PDLP | 0.961 |
+| Read model (time_limit 0) | 0.382 |
+| **All** | **0.776** |
+
 ## 2026-10-09, the MIP's LP solves on Rust LP solvers (LpHandle)
 
 `perf.py <rust-port HIGHS_RUST highs (dac397718c)> <this build's highs>

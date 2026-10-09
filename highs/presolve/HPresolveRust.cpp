@@ -571,20 +571,6 @@ HighsModelStatus HPresolve::run(HighsPostsolveStack& postsolve_stack) {
   return HighsModelStatus(status);
 }
 
-// The option values of an LP presolve on Rust data (lp_presolve.rs:
-// PresolveOptions)
-void rsLpPresolveOptions(const HighsOptions& options, void* out) {
-  struct LpPresolveOptions {
-    RsOptions o;
-    HighsInt reduction_limit;
-  };
-  LpPresolveOptions& p = *static_cast<LpPresolveOptions*>(out);
-  p.o = rsOptions(options);
-  p.reduction_limit = options.presolve_reduction_limit < 0
-                          ? HighsInt{-1}
-                          : options.presolve_reduction_limit;
-}
-
 }  // namespace presolve
 
 #endif  // HIGHS_RUST

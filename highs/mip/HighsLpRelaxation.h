@@ -22,7 +22,7 @@ class HighsPseudocost;
 class HighsMipWorker;
 
 #ifdef HIGHS_RUST
-#include "simplex/HEkkRust.h"
+#include "lp_data/HighsLpHandle.h"
 
 namespace highs_rs {
 struct LpRelax;
@@ -46,96 +46,10 @@ struct LpShared {
   double avg_solve_iters;
 };
 
-// rust/src/lp_data/lp_handle.rs: LphView, what C++ reads of the LP solver
-// (valid until it changes)
-struct LphView {
-  HighsInt num_col, num_row, num_nz;
-  int model_status;
-  const double *col_cost, *col_lower, *col_upper, *row_lower, *row_upper;
-  const HighsInt *a_start, *a_index;
-  const double* a_value;
-  const double *col_value, *col_dual, *row_value, *row_dual;
-  HighsInt n_col_value, n_col_dual, n_row_value, n_row_dual;
-  const uint8_t *col_status, *row_status;
-  HighsInt n_col_status, n_row_status;
-  bool value_valid, dual_valid, basis_valid;
-  const HighsInfoStruct* info;
-};
-
-// lp_handle.rs: LphBasis, a HighsBasis' fields
-struct LphBasis {
-  bool valid, alien, useful, was_alien;
-  HighsInt debug_id, debug_update_count;
-  const uint8_t* col_status;
-  HighsInt n_col;
-  const uint8_t* row_status;
-  HighsInt n_row;
-  const char* origin;
-  size_t origin_len;
-};
-
 extern "C" {
-LpHandle* highs_rs_lph_new();
-void highs_rs_lph_free(LpHandle* h);
 LpHandle* highs_rs_lprelax_lp(LpRelax* p);
-void highs_rs_lph_register(void (*profiling)(void*, int, HighsInt, int64_t));
-void highs_rs_lph_view(LpHandle* h, LphView* v);
-void highs_rs_lph_basis(LpHandle* h, LphBasis* out);
-int highs_rs_lph_set_basis(LpHandle* h, const LphBasis* b, const char* origin,
-                           size_t len);
-bool highs_rs_lph_set_option(LpHandle* h, const char* name, size_t name_len,
-                             int kind, int64_t i, double d, const char* s,
-                             size_t len);
-bool highs_rs_lph_get_option(LpHandle* h, const char* name, size_t name_len,
-                             double* d, const char** s, size_t* len);
-void highs_rs_lph_pass_options(LpHandle* h, LpHandle* from);
-int highs_rs_lph_pass_model(LpHandle* h, const RsLp* lp, const char* name,
-                            size_t len);
-int highs_rs_lph_pass_model_of(LpHandle* h, LpHandle* from);
-void highs_rs_lph_model(LpHandle* h, RsLp* out, const char** name,
-                        size_t* len);
-int highs_rs_lph_clear_solver(LpHandle* h);
-int highs_rs_lph_clear_model(LpHandle* h);
-int highs_rs_lph_change_col_bounds_interval(LpHandle* h, HighsInt from,
-                                            HighsInt to, const double* lower,
-                                            const double* upper);
-int highs_rs_lph_change_col_bounds_set(LpHandle* h, HighsInt num,
-                                       const HighsInt* set,
-                                       const double* lower,
-                                       const double* upper);
-int highs_rs_lph_change_col_costs_mask(LpHandle* h, const HighsInt* mask,
-                                       const double* cost);
-int highs_rs_lph_add_rows(LpHandle* h, HighsInt num, const double* lower,
-                          const double* upper, HighsInt num_nz,
-                          const HighsInt* start, const HighsInt* index,
-                          const double* value);
-int highs_rs_lph_delete_rows_interval(LpHandle* h, HighsInt from,
-                                      HighsInt to);
-int highs_rs_lph_delete_rows_mask(LpHandle* h, HighsInt* mask);
-int highs_rs_lph_optimize_lp(LpHandle* h, bool* interrupted);
-int highs_rs_lph_put_iterate(LpHandle* h);
-int highs_rs_lph_get_iterate(LpHandle* h);
-void highs_rs_lph_basis_inverse_row(LpHandle* h, HighsInt row, HVec* v);
-bool highs_rs_lph_dual_ray(LpHandle* h, HVec* v);
-bool highs_rs_lph_has_invert(LpHandle* h);
-const HighsInt* highs_rs_lph_basic_index(LpHandle* h);
-const double* highs_rs_lph_dual_edge_weights(LpHandle* h);
-double highs_rs_lph_run_time(LpHandle* h);
-void highs_rs_lph_set_profiling(LpHandle* h, void* profiling);
-int highs_rs_lph_race_ipx(LpHandle* h, HighsInt seed, int64_t* extra,
-                          bool* ipx_won);
-void highs_rs_lph_ipm_basis(LpHandle* h, bool use_presolve, void* profiling);
 }
 }  // namespace highs_rs
-
-/// An LP solver of the MIP (rust/src/lp_data/lp_handle.rs) that C++ owns
-struct HighsLpHandle {
-  highs_rs::LpHandle* p;
-  HighsLpHandle() : p(highs_rs::highs_rs_lph_new()) {}
-  ~HighsLpHandle() { highs_rs::highs_rs_lph_free(p); }
-  HighsLpHandle(const HighsLpHandle&) = delete;
-  HighsLpHandle& operator=(const HighsLpHandle&) = delete;
-};
 
 // Highs::setOptionValue of an LP solver (asserted to succeed)
 void rsLpSetOption(highs_rs::LpHandle* lp, const std::string& name,

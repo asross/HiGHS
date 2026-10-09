@@ -225,20 +225,6 @@ void HFactor::pullRustBuildInfo() {
   var_with_no_pivot = getIvec(rs_.p, kVarWithNoPivot);
 }
 
-RefactorInfo HFactor::getRefactorInfo() const {
-  RefactorInfo refactor_info;
-  refactor_info.use = highs_rs_factor_refactor_use(rs_.p);
-  refactor_info.pivot_row = getIvec(rs_.p, kRefactorPivotRow);
-  refactor_info.pivot_var = getIvec(rs_.p, kRefactorPivotVar);
-  int len;
-  const int8_t* type = highs_rs_factor_refactor_type(rs_.p, &len);
-  refactor_info.pivot_type.assign(type, type + len);
-  RsInfo info;
-  highs_rs_factor_info(rs_.p, &info);
-  refactor_info.build_synthetic_tick = info.refactor_build_synthetic_tick;
-  return refactor_info;
-}
-
 #ifndef HIGHS_RUST
 void HFactor::setRefactorInfo(const RefactorInfo& refactor_info) {
   const int n = std::min({refactor_info.pivot_row.size(),
@@ -252,10 +238,6 @@ void HFactor::setRefactorInfo(const RefactorInfo& refactor_info) {
 #endif
 
 void HFactor::clearRefactorInfo() { highs_rs_factor_refactor_clear(rs_.p); }
-
-void HFactor::saveInvert() { highs_rs_factor_put_invert(rs_.p); }
-
-void HFactor::restoreInvert() { highs_rs_factor_get_invert(rs_.p); }
 
 void HFactor::ftranCall(HVector& vector, const double expected_density,
                         HighsTimerClock* /*factor_timer_clock_pointer*/) const {

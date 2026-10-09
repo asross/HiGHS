@@ -175,6 +175,7 @@ bool ok(const HighsIndexCollection& index_collection) {
 }
 #endif
 
+#ifndef HIGHS_RUST
 void limits(const HighsIndexCollection& index_collection, HighsInt& from_k,
             HighsInt& to_k) {
   if (index_collection.is_interval_) {
@@ -190,6 +191,7 @@ void limits(const HighsIndexCollection& index_collection, HighsInt& from_k,
     assert(1 == 0);
   }
 }
+#endif
 
 void updateOutInIndex(const HighsIndexCollection& index_collection,
                       HighsInt& out_from_ix, HighsInt& out_to_ix,
@@ -264,6 +266,7 @@ bool highsVarTypeUserDataNotNull(const HighsLogOptions& log_options,
   return null_data;
 }
 
+#ifndef HIGHS_RUST
 bool intUserDataNotNull(const HighsLogOptions& log_options,
                         const HighsInt* user_data, const std::string& name) {
   bool null_data = false;
@@ -275,6 +278,7 @@ bool intUserDataNotNull(const HighsLogOptions& log_options,
   assert(!null_data);
   return null_data;
 }
+#endif
 
 bool doubleUserDataNotNull(const HighsLogOptions& log_options,
                            const double* user_data, const std::string& name) {
@@ -564,6 +568,7 @@ void analyseVectorValues(const HighsLogOptions* log_options,
   */
 }
 
+#ifndef HIGHS_RUST
 void analyseMatrixSparsity(const HighsLogOptions& log_options,
                            const char* message, HighsInt numCol,
                            HighsInt numRow, const std::vector<HighsInt>& Astart,
@@ -701,6 +706,7 @@ void analyseMatrixSparsity(const HighsLogOptions& log_options,
               "Max count is %" HIGHSINT_FORMAT " / %" HIGHSINT_FORMAT "\n",
               maxRowCount, numCol);
 }
+#endif
 
 #ifndef HIGHS_RUST
 bool initialiseValueDistribution(const std::string& distribution_name,
@@ -969,6 +975,7 @@ bool logValueDistribution(const HighsLogOptions& log_options,
 }
 #endif
 
+#ifndef HIGHS_RUST
 bool initialiseScatterData(const HighsInt max_num_point,
                            HighsScatterData& scatter_data) {
   if (max_num_point < 1) return false;
@@ -989,6 +996,7 @@ bool initialiseScatterData(const HighsInt max_num_point,
   scatter_data.num_better_log_ = 0;
   return true;
 }
+#endif
 
 #ifndef HIGHS_RUST
 bool updateScatterData(const double value0, const double value1,
@@ -1241,6 +1249,7 @@ double nearestPowerOfTwoScale(const double value) {
 }
 #endif
 
+#ifndef HIGHS_RUST
 void highsAssert(const bool assert_condition, const std::string& message) {
   if (assert_condition) return;
   printf("Failing highsAssert(\"%s\")\n", message.c_str());
@@ -1254,6 +1263,7 @@ void highsAssert(const bool assert_condition, const std::string& message) {
   assert(assert_condition);
 #endif
 }
+#endif
 
 #ifndef HIGHS_RUST
 bool highsPause(const bool pause_condition, const std::string& message) {

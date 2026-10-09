@@ -17,7 +17,6 @@
 #include "parallel/HighsParallel.h"
 #include "simplex/HEkkDual.h"
 #include "simplex/HEkkPrimal.h"
-#include "simplex/HEkkRust.h"
 #include "simplex/HSimplexDebug.h"
 #include "simplex/HSimplexReport.h"
 #include "simplex/SimplexTimer.h"

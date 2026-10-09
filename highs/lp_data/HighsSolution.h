@@ -17,7 +17,11 @@
 #include "io/HighsIO.h"
 #include "lp_data/HStruct.h"
 #include "lp_data/HighsInfo.h"
+#ifdef HIGHS_RUST
+class HighsLpSolverObject;
+#else
 #include "lp_data/HighsLpSolverObject.h"
+#endif
 #include "lp_data/HighsStatus.h"
 #include "model/HighsModel.h"
 

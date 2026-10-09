@@ -348,6 +348,7 @@ void HFactor::setupGeneral(
   rhs_.count = -1;
 }
 
+#ifndef HIGHS_RUST
 void HFactor::setupMatrix(const HighsInt* a_start_, const HighsInt* a_index_,
                           const double* a_value_) {
   a_start = a_start_;
@@ -355,11 +356,14 @@ void HFactor::setupMatrix(const HighsInt* a_start_, const HighsInt* a_index_,
   a_value = a_value_;
   this->a_matrix_valid = true;
 }
+#endif
 
+#ifndef HIGHS_RUST
 void HFactor::setupMatrix(const HighsSparseMatrix* a_matrix) {
   setupMatrix(a_matrix->start_.data(), a_matrix->index_.data(),
               a_matrix->value_.data());
 }
+#endif
 
 // Implemented in HFactorRust.cpp when the factor is ported to Rust
 #ifndef HIGHS_RUST
@@ -2589,6 +2593,7 @@ void HFactor::setInvert(const InvertibleRepresentation& invert) {
 
 #endif  // HIGHS_RUST
 
+#ifndef HIGHS_RUST
 void InvertibleRepresentation::clear() {
   this->l_pivot_index.clear();
   this->l_pivot_lookup.clear();
@@ -2618,3 +2623,4 @@ void InvertibleRepresentation::clear() {
   this->pf_pivot_index.clear();
   this->pf_pivot_value.clear();
 }
+#endif

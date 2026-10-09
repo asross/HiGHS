@@ -6,60 +6,15 @@
 /*                                                                       */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /**@file ipm/IpxWrapperRust.cpp
- * @brief solveLpIpx and fillInIpxData done by Rust
- * (rust/src/lp_data/ipx_glue.rs): the options, the LP view, the timer, the
- * sizing of the solution and basis, and the IPX hooks
+ * @brief fillInIpxData done by Rust (rust/src/lp_data/ipx_glue.rs), for
+ * callCrossover; the LP solves' IPX glue is Rust (lp_run.rs)
  */
 #include "lp_data/HighsRust.h"
 
 #ifdef HIGHS_RUST
-#include <iostream>
-
 #include "ipm/IpxWrapper.h"
-#include "lp_data/HighsSolution.h"
-#include "parallel/HighsParallel.h"
 
 namespace {
-struct RsIpxSolutionOut {
-  RsMut<double> col_value, col_dual, row_value, row_dual;
-  RsMut<uint8_t> col_status, row_status;
-};
-
-struct RsIpxHooks {
-  void (*log)(const void* log_options, const char* msg);
-  void (*print)(const char* msg);
-  ipx::Int (*task_interrupt)(void* ctx);
-  ipx::Int (*user_interrupt)(void* ctx, ipx::Int iter);
-  void* ctx;
-};
-
-struct RsIpxOptions {
-  RsLog log;
-  const void* log_options;
-  bool output_flag, log_to_console, timeless_log, run_centring;
-  HighsInt log_dev_level, ipx_dualize_strategy, highs_analysis_level,
-      ipm_iteration_limit, run_crossover, max_centring_steps;
-  double primal_feasibility_tolerance, dual_feasibility_tolerance,
-      ipm_optimality_tolerance, start_crossover_tolerance, kkt_tolerance,
-      time_limit, centring_ratio_tolerance;
-};
-
-struct RsIpxHost {
-  void* ctx;
-  double (*timer_read)(void* ctx);
-  void (*resize)(void* ctx, bool with_basis, RsIpxSolutionOut* out);
-  RsIpxHooks hooks;
-  RsLp lp;
-  RsIpxOptions options;
-  HighsInfoStruct* info;
-  int* model_status;
-  bool *value_valid, *dual_valid, *basis_valid, *basis_useful;
-};
-
-static_assert(sizeof(RsIpxOptions) == 112, "RsIpxOptions layout");
-static_assert(sizeof(RsIpxHost) == 64 + sizeof(RsLp) + 112 + 48,
-              "RsIpxHost layout");
-
 struct RsIpxData {
   HighsInt num_col, num_row;
   double offset;
@@ -67,126 +22,12 @@ struct RsIpxData {
   RsMut<HighsInt> i[2];  // ap, ai
   RsMut<uint8_t> constraint_type;
 };
-
-struct IpxGlueCtx {
-  const HighsLp& lp;
-  HighsTimer& timer;
-  HighsSolution& solution;
-  HighsBasis& basis;
-};
-
-// As the hooks of ipx::LpSolver (ipx/lp_solver_rs.cc), with the callback
-// as context
-void ipxGlueLog(const void* log_options, const char* msg) {
-  highsLogUser(*static_cast<const HighsLogOptions*>(log_options),
-               HighsLogType::kInfo, "%s", msg);
-}
-
-void ipxGluePrint(const char* msg) { std::cout << msg; }
-
-ipx::Int ipxGlueTaskInterrupt(void*) {
-  try {
-    HighsTaskExecutor::getThisWorkerDeque()->checkInterrupt();
-  } catch (const HighsTask::Interrupt&) {
-    return 1;
-  }
-  return 0;
-}
-
-ipx::Int ipxGlueUserInterrupt(void* ctx, ipx::Int ipm_iteration_count) {
-  HighsCallback* callback = static_cast<HighsCallback*>(ctx);
-  if (callback->user_callback && callback->active[kCallbackIpmInterrupt]) {
-    callback->clearHighsCallbackOutput();
-    callback->data_out.ipm_iteration_count = ipm_iteration_count;
-    if (callback->callbackAction(kCallbackIpmInterrupt, "IPM interrupt"))
-      return 1;
-  }
-  return 0;
-}
-
-double ipxGlueTimerRead(void* ctx) {
-  return static_cast<IpxGlueCtx*>(ctx)->timer.read();
-}
-
-RsMut<uint8_t> ipxGlueStatus(std::vector<HighsBasisStatus>& s) {
-  return {reinterpret_cast<uint8_t*>(s.data()), s.size()};
-}
-
-void ipxGlueResize(void* ctx, bool with_basis, RsIpxSolutionOut* out) {
-  IpxGlueCtx& c = *static_cast<IpxGlueCtx*>(ctx);
-  HighsSolution& s = c.solution;
-  s.col_value.resize(c.lp.num_col_);
-  s.row_value.resize(c.lp.num_row_);
-  s.col_dual.resize(c.lp.num_col_);
-  s.row_dual.resize(c.lp.num_row_);
-  if (with_basis) {
-    c.basis.col_status.resize(c.lp.num_col_);
-    c.basis.row_status.resize(c.lp.num_row_);
-  }
-  out->col_value = rsMut(s.col_value);
-  out->col_dual = rsMut(s.col_dual);
-  out->row_value = rsMut(s.row_value);
-  out->row_dual = rsMut(s.row_dual);
-  out->col_status = with_basis ? ipxGlueStatus(c.basis.col_status)
-                               : RsMut<uint8_t>{nullptr, 0};
-  out->row_status = with_basis ? ipxGlueStatus(c.basis.row_status)
-                               : RsMut<uint8_t>{nullptr, 0};
-}
 }  // namespace
 
 extern "C" {
-int highs_rs_solve_lp_ipx(const RsIpxHost* host);
 void* highs_rs_fill_in_ipx_data(const RsLp* lp);
 void highs_rs_ipx_data_get(void* d, RsIpxData* out);
 void highs_rs_ipx_data_free(void* d);
-}
-
-namespace {
-double ipxTimerRead(void* ctx) { return static_cast<HighsTimer*>(ctx)->read(); }
-
-void ipxOptions(const HighsOptions& options, RsIpxOptions& o) {
-  rsOptionsTemplate(options, 3, &o);
-}
-}  // namespace
-
-// The options, hooks and timer of solveLpIpx (the data are set by Rust):
-// ctx is the timer
-void rsIpxHostTemplate(const HighsOptions& options, HighsTimer& timer,
-                       HighsCallback& callback, void* out) {
-  RsIpxHost& h = *static_cast<RsIpxHost*>(out);
-  h = RsIpxHost{};
-  h.ctx = &timer;
-  h.timer_read = ipxTimerRead;
-  h.resize = nullptr;
-  h.hooks = {ipxGlueLog, ipxGluePrint, ipxGlueTaskInterrupt,
-             ipxGlueUserInterrupt, &callback};
-  ipxOptions(options, h.options);
-}
-
-HighsStatus solveLpIpx(const HighsOptions& options, HighsTimer& timer,
-                       const HighsLp& lp, HighsBasis& highs_basis,
-                       HighsSolution& highs_solution,
-                       HighsModelStatus& model_status, HighsInfo& highs_info,
-                       HighsCallback& callback) {
-  IpxGlueCtx ctx{lp, timer, highs_solution, highs_basis};
-  RsIpxHost h;
-  h.ctx = &ctx;
-  h.timer_read = ipxGlueTimerRead;
-  h.resize = ipxGlueResize;
-  h.hooks = {ipxGlueLog, ipxGluePrint, ipxGlueTaskInterrupt,
-             ipxGlueUserInterrupt, &callback};
-  h.lp = rsLp(lp);
-  ipxOptions(options, h.options);
-  h.info = static_cast<HighsInfoStruct*>(&highs_info);
-  h.model_status = reinterpret_cast<int*>(&model_status);
-  h.value_valid = &highs_solution.value_valid;
-  h.dual_valid = &highs_solution.dual_valid;
-  h.basis_valid = &highs_basis.valid;
-  h.basis_useful = &highs_basis.useful;
-  const int status = highs_rs_solve_lp_ipx(&h);
-  // A cancelled task: IPX stopped, rethrow as ipx::LpSolver::Solve does
-  if (status == 2) throw HighsTask::Interrupt();
-  return HighsStatus(status);
 }
 
 void fillInIpxData(const HighsLp& lp, ipx::Int& num_col, ipx::Int& num_row,

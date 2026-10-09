@@ -958,59 +958,6 @@ void HighsPrimalHeuristics::graphLNS(HighsMipWorker& worker,
                                     deep, maxLpIters);
 }
 
-HighsInt HighsPrimalHeuristics::crossover(HighsMipWorker& worker,
-                                          const std::vector<double>& other,
-                                          double otherObjective,
-                                          double timeCap) {
-  const highs_rs::MipData m = highs_rs::mipData(mipsolver);
-  return highs_rs::highs_rs_heur_crossover(rs_, highs_rs::mipFns(), &m,
-                                           &worker, other.data(), other.size(),
-                                           otherObjective, timeCap);
-}
-
-bool HighsPrimalHeuristics::tryRoundedPoint(HighsMipWorker& worker,
-                                            const std::vector<double>& point,
-                                            const int solution_source) {
-  const highs_rs::MipData m = highs_rs::mipData(mipsolver);
-  return highs_rs::highs_rs_heur_rounding(rs_, highs_rs::mipFns(), &m, &worker,
-                                          point.data(), nullptr, point.size(),
-                                          solution_source);
-}
-
-bool HighsPrimalHeuristics::linesearchRounding(
-    HighsMipWorker& worker, const std::vector<double>& point1,
-    const std::vector<double>& point2, const int solution_source) {
-  const highs_rs::MipData m = highs_rs::mipData(mipsolver);
-  return highs_rs::highs_rs_heur_rounding(rs_, highs_rs::mipFns(), &m, &worker,
-                                          point1.data(), point2.data(),
-                                          point1.size(), solution_source);
-}
-
-bool HighsPrimalHeuristics::addIncumbent(const std::vector<double>& sol,
-                                         double solobj,
-                                         const int solution_source,
-                                         HighsMipWorker& worker) {
-  if (mipsolver.mipdata_->parallelLockActive()) {
-    return worker.addIncumbent(sol, solobj, solution_source);
-  } else {
-    return mipsolver.mipdata_->addIncumbent(sol, solobj, solution_source);
-  }
-}
-
-bool HighsPrimalHeuristics::trySolution(const std::vector<double>& solution,
-                                        const int solution_source,
-                                        HighsMipWorker& worker) {
-  if (mipsolver.mipdata_->parallelLockActive()) {
-    return worker.trySolution(solution, solution_source);
-  } else {
-    return mipsolver.mipdata_->trySolution(solution, solution_source);
-  }
-}
-
-HighsInt HighsPrimalHeuristics::getHeuristicRandom(const HighsInt sup) {
-  return highs_rs::highs_rs_heur_random(rs_, sup);
-}
-
 void HighsPrimalHeuristics::flushStatistics(HighsMipSolver& mipsolver,
                                             HighsMipWorker& worker) {
   int64_t total_repair_lp;

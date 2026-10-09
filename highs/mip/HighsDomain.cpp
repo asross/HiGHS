@@ -3188,6 +3188,7 @@ double HighsDomain::getMinCutActivity(const HighsCutPool& cutpool,
   return -kHighsInf;
 }
 
+#ifndef HIGHS_RUST
 bool HighsDomain::isFixing(const HighsDomainChange& domchg) const {
   double otherbound = domchg.boundtype == HighsBoundType::kUpper
                           ? col_lower_[domchg.column]
@@ -3195,6 +3196,7 @@ bool HighsDomain::isFixing(const HighsDomainChange& domchg) const {
   return std::fabs(domchg.boundval - otherbound) <=
          mipsolver->mipdata_->epsilon;
 }
+#endif
 
 HighsDomainChange HighsDomain::flip(const HighsDomainChange& domchg) const {
   if (domchg.boundtype == HighsBoundType::kLower) {

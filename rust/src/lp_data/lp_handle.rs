@@ -108,15 +108,44 @@ struct LogHead {
     output_flag: *const bool,
     log_to_console: *const bool,
     log_dev_level: *const i32,
+    /// The log file, if any (null: none)
+    log_stream: *const *mut crate::io::log::File,
+}
+
+impl LogHead {
+    fn none() -> LogHead {
+        LogHead {
+            output_flag: std::ptr::null(),
+            log_to_console: std::ptr::null(),
+            log_dev_level: std::ptr::null(),
+            log_stream: std::ptr::null(),
+        }
+    }
+    fn of(f: &FactorLog) -> LogHead {
+        LogHead {
+            output_flag: &f.output_flag,
+            log_to_console: &f.log_to_console,
+            log_dev_level: &f.log_dev_level,
+            log_stream: &f.log_stream,
+        }
+    }
 }
 
 /// The factor's log flags: a copy of the options' made when the simplex
-/// NLA is set up (HFactor::setupGeneral)
-#[derive(Clone, Copy, Default)]
+/// NLA is set up (HFactor::setupGeneral), with the options' log file (as
+/// a C++ HighsLogOptions without callbacks)
+#[derive(Clone, Copy)]
 struct FactorLog {
     output_flag: bool,
     log_to_console: bool,
     log_dev_level: i32,
+    log_stream: *mut crate::io::log::File,
+}
+
+impl Default for FactorLog {
+    fn default() -> Self {
+        FactorLog { output_flag: false, log_to_console: true, log_dev_level: 0, log_stream: std::ptr::null_mut() }
+    }
 }
 
 const LOG_DETAILED: i32 = 2;
@@ -124,12 +153,13 @@ const LOG_VERBOSE: i32 = 3;
 const LOG_WARNING: i32 = 4;
 const LOG_ERROR: i32 = 5;
 
-/// highsLogUser / highsLogDev to the console only (io/log.rs without a
-/// log file or callbacks)
+/// highsLogUser / highsLogDev without callbacks (io/log.rs): to the log
+/// file, if any, and the console
 unsafe extern "C" fn handle_log(opts: *const c_void, dev: i32, t: i32, msg: *const u8, len: usize) {
     let o = &*(opts as *const LogHead);
     let dev = dev != 0;
-    if !*o.output_flag || !*o.log_to_console {
+    let stream = if o.log_stream.is_null() { std::ptr::null_mut() } else { *o.log_stream };
+    if !*o.output_flag || (!*o.log_to_console && stream.is_null()) {
         return;
     }
     let level = *o.log_dev_level;
@@ -145,8 +175,11 @@ unsafe extern "C" fn handle_log(opts: *const c_void, dev: i32, t: i32, msg: *con
         (false, LOG_ERROR) => b"ERROR:   ",
         _ => b"",
     };
-    crate::io::log::c_stdout(prefix);
-    crate::io::log::c_stdout_flush(m);
+    crate::io::log::to_log_file(stream, prefix, m);
+    if *o.log_to_console {
+        crate::io::log::c_stdout(prefix);
+        crate::io::log::c_stdout_flush(m);
+    }
 }
 
 fn log_of(head: &LogHead) -> Log {
@@ -192,6 +225,66 @@ pub struct Interrupt {
 // SAFETY: the flag is an atomic that outlives the solve
 unsafe impl Send for Interrupt {}
 
+// ---- The engine of a C++ Highs object
+
+/// What a handle that is a C++ Highs object's simplex engine (and its LP
+/// runs' solver) calls in C++: mirrored by RsLphHost in
+/// highs/lp_data/HighsLpHandle.h. The handle logs through the Highs
+/// object's log options (file and callbacks), reads its run clock and
+/// calls its user interrupt callbacks.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CHost {
+    /// The Highs object
+    pub ctx: *mut c_void,
+    /// Its options_.log_options (a C++ HighsLogOptions)
+    pub log_options: *const c_void,
+    /// timer_.read()
+    pub timer_read: unsafe extern "C" fn(*mut c_void) -> f64,
+    /// The simplex interrupt callback: with iteration_count < 0 whether it
+    /// is active, else whether the user interrupts (HEkk's bailout, with
+    /// its "User interrupt" dev log)
+    pub simplex_interrupt: unsafe extern "C" fn(*mut c_void, i32) -> bool,
+    /// The IPM interrupt callback (ipx::LpSolver's user interrupt hook)
+    pub ipm_interrupt: unsafe extern "C" fn(*mut c_void, crate::ipx::Int) -> crate::ipx::Int,
+}
+
+/// HighsSimplexStats (lp_data/HStruct.h)
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SimplexStats {
+    pub valid: bool,
+    pub iteration_count: i32,
+    pub num_invert: i32,
+    pub last_invert_num_el: i32,
+    pub last_factored_basis_num_el: i32,
+    pub col_aq_density: f64,
+    pub row_ep_density: f64,
+    pub row_ap_density: f64,
+    pub row_dse_density: f64,
+}
+
+const _: () = assert!(std::mem::size_of::<SimplexStats>() == 56);
+
+impl SimplexStats {
+    /// HighsSimplexStats::initialise
+    fn initialise(&mut self, iteration_count: i32) {
+        *self = SimplexStats { iteration_count: -iteration_count, ..SimplexStats::default() };
+    }
+}
+
+/// The simplex NLA's LP when it is a C++ LP (setNlaPointersForLpAndScale
+/// of a Highs object's model): its dimensions and the scale factors that
+/// apply, valid until the C++ LP changes
+#[derive(Clone, Copy)]
+struct NlaLp {
+    num_col: i32,
+    num_row: i32,
+    has_scale: bool,
+    col_scale: RsMut<f64>,
+    row_scale: RsMut<f64>,
+}
+
 // ---- What HEkk's C++ shell kept
 
 struct Shell {
@@ -200,14 +293,20 @@ struct Shell {
     app_factor_log: FactorLog,
     app_factor_head: LogHead,
     report: SimplexReport,
-    /// simplex_stats_ (only num_invert is read by the simplex)
-    num_invert: i32,
+    /// simplex_stats_ (the simplex counts num_invert)
+    stats: SimplexStats,
     factor_log: FactorLog,
     factor_head: LogHead,
     /// The simplex NLA's LP is the model (setNlaPointersForLpAndScale(model))
     /// with its scale factors if `nla_model_scale`
     nla_model: bool,
     nla_model_scale: bool,
+    /// The simplex NLA's LP is a C++ LP (a Highs object's model)
+    nla_cpp: Option<NlaLp>,
+    /// A Highs object's engine: what the API returns (hot_start_ and
+    /// primal_phase1_dual_), kept from the last solve that set them
+    hot_start: Option<crate::simplex::basis_records::HotStart>,
+    primal_phase1_dual: Vec<f64>,
 }
 
 fn zero_report() -> SimplexReport {
@@ -289,6 +388,11 @@ pub struct LpHandle {
     user_model: Option<Lp>,
     /// The variables with no pivot of the presolve's dependent equations
     dependent_ints: Vec<i32>,
+    /// A C++ Highs object's engine: its log, clock and callbacks
+    host: Option<CHost>,
+    /// A Highs object's run changed the model's matrix (the undualized
+    /// LP's, lpBack): C++ takes it back at the run's end
+    pub model_matrix_back: bool,
 }
 
 // SAFETY: a handle is used by one thread at a time (the race's IPX handle
@@ -323,25 +427,20 @@ impl LpHandle {
             presolve_status: super::run::PS_NOT_PRESOLVED,
             called_return: true,
             timer: Timer::default(),
-            head: LogHead { output_flag: std::ptr::null(), log_to_console: std::ptr::null(), log_dev_level: std::ptr::null() },
+            head: LogHead::none(),
             shell: Shell {
                 lp_name: Vec::new(),
-                app_factor_log: FactorLog { output_flag: false, log_to_console: true, log_dev_level: 0 },
-                app_factor_head: LogHead {
-                    output_flag: std::ptr::null(),
-                    log_to_console: std::ptr::null(),
-                    log_dev_level: std::ptr::null(),
-                },
+                app_factor_log: FactorLog::default(),
+                app_factor_head: LogHead::none(),
                 report: zero_report(),
-                num_invert: 0,
-                factor_log: FactorLog { output_flag: false, log_to_console: true, log_dev_level: 0 },
-                factor_head: LogHead {
-                    output_flag: std::ptr::null(),
-                    log_to_console: std::ptr::null(),
-                    log_dev_level: std::ptr::null(),
-                },
+                stats: SimplexStats::default(),
+                factor_log: FactorLog::default(),
+                factor_head: LogHead::none(),
                 nla_model: false,
                 nla_model_scale: false,
+                nla_cpp: None,
+                hot_start: None,
+                primal_phase1_dual: Vec::new(),
             },
             inf_cost: InfCostMods::default(),
             profiling: std::ptr::null_mut(),
@@ -350,21 +449,58 @@ impl LpHandle {
             user_basis: None,
             user_model: None,
             dependent_ints: Vec::new(),
+            host: None,
+            model_matrix_back: false,
         });
         h.run_data.invalidate();
         let o = &h.opts;
-        h.head = LogHead { output_flag: &o.output_flag, log_to_console: &o.log_to_console, log_dev_level: &o.log_dev_level };
-        let f = &h.shell.factor_log;
-        h.shell.factor_head =
-            LogHead { output_flag: &f.output_flag, log_to_console: &f.log_to_console, log_dev_level: &f.log_dev_level };
-        let f = &h.shell.app_factor_log;
-        h.shell.app_factor_head =
-            LogHead { output_flag: &f.output_flag, log_to_console: &f.log_to_console, log_dev_level: &f.log_dev_level };
+        h.head = LogHead {
+            output_flag: &o.output_flag,
+            log_to_console: &o.log_to_console,
+            log_dev_level: &o.log_dev_level,
+            log_stream: std::ptr::null(),
+        };
+        h.shell.factor_head = LogHead::of(&h.shell.factor_log);
+        h.shell.app_factor_head = LogHead::of(&h.shell.app_factor_log);
+        h
+    }
+
+    /// The engine of a C++ Highs object (HEkk's place in it)
+    pub fn new_host(host: CHost) -> Box<LpHandle> {
+        let mut h = LpHandle::new();
+        h.host = Some(host);
         h
     }
 
     pub fn log(&self) -> Log {
-        log_of(&self.head)
+        match &self.host {
+            Some(c) => Log { opts: c.log_options, log: Some(crate::io::log::highs_rs_log) },
+            None => log_of(&self.head),
+        }
+    }
+
+    /// A copy of the options' log flags (and the log file of a Highs
+    /// object's), as HFactor's log options are made
+    fn factor_log_copy(&self) -> FactorLog {
+        FactorLog {
+            output_flag: self.opts.output_flag,
+            log_to_console: self.opts.log_to_console,
+            log_dev_level: self.opts.log_dev_level,
+            // SAFETY: the Highs object's log options
+            log_stream: match &self.host {
+                Some(c) => unsafe { crate::io::log::log_options_stream(c.log_options) },
+                None => std::ptr::null_mut(),
+            },
+        }
+    }
+
+    /// The run clock (timer_.read() of a Highs object)
+    fn clock_read(&self) -> f64 {
+        match &self.host {
+            // SAFETY: the Highs object's timer
+            Some(c) => unsafe { (c.timer_read)(c.ctx) },
+            None => self.timer.read(0),
+        }
     }
 
     fn factor_log(&self) -> Log {
@@ -463,7 +599,7 @@ impl LpHandle {
         self.invalidate_solution();
         self.invalidate_basis();
         // invalidateEkk: HEkk::invalidate (and the simplex stats)
-        self.lps.invalidate();
+        self.ekk_invalidate();
     }
 
     /// Highs::clearDerivedModelProperties: the presolve data and the ray
@@ -477,8 +613,21 @@ impl LpHandle {
     /// HEkk::clear on the shell's side (clearCpp)
     fn clear_shell(&mut self) {
         self.shell.lp_name.clear();
+        self.clear_nla_lp();
+        self.shell.primal_phase1_dual.clear();
+    }
+
+    /// The simplex NLA has no LP of the shell (the model or a C++ LP)
+    fn clear_nla_lp(&mut self) {
         self.shell.nla_model = false;
         self.shell.nla_model_scale = false;
+        self.shell.nla_cpp = None;
+    }
+
+    /// HEkk::invalidate (and the simplex stats)
+    fn ekk_invalidate(&mut self) {
+        self.lps.invalidate();
+        self.shell.stats.initialise(0);
     }
 
     /// HEkk::clear
@@ -509,15 +658,38 @@ impl LpHandle {
         let s = &self.model.scale;
         self.shell.nla_model = true;
         self.shell.nla_model_scale = s.has_scaling && !self.model.is_scaled;
+        self.shell.nla_cpp = None;
         self.lps.set_nla_rust(false);
     }
 
-    /// HEkk::rsEnv: the option values, the simplex NLA's LP (the model)
-    /// and the host functions; the engine adds its own LP
+    /// HEkk::setNlaPointersForLpAndScale(lp) of a C++ LP (a Highs
+    /// object's model): its view's dimensions and scale factors
+    fn set_nla_cpp(&mut self, lp: &CLp) {
+        let has_scale = lp.scale_has_scaling && !lp.is_scaled;
+        let none = RsMut { ptr: std::ptr::null_mut(), len: 0 };
+        self.shell.nla_model = false;
+        self.shell.nla_model_scale = false;
+        self.shell.nla_cpp = Some(NlaLp {
+            num_col: lp.num_col,
+            num_row: lp.num_row,
+            has_scale,
+            col_scale: if has_scale { lp.scale_col } else { none },
+            row_scale: if has_scale { lp.scale_row } else { none },
+        });
+        self.lps.set_nla_rust(false);
+    }
+
+    /// HEkk::rsEnv: the option values, the simplex NLA's LP (the model or
+    /// a C++ LP) and the host functions; the engine adds its own LP
     fn env(&mut self) -> LpsEnv {
         let none = RsMut { ptr: std::ptr::null_mut(), len: 0 };
         let nla = self.lps.sh.nla_lp_set && self.shell.nla_model;
         let has_scale = nla && self.shell.nla_model_scale;
+        let interrupt_callback = match &self.host {
+            // SAFETY: the Highs object's callback
+            Some(c) => unsafe { (c.simplex_interrupt)(c.ctx, -1) },
+            None => self.interrupt.is_some_and(|i| i.simplex),
+        };
         let m = &mut self.model;
         let mut env = LpsEnv {
             lp: m.view(),
@@ -536,10 +708,17 @@ impl LpHandle {
                 chuzc_fail: host_chuzc_fail,
             },
             report: &mut self.shell.report,
-            num_invert: &mut self.shell.num_invert,
+            num_invert: &mut self.shell.stats.num_invert,
             num_threads: num_threads(),
-            interrupt_callback: self.interrupt.is_some_and(|i| i.simplex),
+            interrupt_callback,
         };
+        if let (true, Some(c)) = (self.lps.sh.nla_lp_set, self.shell.nla_cpp) {
+            env.nla_num_col = c.num_col;
+            env.nla_num_row = c.num_row;
+            env.nla_has_scale = c.has_scale;
+            env.nla_col_scale = c.col_scale;
+            env.nla_row_scale = c.row_scale;
+        }
         env.lp = self.lps.lp.view();
         env
     }
@@ -550,8 +729,7 @@ impl LpHandle {
         let env = self.env();
         let env = self.lps.env_of(&env);
         if self.lps.move_lp(&env) {
-            self.shell.nla_model = false;
-            self.shell.nla_model_scale = false;
+            self.clear_nla_lp();
         }
     }
 
@@ -573,25 +751,42 @@ impl LpHandle {
         r.row_dse_density = 0.0;
         // snapshotFactorLog: the solve sets up the simplex NLA for its LP
         if !self.lps.sh.status.has_nla {
-            self.shell.factor_log = FactorLog {
-                output_flag: self.opts.output_flag,
-                log_to_console: self.opts.log_to_console,
-                log_dev_level: self.opts.log_dev_level,
-            };
+            self.shell.factor_log = self.factor_log_copy();
         }
         // setNlaEngineLp
-        self.shell.nla_model = false;
-        self.shell.nla_model_scale = false;
+        self.clear_nla_lp();
         self.lps.set_nla_rust(true);
         let env = self.env();
         let env = self.lps.env_of(&env);
         let out = self.lps.solve(&env, force_phase2);
-        // takeRustOut: the hot start and primal phase 1 duals are only
-        // the API's
-        self.lps.records.out = Default::default();
+        self.take_rust_out();
         // returnFromEkkSolve
         self.lps.return_from_ekk_solve();
+        let st = &mut self.shell.stats;
+        st.valid = true;
+        st.iteration_count += self.lps.sh.iteration_count;
+        st.last_invert_num_el = out.invert_num_el;
+        st.last_factored_basis_num_el = out.basis_matrix_num_el;
+        let r = &self.shell.report;
+        st.col_aq_density = r.col_aq_density;
+        st.row_ep_density = r.row_ep_density;
+        st.row_ap_density = r.row_ap_density;
+        st.row_dse_density = r.row_dse_density;
         out.status as i64
+    }
+
+    /// HEkk::takeRustOut: the hot start and primal phase 1 duals that a
+    /// solve or INVERT left are only the API's (a Highs object's)
+    fn take_rust_out(&mut self) {
+        let rec = std::mem::take(&mut self.lps.records.out);
+        if self.host.is_some() {
+            if rec.hot_start.is_some() {
+                self.shell.hot_start = rec.hot_start;
+            }
+            if let Some(d) = rec.primal_phase1_dual {
+                self.shell.primal_phase1_dual = d;
+            }
+        }
     }
 
     /// A step of solveLpSimplex on the shell (app.rs ops): code, the
@@ -605,7 +800,7 @@ impl LpHandle {
             }
             // initialiseSimplexStats
             3 => {
-                self.shell.num_invert = 0;
+                self.shell.stats.initialise(self.lps.sh.iteration_count);
                 0
             }
             4 => {
@@ -635,6 +830,7 @@ impl LpHandle {
                 m.is_scaled = e.is_scaled;
                 if arg != 0 {
                     m.a.clone_from(&e.a);
+                    self.model_matrix_back = true;
                 }
                 0
             }
@@ -1190,7 +1386,7 @@ impl LpHandle {
             return 0;
         }
         if is!(EkkInvalidate) {
-            self.lps.invalidate();
+            self.ekk_invalidate();
             return 0;
         }
         if is!(EkkPivotThreshold) {
@@ -1376,8 +1572,8 @@ impl LpHandle {
         }
         // lp_run.rs
         if is!(LpRustBegin) {
-            // SAFETY: the run's engine pointer
-            unsafe { *(p as *mut *mut LpSolver) = &mut *self.lps };
+            // SAFETY: the run's handle pointer
+            unsafe { *(p as *mut *mut LpHandle) = self };
             return 0;
         }
         if is!(LpRustEnd) {
@@ -1470,9 +1666,9 @@ impl LpHandle {
         }
         if is!(DependentEquations) {
             let mut ints = std::mem::take(&mut self.dependent_ints);
-            let timer = &self.timer;
+            let me = &*self;
             // SAFETY: the run's DependentEquations
-            unsafe { super::lp_presolve::dependent_equations(p, &mut ints, || timer.read(0)) };
+            unsafe { super::lp_presolve::dependent_equations(p, &mut ints, || me.clock_read()) };
             self.dependent_ints = ints;
             return 0;
         }
@@ -1538,14 +1734,29 @@ impl LpHandle {
 
     /// formSimplexLpBasisAndFactor of an alien basis on the model
     fn form_basis(&mut self, basis: &mut Basis) -> Status {
-        let lp_options = self.opts.lp_options(self.log());
-        let mut ctx = FormCtx { h: self as *mut LpHandle, basis: basis as *mut Basis };
-        // the factor's log: a copy of the options' log flags
-        self.shell.app_factor_log = FactorLog {
-            output_flag: self.opts.output_flag,
-            log_to_console: self.opts.log_to_console,
-            log_dev_level: self.opts.log_dev_level,
+        let b = FormBasis {
+            valid: basis.b.valid,
+            useful: basis.b.useful,
+            alien: &mut basis.b.alien,
+            col_status: rm(&mut basis.b.col_status),
+            row_status: rm(&mut basis.b.row_status),
+            debug_id: basis.b.debug_id,
+            debug_update_count: basis.b.debug_update_count,
+            origin: RsMut { ptr: basis.origin.as_ptr() as *mut u8, len: basis.origin.len() },
         };
+        // SAFETY: the views are of the basis, which outlives the call
+        unsafe { self.form_basis_of(b, false) }
+    }
+
+    /// formSimplexLpBasisAndFactor on the model with a basis' views
+    ///
+    /// # Safety
+    /// The views valid for the call
+    unsafe fn form_basis_of(&mut self, b: FormBasis, only_from_known_basis: bool) -> Status {
+        let lp_options = self.opts.lp_options(self.log());
+        let mut ctx = FormCtx { h: self as *mut LpHandle, b };
+        // the factor's log: a copy of the options' log flags
+        self.shell.app_factor_log = self.factor_log_copy();
         let (log, factor_log) = (self.log(), log_of(&self.shell.app_factor_head));
         let m = &mut self.model;
         let host = super::form_basis::CFormHost {
@@ -1557,14 +1768,13 @@ impl LpHandle {
             incumbent: m.view(),
             model_name: rm(&mut m.model_name),
             lp_options,
-            basis_valid: basis.b.valid,
-            basis_useful: basis.b.useful,
-            basis_alien: &mut basis.b.alien,
-            col_status: rm(&mut basis.b.col_status),
-            row_status: rm(&mut basis.b.row_status),
+            basis_valid: b.valid,
+            basis_useful: b.useful,
+            basis_alien: b.alien,
+            col_status: b.col_status,
+            row_status: b.row_status,
         };
-        // SAFETY: the host's views are of this handle and the basis
-        unsafe { super::form_basis::form_simplex_lp_basis_and_factor(&host, false) }
+        super::form_basis::form_simplex_lp_basis_and_factor(&host, only_from_known_basis)
     }
 
     /// solveLpSimplex's options and logs (rsSimplexAppTemplate), the model
@@ -1572,14 +1782,11 @@ impl LpHandle {
     fn simplex_template(&mut self) -> CSimplexApp {
         let lp_options = self.opts.lp_options(self.log());
         // The factor's log: a copy of the options' log flags
-        self.shell.app_factor_log = FactorLog {
-            output_flag: self.opts.output_flag,
-            log_to_console: self.opts.log_to_console,
-            log_dev_level: self.opts.log_dev_level,
-        };
+        self.shell.app_factor_log = self.factor_log_copy();
+        let log = self.log();
         let m = &mut self.model;
         CSimplexApp {
-            log: log_of(&self.head),
+            log,
             factor_log: log_of(&self.shell.app_factor_head),
             ctx: std::ptr::null_mut(),
             op: no_app_op,
@@ -1615,13 +1822,20 @@ impl LpHandle {
     /// solveLpIpx's options, hooks and timer (rsIpxHostTemplate)
     fn ipx_template(&mut self) -> CIpxHost {
         let log = self.log();
-        let options = self.opts.ipx(log, &self.head as *const LogHead as *const c_void);
+        // IPX logs through the log options it is given: a Highs object's
+        // (highsLogUser) or this handle's
+        let (log_options, ipx_log_fn): (*const c_void, unsafe extern "C" fn(*const c_void, *const c_char)) =
+            match &self.host {
+                Some(c) => (c.log_options, ipx_log_cpp),
+                None => (&self.head as *const LogHead as *const c_void, ipx_log),
+            };
+        let options = self.opts.ipx(log, log_options);
         CIpxHost {
             ctx: self as *mut LpHandle as *mut c_void,
             timer_read: ipx_timer_read,
             resize: no_resize,
             hooks: crate::ipx::Hooks {
-                log: Some(ipx_log),
+                log: Some(ipx_log_fn),
                 print: Some(ipx_print),
                 task_interrupt: Some(ipx_task_interrupt),
                 user_interrupt: Some(ipx_user_interrupt),
@@ -1742,9 +1956,25 @@ impl IfaceHost for Iface {
 
 // ---- formSimplexLpBasisAndFactor's host
 
+/// The views of a basis that formSimplexLpBasisAndFactor reads and
+/// changes (a Rust Basis or a C++ HighsBasis): mirrored by RsFormBasis in
+/// highs/lp_data/HighsLpHandle.h
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FormBasis {
+    valid: bool,
+    useful: bool,
+    alien: *mut bool,
+    col_status: RsMut<u8>,
+    row_status: RsMut<u8>,
+    debug_id: i32,
+    debug_update_count: i32,
+    origin: RsMut<u8>,
+}
+
 struct FormCtx {
     h: *mut LpHandle,
-    basis: *mut Basis,
+    b: FormBasis,
 }
 
 unsafe extern "C" fn form_op(ctx: *mut c_void, code: i32, arg: i32, _out: *mut c_void) -> i32 {
@@ -1758,25 +1988,34 @@ unsafe extern "C" fn form_op(ctx: *mut c_void, code: i32, arg: i32, _out: *mut c
         }
         // HEkk::setBasis(basis)
         6 => {
-            let b = &*c.basis;
+            let b = c.b;
             let env = h.env();
             let env = h.lps.env_of(&env);
             let (nc, nr) = (env.lp.num_col as usize, env.lp.num_row as usize);
-            h.lps.set_basis(
-                &env,
-                &b.b.col_status[..nc],
-                &b.b.row_status[..nr],
-                b.b.debug_id,
-                b.b.debug_update_count,
-                &b.origin,
-            );
+            let col = std::slice::from_raw_parts(b.col_status.ptr, b.col_status.len);
+            let row = std::slice::from_raw_parts(b.row_status.ptr, b.row_status.len);
+            let origin = String::from_utf8_lossy(if b.origin.len == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(b.origin.ptr, b.origin.len)
+            })
+            .into_owned();
+            h.lps.set_basis(&env, &col[..nc], &row[..nr], b.debug_id, b.debug_update_count, &origin);
             0
         }
         // HEkk::initialiseSimplexLpBasisAndFactor(arg)
         7 => {
+            // snapshotFactorLog and setNlaEngineLp
+            if !h.lps.sh.status.has_nla {
+                h.shell.factor_log = h.factor_log_copy();
+            }
+            h.clear_nla_lp();
+            h.lps.set_nla_rust(true);
             let env = h.env();
             let env = h.lps.env_of(&env);
-            h.lps.initialise_simplex_lp_basis_and_factor(&env, arg != 0)
+            let s = h.lps.initialise_simplex_lp_basis_and_factor(&env, arg != 0);
+            h.take_rust_out();
+            s
         }
         // The model takes the engine LP's scale
         8 => {
@@ -1788,6 +2027,9 @@ unsafe extern "C" fn form_op(ctx: *mut c_void, code: i32, arg: i32, _out: *mut c
 }
 
 // ---- The host functions of the run, the simplex and IPX
+
+/// The run's op on a handle (its context)
+pub(super) const HANDLE_OP: unsafe extern "C" fn(*mut c_void, i32, i64, *mut c_void, *const u8, usize) -> i64 = handle_op;
 
 unsafe extern "C" fn handle_op(ctx: *mut c_void, op: i32, arg: i64, p: *mut c_void, msg: *const u8, len: usize) -> i64 {
     let h = &mut *(ctx as *mut LpHandle);
@@ -1850,12 +2092,17 @@ extern "C" fn host_log(ctx: *mut c_void, channel: i32, t: i32, msg: *const c_cha
 }
 
 extern "C" fn host_timer_read(ctx: *mut c_void) -> f64 {
-    handle_of(ctx).timer.read(0)
+    handle_of(ctx).clock_read()
 }
 
-/// The user interrupt of HEkk::bailout: the race's flag
+/// The user interrupt of HEkk::bailout: the race's flag, or a Highs
+/// object's simplex interrupt callback
 extern "C" fn host_interrupt(ctx: *mut c_void) -> bool {
     let h = handle_of(ctx);
+    if let Some(c) = &h.host {
+        // SAFETY: the Highs object's callback
+        return unsafe { (c.simplex_interrupt)(c.ctx, h.lps.sh.iteration_count) };
+    }
     let Some(i) = h.interrupt.filter(|i| i.simplex) else { return false };
     // SAFETY: the flag outlives the solve
     if unsafe { (*i.flag).load(Ordering::Relaxed) } == 2 {
@@ -1916,12 +2163,18 @@ extern "C" fn host_chuzc_fail(
 }
 
 unsafe extern "C" fn ipx_timer_read(ctx: *mut c_void) -> f64 {
-    handle_of(ctx).timer.read(0)
+    handle_of(ctx).clock_read()
 }
 
 /// IPX's log hook: highsLogUser(kInfo, "%s", msg) on the handle's log
 unsafe extern "C" fn ipx_log(log_options: *const c_void, msg: *const c_char) {
     let log = Log { opts: log_options, log: Some(handle_log) };
+    log.user(LogType::Info, &CStr::from_ptr(msg).to_string_lossy());
+}
+
+/// IPX's log hook on a Highs object's log options
+unsafe extern "C" fn ipx_log_cpp(log_options: *const c_void, msg: *const c_char) {
+    let log = Log { opts: log_options, log: Some(crate::io::log::highs_rs_log) };
     log.user(LogType::Info, &CStr::from_ptr(msg).to_string_lossy());
 }
 
@@ -1935,9 +2188,13 @@ unsafe extern "C" fn ipx_task_interrupt(_: *mut c_void) -> crate::ipx::Int {
     (!d.is_null() && (*d).check_interrupt()) as crate::ipx::Int
 }
 
-/// The IPM interrupt of the race
-unsafe extern "C" fn ipx_user_interrupt(ctx: *mut c_void, _iter: crate::ipx::Int) -> crate::ipx::Int {
+/// The IPM interrupt of the race, or a Highs object's IPM interrupt
+/// callback
+unsafe extern "C" fn ipx_user_interrupt(ctx: *mut c_void, iter: crate::ipx::Int) -> crate::ipx::Int {
     let h = handle_of(ctx);
+    if let Some(c) = &h.host {
+        return (c.ipm_interrupt)(c.ctx, iter);
+    }
     match h.interrupt {
         Some(i) if i.ipm => ((*i.flag).load(Ordering::Relaxed) != 0) as crate::ipx::Int,
         _ => 0,
@@ -2024,6 +2281,7 @@ impl Default for Box<LpHandle> {
 
 /// The C++ interface of a handle (HighsLpRelaxation.h)
 pub mod ffi {
+    use super::super::options::COptionRecord;
     use super::*;
     use crate::ffi::{sl, sl_mut, CHVec};
 
@@ -2457,6 +2715,217 @@ pub mod ffi {
     #[no_mangle]
     pub extern "C" fn highs_rs_lph_ipm_basis(p: *mut LpHandle, use_presolve: bool, profiling: *mut c_void) {
         h(p).ipm_basis_after_iteration_limit(use_presolve, profiling);
+    }
+
+    // ---- The engine of a C++ Highs object (highs/lp_data/HighsLpHandle.h)
+
+    /// A handle that is a Highs object's simplex engine
+    ///
+    /// # Safety
+    /// The host's context and functions live as long as the handle
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_new_host(host: *const CHost) -> *mut LpHandle {
+        Box::into_raw(LpHandle::new_host(*host))
+    }
+
+    /// The simplex engine (for the calls that need no environment)
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_lps(p: *mut LpHandle) -> *mut LpSolver {
+        &mut *h(p).lps
+    }
+
+    /// The option values from the Highs object's records
+    ///
+    /// # Safety
+    /// The records' views valid
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_sync_options(p: *mut LpHandle, recs: *const COptionRecord, n: usize) {
+        let recs = if n == 0 { &[][..] } else { std::slice::from_raw_parts(recs, n) };
+        h(p).opts.sync(recs);
+    }
+
+    /// The model is a copy of the Highs object's LP (a run on the handle,
+    /// or a basis formed for it)
+    ///
+    /// # Safety
+    /// The view's arrays valid
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_import_model(p: *mut LpHandle, lp: *const CLp, name: *const u8, len: usize) {
+        let h = h(p);
+        h.model.import(&*lp, sl(name, len as i32));
+        h.model_matrix_back = false;
+    }
+
+    /// Whether the run rebuilt the model's matrix (an undualized LP's),
+    /// which the Highs object takes back with the scale factors
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_take_matrix_back(p: *mut LpHandle) -> bool {
+        std::mem::take(&mut h(p).model_matrix_back)
+    }
+
+    /// HEkk::clear
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_ekk_clear(p: *mut LpHandle) {
+        h(p).ekk_clear();
+    }
+
+    /// HEkk::invalidate
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_ekk_invalidate(p: *mut LpHandle) {
+        h(p).ekk_invalidate();
+    }
+
+    /// HEkk::updateStatus(action)
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_update_status(p: *mut LpHandle, action: i32) {
+        let h = h(p);
+        if h.lps.update_status(action) {
+            h.clear_shell();
+        }
+    }
+
+    /// What HEkk::clear clears of the shell
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_clear_shell(p: *mut LpHandle) {
+        h(p).clear_shell();
+    }
+
+    /// HEkk::lp_name_
+    ///
+    /// # Safety
+    /// `len` bytes
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_set_lp_name(p: *mut LpHandle, name: *const u8, len: usize) {
+        let n = &mut h(p).shell.lp_name;
+        n.clear();
+        n.extend_from_slice(sl(name, len as i32));
+    }
+
+    /// HEkk::setNlaPointersForLpAndScale(lp) of a C++ LP
+    ///
+    /// # Safety
+    /// The view's scale vectors valid until the next call that sets the
+    /// NLA's LP or solves with it
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_set_nla_lp(p: *mut LpHandle, lp: *const CLp) {
+        h(p).set_nla_cpp(&*lp);
+    }
+
+    /// HEkk::btran (transposed) / ftran, with the simplex NLA's LP set to
+    /// `lp` first unless it is null
+    ///
+    /// # Safety
+    /// A valid HVector view; `lp` as for highs_rs_lph_set_nla_lp
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_nla_solve(
+        p: *mut LpHandle,
+        lp: *const CLp,
+        rhs: *mut CHVec,
+        expected_density: f64,
+        transposed: bool,
+    ) {
+        let h = h(p);
+        if !lp.is_null() {
+            h.set_nla_cpp(&*lp);
+        }
+        let env = h.env();
+        let env = h.lps.env_of(&env);
+        h.lps.nla_solve(&env, &mut *rhs, expected_density, transposed);
+    }
+
+    /// HEkk::computeBasisCondition(lp, exact, report)
+    ///
+    /// # Safety
+    /// The view and name valid
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_basis_condition(
+        p: *mut LpHandle,
+        lp: *const CLp,
+        name: *const u8,
+        len: usize,
+        exact: bool,
+        report: bool,
+    ) -> f64 {
+        let h = h(p);
+        let env = h.env();
+        let env = h.lps.env_of(&env);
+        let name = String::from_utf8_lossy(sl(name, len as i32)).into_owned();
+        h.lps.compute_basis_condition(&env, &*lp, &name, exact, report)
+    }
+
+    /// -1 without a simplex NLA, else HEkk::lpFactorRowCompatible
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_factor_row_compatible(p: *mut LpHandle, expected_num_row: i32) -> i32 {
+        let h = h(p);
+        if !h.lps.sh.status.has_nla {
+            return -1;
+        }
+        let env = h.env();
+        let env = h.lps.env_of(&env);
+        h.lps.lp_factor_row_compatible(&env, expected_num_row) as i32
+    }
+
+    /// formSimplexLpBasisAndFactor of a basis for the model (imported
+    /// first): the basis' views are changed in place
+    ///
+    /// # Safety
+    /// The views valid for the call
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_form_basis(p: *mut LpHandle, b: *const FormBasis, only_from_known_basis: bool) -> i32 {
+        h(p).form_basis_of(*b, only_from_known_basis) as i32
+    }
+
+    /// HEkk::simplex_stats_
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_simplex_stats(p: *mut LpHandle) -> *mut SimplexStats {
+        &mut h(p).shell.stats
+    }
+
+    /// HEkk::initialiseSimplexStats
+    #[no_mangle]
+    pub extern "C" fn highs_rs_lph_initialise_simplex_stats(p: *mut LpHandle) {
+        let h = h(p);
+        h.shell.stats.initialise(h.lps.sh.iteration_count);
+    }
+
+    /// HEkk::hot_start_: false if no solve or INVERT set it
+    ///
+    /// # Safety
+    /// The outputs writable; the pointers valid until the next solve
+    #[no_mangle]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe extern "C" fn highs_rs_lph_hot_start(
+        p: *mut LpHandle,
+        refactor_use: *mut bool,
+        pivot_row: *mut *const i32,
+        pivot_var: *mut *const i32,
+        pivot_type: *mut *const i8,
+        num_pivot: *mut i32,
+        build_synthetic_tick: *mut f64,
+        nonbasic_move: *mut *const i8,
+        num_tot: *mut i32,
+    ) -> bool {
+        let Some(s) = &h(p).shell.hot_start else { return false };
+        *refactor_use = s.refactor_use;
+        *pivot_row = s.pivot_row.as_ptr();
+        *pivot_var = s.pivot_var.as_ptr();
+        *pivot_type = s.pivot_type.as_ptr();
+        *num_pivot = s.pivot_row.len().min(s.pivot_var.len()).min(s.pivot_type.len()) as i32;
+        *build_synthetic_tick = s.build_synthetic_tick;
+        *nonbasic_move = s.nonbasic_move.as_ptr();
+        *num_tot = s.nonbasic_move.len() as i32;
+        true
+    }
+
+    /// HEkk::primal_phase1_dual_
+    ///
+    /// # Safety
+    /// `n` writable; the values valid until the next solve
+    #[no_mangle]
+    pub unsafe extern "C" fn highs_rs_lph_primal_phase1_dual(p: *mut LpHandle, n: *mut usize) -> *const f64 {
+        let d = &h(p).shell.primal_phase1_dual;
+        *n = d.len();
+        d.as_ptr()
     }
 }
 

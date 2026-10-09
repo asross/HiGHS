@@ -1629,7 +1629,7 @@ struct HighsIfaceRust {
     basis = rsBasisVec(h.basis_);
     call.ctx = this;
     call.op = op;
-    call.lps = h.ekk_instance_.rs_;
+    call.lps = h.ekk_instance_.lps;
     call.lp = &lp;
     call.basis = &basis;
     const HighsOptions& o = h.options_;
@@ -1687,7 +1687,7 @@ struct HighsIfaceRust {
         h.ekk_instance_.setNlaPointersForLpAndScale(lp);
         return 0;
       case 7:
-        h.ekk_instance_.clearShell();
+        highs_rs::highs_rs_lph_clear_shell(h.ekk_instance_.p);
         return 0;
       case 8:
         if (h.model_.hessian_.dim_) completeHessian(arg, h.model_.hessian_);
@@ -1889,15 +1889,23 @@ HighsStatus Highs::getBasicVariablesInterface(HighsInt* basic_variables) {
   if (!ekk_status.has_invert) {
     // The LP has no invert to use, so have to set one up, but only
     // for the current basis, so return_value is the rank deficiency.
+    const bool only_from_known_basis = true;
+#ifdef HIGHS_RUST
+    return_status = interpretCallStatus(
+        options_.log_options,
+        rsFormBasis(ekk_instance_, options_, lp, basis_,
+                    only_from_known_basis),
+        return_status, "formSimplexLpBasisAndFactor");
+#else
     HighsLpSolverObject solver_object(lp, basis_, solution_, info_,
                                       ekk_instance_, callback_, options_,
                                       timer_);
     solver_object.setProfiling(this->profiling_);
-    const bool only_from_known_basis = true;
     return_status = interpretCallStatus(
         options_.log_options,
         formSimplexLpBasisAndFactor(solver_object, only_from_known_basis),
         return_status, "formSimplexLpBasisAndFactor");
+#endif
     if (return_status != HighsStatus::kOk) return return_status;
   }
   assert(ekk_status.has_invert);
@@ -2269,11 +2277,17 @@ HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
 #endif
 
 HighsStatus Highs::getRangingInterface() {
+#ifdef HIGHS_RUST
+  return getRangingData(this->ranging_, ekk_instance_, options_, model_.lp_,
+                        basis_, solution_, model_status_,
+                        info_.objective_function_value);
+#else
   HighsLpSolverObject solver_object(model_.lp_, basis_, solution_, info_,
                                     ekk_instance_, callback_, options_, timer_);
   solver_object.setProfiling(this->profiling_);
   solver_object.model_status_ = model_status_;
   return getRangingData(this->ranging_, solver_object);
+#endif
 }
 
 #ifndef HIGHS_RUST

@@ -11,6 +11,9 @@
 #ifndef MIP_MIPTIMER_H_
 #define MIP_MIPTIMER_H_
 
+#include "lp_data/HConst.h"
+#include "lp_data/HighsAnalysis.h"
+
 // Clocks for profiling the MIP solver
 enum iClockMip : int {
   kMipClockTotal = 0,

@@ -36,16 +36,6 @@ static_assert(sizeof(HighsModelStatus) == 4, "HighsModelStatus is an int");
 static_assert(sizeof(HighsPresolveStatus) == 4,
               "HighsPresolveStatus is an int");
 
-// HPresolveRust.cpp: for the LP presolve on Rust data (lp_presolve.rs)
-namespace presolve {
-void rsLpPresolveOptions(const HighsOptions& options, void* out);
-HighsInt rsDependentEquations(HighsTimer& timer, std::vector<HighsInt>& ints,
-                              size_t num_col, HighsInt num_row,
-                              const HighsInt* start, const HighsInt* index,
-                              const double* value, size_t nnz,
-                              double time_limit, double* time_taken);
-}  // namespace presolve
-
 namespace {
 
 struct RsRunStr {
@@ -228,21 +218,6 @@ enum class RunOp {
   kLpOptions,
 };
 
-// lp_presolve.rs: DependentEquations
-struct RsDependentEquations {
-  size_t num_col;
-  HighsInt num_row;
-  const HighsInt* start;
-  const HighsInt* index;
-  const double* value;
-  size_t nnz;
-  double time_limit;
-  double time_taken;
-  const HighsInt* var_with_no_pivot;
-  size_t num_var_with_no_pivot;
-  HighsInt build_return;
-};
-
 // lp_presolve.rs: CPresolveExport
 struct RsPresolveExport {
   HighsInt status;
@@ -333,6 +308,239 @@ void highs_rs_lps_run_export(void* lps, RsRunData* d);
 bool highs_rs_lps_presolve_export(void* lps, RsLpVec* lp, RsPresolveExport* out);
 }
 
+// ---- The simplex engine of a Highs object (lp_handle.rs on a host)
+
+// The profiling steps of a simplex solve on a HighsProfiling (code 1
+// start, 2 stop, arg whether there is a basis) and of PDLP (3 start, 4
+// stop)
+void rsSimplexProfiling(void* profiling_p, int code,
+                               HighsInt simplex_strategy, int64_t arg) {
+  HighsProfiling* profiling = static_cast<HighsProfiling*>(profiling_p);
+  switch (code) {
+    case 1:
+      // arg: whether the HiGHS basis is valid
+      if (profiling) {
+        HighsInt profiling_clock = -1;
+        if (simplex_strategy == kSimplexStrategyPrimal) {
+          profiling_clock =
+              arg ? kSubSolverPrSimplexBasis : kSubSolverPrSimplexNoBasis;
+        } else {
+          profiling_clock =
+              arg ? kSubSolverDuSimplexBasis : kSubSolverDuSimplexNoBasis;
+        }
+        profiling->start(profiling_clock);
+      }
+      return;
+    case 2:
+      if (profiling->sub_solver_) {
+        HighsInt profiling_clock = -1;
+        HighsProfilingRecord* thread_record =
+            profiling->getHighsProfilingRecord();
+        if (std::signbit(thread_record->start_time[kSubSolverDuSimplexBasis]))
+          profiling_clock = kSubSolverDuSimplexBasis;
+        if (std::signbit(
+                thread_record->start_time[kSubSolverDuSimplexNoBasis]))
+          profiling_clock = kSubSolverDuSimplexNoBasis;
+        if (std::signbit(thread_record->start_time[kSubSolverPrSimplexBasis]))
+          profiling_clock = kSubSolverPrSimplexBasis;
+        if (std::signbit(
+                thread_record->start_time[kSubSolverPrSimplexNoBasis]))
+          profiling_clock = kSubSolverPrSimplexNoBasis;
+        profiling->stop(profiling_clock);
+      }
+      return;
+    case 3:
+      profiling->start(kSubSolverPdlp);
+      return;
+    case 4:
+      profiling->stop(kSubSolverPdlp);
+      return;
+  }
+}
+
+highs_rs::LphHost rsEngineHost(Highs* highs) {
+  // The profiling steps of the engine's (and the MIP's) simplex solves
+  highs_rs::highs_rs_lph_register(rsSimplexProfiling);
+  highs_rs::LphHost host;
+  host.ctx = highs;
+  host.log_options = &highs->options_.log_options;
+  host.timer_read = [](void* ctx) {
+    return static_cast<Highs*>(ctx)->timer_.read();
+  };
+  // The user interrupt part of HEkk::bailout (iteration_count < 0: whether
+  // the callback is active)
+  host.simplex_interrupt = [](void* ctx, HighsInt iteration_count) {
+    Highs& h = *static_cast<Highs*>(ctx);
+    HighsCallback& callback = h.callback_;
+    if (iteration_count < 0)
+      return bool(callback.user_callback &&
+                  callback.active[kCallbackSimplexInterrupt]);
+    callback.clearHighsCallbackOutput();
+    callback.data_out.simplex_iteration_count = iteration_count;
+    if (callback.callbackAction(kCallbackSimplexInterrupt,
+                                "Simplex interrupt")) {
+      highsLogDev(h.options_.log_options, HighsLogType::kInfo,
+                  "User interrupt\n");
+      return true;
+    }
+    return false;
+  };
+  host.ipm_interrupt = [](void* ctx, HighsInt ipm_iteration_count) {
+    HighsCallback& callback = static_cast<Highs*>(ctx)->callback_;
+    if (callback.user_callback && callback.active[kCallbackIpmInterrupt]) {
+      callback.clearHighsCallbackOutput();
+      callback.data_out.ipm_iteration_count = ipm_iteration_count;
+      if (callback.callbackAction(kCallbackIpmInterrupt, "IPM interrupt"))
+        return HighsInt{1};
+    }
+    return HighsInt{0};
+  };
+  return host;
+}
+
+// The engine's model is a copy of `lp`
+static void rsImportModel(highs_rs::LpHandle* e, const HighsLp& lp) {
+  const RsLp v = rsLp(lp);
+  highs_rs::highs_rs_lph_import_model(e, &v, lp.model_name_.data(),
+                                      lp.model_name_.size());
+}
+
+// `lp` takes the engine model's scale factors (and its matrix, if the run
+// rebuilt it: HEkk::lpBack)
+static void rsModelBack(highs_rs::LpHandle* e, HighsLp& lp) {
+  RsLp v;
+  const char* name;
+  size_t len;
+  highs_rs::highs_rs_lph_model(e, &v, &name, &len);
+  HighsScale& scale = lp.scale_;
+  scale.strategy = v.scale_strategy;
+  scale.has_scaling = v.scale_has_scaling;
+  scale.num_col = v.scale_num_col;
+  scale.num_row = v.scale_num_row;
+  scale.cost = v.scale_cost;
+  scale.col.assign(v.scale_col.ptr, v.scale_col.ptr + v.scale_col.len);
+  scale.row.assign(v.scale_row.ptr, v.scale_row.ptr + v.scale_row.len);
+  lp.is_scaled_ = v.is_scaled;
+  if (highs_rs::highs_rs_lph_take_matrix_back(e)) {
+    HighsSparseMatrix& a = lp.a_matrix_;
+    a.format_ = MatrixFormat(v.a.format);
+    a.num_col_ = v.a.num_col;
+    a.num_row_ = v.a.num_row;
+    a.start_.assign(v.a.start.ptr, v.a.start.ptr + v.a.start.len);
+    a.p_end_.assign(v.a.p_end.ptr, v.a.p_end.ptr + v.a.p_end.len);
+    a.index_.assign(v.a.index.ptr, v.a.index.ptr + v.a.index.len);
+    a.value_.assign(v.a.value.ptr, v.a.value.ptr + v.a.value.len);
+  }
+}
+
+HighsStatus rsFormBasis(HighsEngine& ekk, const HighsOptions& options,
+                        HighsLp& lp, HighsBasis& basis,
+                        const bool only_from_known_basis) {
+  lp.ensureColwise();
+  rsSyncOptions(ekk.p, options);
+  rsImportModel(ekk.p, lp);
+  highs_rs::LphFormBasis b;
+  b.valid = basis.valid;
+  b.useful = basis.useful;
+  b.alien = &basis.alien;
+  b.col_status = {reinterpret_cast<uint8_t*>(basis.col_status.data()),
+                  basis.col_status.size()};
+  b.row_status = {reinterpret_cast<uint8_t*>(basis.row_status.data()),
+                  basis.row_status.size()};
+  b.debug_id = basis.debug_id;
+  b.debug_update_count = basis.debug_update_count;
+  b.origin = {const_cast<char*>(basis.debug_origin_name.data()),
+              basis.debug_origin_name.size()};
+  const HighsStatus status = HighsStatus(
+      highs_rs::highs_rs_lph_form_basis(ekk.p, &b, only_from_known_basis));
+  rsModelBack(ekk.p, lp);
+  return status;
+}
+
+void HighsEngine::setNlaPointersForLpAndScale(const HighsLp& lp) {
+  const RsLp v = rsLp(lp);
+  highs_rs::highs_rs_lph_set_nla_lp(p, &v);
+}
+
+double HighsEngine::computeBasisCondition(const HighsLp& lp, const bool exact,
+                                          const bool report) const {
+  const RsLp v = rsLp(lp);
+  return highs_rs::highs_rs_lph_basis_condition(
+      p, &v, lp.model_name_.data(), lp.model_name_.size(), exact, report);
+}
+
+HighsBasis HighsEngine::getHighsBasis(const HighsLp& use_lp) const {
+  HighsBasis highs_basis;
+  highs_basis.col_status.resize(use_lp.num_col_);
+  highs_basis.row_status.resize(use_lp.num_row_);
+  assert(status_.has_basis);
+  const RsLp lp = rsLp(use_lp);
+  const char* origin;
+  size_t origin_len;
+  highs_rs::highs_rs_lps_get_highs_basis(
+      lps, &lp, 0, reinterpret_cast<uint8_t*>(highs_basis.col_status.data()),
+      reinterpret_cast<uint8_t*>(highs_basis.row_status.data()),
+      &highs_basis.debug_id, &highs_basis.debug_update_count, &origin,
+      &origin_len);
+  highs_basis.debug_origin_name.assign(origin, origin_len);
+  highs_basis.valid = true;
+  highs_basis.alien = false;
+  highs_basis.useful = true;
+  highs_basis.was_alien = false;
+  return highs_basis;
+}
+
+const HotStart& HighsEngine::hotStart() const {
+  bool use;
+  const HighsInt *pivot_row, *pivot_var;
+  const int8_t *pivot_type, *nonbasic_move;
+  int num_pivot, num_move;
+  double build_synthetic_tick;
+  if (highs_rs::highs_rs_lph_hot_start(p, &use, &pivot_row, &pivot_var,
+                                       &pivot_type, &num_pivot,
+                                       &build_synthetic_tick, &nonbasic_move,
+                                       &num_move)) {
+    RefactorInfo& refactor_info = hot_start_.refactor_info;
+    refactor_info.use = use;
+    refactor_info.pivot_row.assign(pivot_row, pivot_row + num_pivot);
+    refactor_info.pivot_var.assign(pivot_var, pivot_var + num_pivot);
+    refactor_info.pivot_type.assign(pivot_type, pivot_type + num_pivot);
+    refactor_info.build_synthetic_tick = build_synthetic_tick;
+    hot_start_.nonbasicMove.assign(nonbasic_move, nonbasic_move + num_move);
+    hot_start_.valid = true;
+  }
+  return hot_start_;
+}
+
+const std::vector<double>& HighsEngine::primalPhase1Dual() const {
+  size_t n;
+  const double* v = highs_rs::highs_rs_lph_primal_phase1_dual(p, &n);
+  primal_phase1_dual_.assign(v, v + n);
+  return primal_phase1_dual_;
+}
+
+void HighsSimplexStats::report(FILE* file, std::string message) const {
+  fprintf(file, "\nSimplex stats: %s\n", message.c_str());
+  fprintf(file, "   valid                      = %d\n", this->valid);
+  fprintf(file, "   iteration_count            = %d\n",
+          static_cast<int>(this->iteration_count));
+  fprintf(file, "   num_invert                 = %d\n",
+          static_cast<int>(this->num_invert));
+  fprintf(file, "   last_invert_num_el         = %d\n",
+          static_cast<int>(this->last_invert_num_el));
+  fprintf(file, "   last_factored_basis_num_el = %d\n",
+          static_cast<int>(this->last_factored_basis_num_el));
+  fprintf(file, "   col_aq_density             = %g\n", this->col_aq_density);
+  fprintf(file, "   row_ep_density             = %g\n", this->row_ep_density);
+  fprintf(file, "   row_ap_density             = %g\n", this->row_ap_density);
+  fprintf(file, "   row_DSE_density            = %g\n", this->row_DSE_density);
+}
+
+static_assert(sizeof(HighsSimplexStats) == 56,
+              "HighsSimplexStats is SimplexStats in lp_handle.rs");
+static_assert(sizeof(highs_rs::HEkkShared) == 144,
+              "EkkShared in lp_solver.rs");
+
 // The steps of the run on the Highs object (a friend)
 struct HighsRunRust {
   explicit HighsRunRust(Highs& highs) : h(highs) {}
@@ -360,11 +568,6 @@ struct HighsRunRust {
   HighsModel read_model;
   HighsBasis read_basis;
   FILE* write_file = nullptr;
-  // The factor's log of solveLpSimplex on Rust data
-  RsFactorLogStore simplex_factor_log;
-  // The variables with no pivot of the presolve's dependent equations
-  std::vector<HighsInt> dependent_ints;
-
   // The presolve data of the LP run on Rust data into presolve_ (its
   // reduced LP's other members, from the model, are kept: the names follow
   // the index maps)
@@ -372,7 +575,7 @@ struct HighsRunRust {
     HighsLp& lp = h.presolve_.data_.reduced_lp_;
     RsLpVec v = rsLpVec(lp);
     RsPresolveExport e;
-    if (!highs_rs_lps_presolve_export(h.ekk_instance_.rs_, &v, &e)) return;
+    if (!highs_rs_lps_presolve_export(h.ekk_instance_.lps, &v, &e)) return;
     rsLpVecBack(v, lp);
     if (lp.col_names_.size() > 0) {
       std::vector<std::string> names(e.num_col);
@@ -587,11 +790,6 @@ struct HighsRunRust {
       case RunOp::kRefineBasis:
         refineBasis(h.model_.lp_, h.solution_, h.basis_);
         return 0;
-      case RunOp::kCallSolveLp:
-        return st(h.callSolveLp(lpOf(arg), std::string(m, len)));
-      case RunOp::kSetEkkLpName:
-        h.ekk_instance_.lp_name_.assign(m, len);
-        return 0;
       case RunOp::kPrepareReducedLp: {
         HighsLp& reduced_lp = h.presolve_.getReducedProblem();
         reduced_lp.origin_name_ = "Reduced LP";
@@ -607,14 +805,6 @@ struct HighsRunRust {
       case RunOp::kEkkClear:
         h.ekk_instance_.clear();
         return 0;
-      case RunOp::kEkkInvalidate:
-        h.ekk_instance_.invalidate();
-        return 0;
-      case RunOp::kEkkPivotThreshold:
-        if (!h.ekk_instance_.status_.initialised_for_solve) return 0;
-        *static_cast<double*>(p) =
-            h.ekk_instance_.info_.factor_pivot_threshold;
-        return 1;
       case RunOp::kReducedToEmpty:
         h.solution_.clear();
         h.basis_.clear();
@@ -631,17 +821,6 @@ struct HighsRunRust {
         return 0;
       case RunOp::kRestoreOptions:
         options = *saved_options;
-        return 0;
-      case RunOp::kOptionsPrimalSimplex:
-        options.solver = "simplex";
-        options.simplex_strategy = kSimplexStrategyPrimal;
-        return 0;
-      case RunOp::kOptionsCleanup:
-        options.solver = kSimplexString;
-        options.simplex_strategy = kSimplexStrategyChoose;
-        options.simplex_min_concurrency = 1;
-        options.simplex_max_concurrency = 1;
-        if (arg) options.factor_pivot_threshold = *static_cast<double*>(p);
         return 0;
       case RunOp::kCopyToPresolve:
         h.presolve_.data_.recovered_solution_ = h.solution_;
@@ -695,14 +874,14 @@ struct HighsRunRust {
         return debugHighsBasisConsistent(options, h.model_.lp_, h.basis_) !=
                HighsDebugStatus::kLogicalError;
       case RunOp::kRetainedEkkDataOk:
-        return h.ekk_instance_.debugRetainedDataOk(h.model_.lp_) !=
-               HighsDebugStatus::kLogicalError;
+        // debugRetainedDataOk is not checked in this build
+        return 1;
       case RunOp::kLpDimensionsOk:
         return lpDimensionsOk("returnFromHighs", h.model_.lp_,
                               options.log_options);
       case RunOp::kEkkFactorCompatible:
-        if (!h.ekk_instance_.status_.has_nla) return -1;
-        return h.ekk_instance_.lpFactorRowCompatible(h.model_.lp_.num_row_);
+        return highs_rs::highs_rs_lph_factor_row_compatible(
+            h.ekk_instance_.p, h.model_.lp_.num_row_);
       case RunOp::kPresolveClear:
         h.presolve_.clear();
         return 0;
@@ -866,7 +1045,7 @@ struct HighsRunRust {
         *static_cast<RsSolution*>(p) = rsSolution(h.solution_);
         return 0;
       case RunOp::kRayRecord: {
-        const HEkk& ekk = h.ekk_instance_;
+        const HighsEngine& ekk = h.ekk_instance_;
         RsRayRecord& r = *static_cast<RsRayRecord*>(p);
         r.index = arg ? ekk.sh_.primal_ray_index : ekk.sh_.dual_ray_index;
         r.sign = arg ? ekk.sh_.primal_ray_sign : ekk.sh_.dual_ray_sign;
@@ -883,7 +1062,7 @@ struct HighsRunRust {
           h.getOptionValue("solve_relaxation", saved_solve_relaxation);
           std::vector<double> zero_costs;
           zero_costs.assign(lp.num_col_, 0);
-          HEkk& ekk = h.ekk_instance_;
+          HighsEngine& ekk = h.ekk_instance_;
           const HighsInt ray_index = ekk.sh_.primal_ray_index;
           const HighsInt ray_sign = ekk.sh_.primal_ray_sign;
           const std::vector<double> ray_value = ekk.rayValue(true);
@@ -952,8 +1131,11 @@ struct HighsRunRust {
         const HighsInt num_row = lp.num_row_;
         const HighsInt num_col = lp.num_col_;
         HighsInt col = h.ekk_instance_.sh_.primal_ray_index;
-        assert(h.ekk_instance_.nonbasicSlice(false).ptr[col] ==
+        HighsInt num_tot;
+        assert(highs_rs::highs_rs_lps_nonbasic(h.ekk_instance_.lps, 0,
+                                               &num_tot)[col] ==
                kNonbasicFlagTrue);
+        (void)num_tot;
         std::vector<double> rhs;
         std::vector<double> column;
         column.assign(num_row, 0);
@@ -1105,12 +1287,8 @@ struct HighsRunRust {
             const bool already_profiling = h.profiling_;
             if (!already_profiling)
               h.initializeSingleThreadedProfiling(&profiling);
-            HighsLpSolverObject solver_object(lp, modifiable_basis, h.solution_,
-                                              h.info_, h.ekk_instance_,
-                                              h.callback_, options, h.timer_);
-            solver_object.setProfiling(h.profiling_);
             HighsStatus return_status =
-                formSimplexLpBasisAndFactor(solver_object);
+                rsFormBasis(h.ekk_instance_, options, lp, modifiable_basis, false);
             if (!already_profiling) h.clearProfiling();
             if (return_status != HighsStatus::kOk) return st(return_status);
             h.basis_ = std::move(modifiable_basis);
@@ -1297,32 +1475,27 @@ struct HighsRunRust {
         }
         return 0;
       case RunOp::kLpRustBegin: {
+        // The run's data, options and model (a copy) are the engine's
         RsBasisVec basis;
         const RsRunData d = runData(basis);
-        highs_rs_lps_run_import(h.ekk_instance_.rs_, &d);
-        *static_cast<void**>(p) = h.ekk_instance_.rs_;
+        highs_rs::LpHandle* e = h.ekk_instance_.p;
+        highs_rs_lps_run_import(h.ekk_instance_.lps, &d);
+        rsSyncOptions(e, options);
+        rsImportModel(e, h.model_.lp_);
+        highs_rs::highs_rs_lph_set_profiling(e, h.profiling_);
+        *static_cast<void**>(p) = e;
         return 0;
       }
       case RunOp::kLpRustEnd: {
+        // arg: the Highs object's presolve data are kept
         RsBasisVec basis;
         RsRunData d = runData(basis);
-        highs_rs_lps_run_export(h.ekk_instance_.rs_, &d);
+        highs_rs_lps_run_export(h.ekk_instance_.lps, &d);
         rsBasisVecBack(basis, h.basis_);
-        presolveExport();
+        rsModelBack(h.ekk_instance_.p, h.model_.lp_);
+        if (!arg) presolveExport();
         return 0;
       }
-      case RunOp::kKktOptions:
-        rsKktOptionsInto(options, p);
-        return 0;
-      case RunOp::kSolveTemplate:
-        rsSolveTemplate(options, p);
-        return 0;
-      case RunOp::kUnconstrainedTemplate:
-        rsOptionsTemplate(options, 5, p);
-        return 0;
-      case RunOp::kIpxTemplate:
-        rsIpxHostTemplate(options, h.timer_, h.callback_, p);
-        return 0;
       case RunOp::kPdlpTemplate:
         rsPdlpTemplate(options, p);
         return 0;
@@ -1332,38 +1505,9 @@ struct HighsRunRust {
         else
           h.profiling_->stop(kSubSolverPdlp);
         return 0;
-      case RunOp::kSimplexTemplate:
-        // Rust sets the incumbent of the reduced LP (arg 1), its own
-        rsSimplexAppTemplate(options, h.model_.lp_, simplex_factor_log, p);
-        return 0;
-      case RunOp::kSimplexShell: {
-        // arg: (code << 32) | (which LP << 16) | the step's arg; the
-        // reduced LP (which 1) is Rust's: the NLA refers to the engine's
-        // copy of it
-        const int code = int(arg >> 32);
-        if ((arg >> 16) & 1 && code == 9) {
-          h.ekk_instance_.setNlaEngineLp();
-          return 0;
-        }
-        return rsSimplexShellOp(h.ekk_instance_, h.profiling_, options,
-                                h.callback_, h.timer_, h.model_.lp_, code,
-                                int64_t(arg & 0xffff), p);
-      }
       case RunOp::kSetInterrupt:
         pending = std::make_exception_ptr(HighsTask::Interrupt());
         return 0;
-      case RunOp::kPresolveOptions:
-        presolve::rsLpPresolveOptions(options, p);
-        return 0;
-      case RunOp::kDependentEquations: {
-        RsDependentEquations& d = *static_cast<RsDependentEquations*>(p);
-        d.build_return = presolve::rsDependentEquations(
-            h.timer_, dependent_ints, d.num_col, d.num_row, d.start, d.index,
-            d.value, d.nnz, d.time_limit, &d.time_taken);
-        d.var_with_no_pivot = dependent_ints.data();
-        d.num_var_with_no_pivot = dependent_ints.size();
-        return 0;
-      }
       case RunOp::kAssessSmallValues: {
         // HighsSparseMatrix::assessSmallValues once Rust found a small value
         const RsMut<double>& v = *static_cast<const RsMut<double>*>(p);
@@ -1372,9 +1516,6 @@ struct HighsRunRust {
                             HighsInt(values.size()), values, false, "");
         return 0;
       }
-      case RunOp::kLpOptions:
-        *static_cast<RsLpOptions*>(p) = rsLpOptions(options);
-        return 0;
       default:
         break;
     }

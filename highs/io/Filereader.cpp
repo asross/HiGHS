@@ -118,18 +118,4 @@ Filereader* Filereader::getFilereader(const HighsLogOptions& log_options,
   }
 }
 
-void interpretFilereaderRetcode(const HighsLogOptions& log_options,
-                                const std::string& filename,
-                                const FilereaderRetcode code) {
-  const RsLog log = rsLog(log_options);
-  highs_rs_filereader(&log, 1, filename.data(), filename.size(), int(code),
-                      setString, nullptr);
-}
-
-std::string extractModelName(const std::string& filename) {
-  std::string name;
-  highs_rs_filereader(nullptr, 2, filename.data(), filename.size(), 0,
-                      setString, &name);
-  return name;
-}
 #endif
