@@ -22,7 +22,7 @@
 #endif
 
 #ifndef HIGHS_RUST
-// Ported to Rust (HighsSolveRust.cpp, rust/src/lp_data/solve.rs)
+// Ported to Rust (rust/src/lp_data/solve.rs, lp_run.rs)
 // The method below runs the simplex, IPX, HiPO or PDLP solver on the LP
 HighsStatus solveLp(HighsLpSolverObject& solver_object, const string message) {
   HighsStatus return_status = HighsStatus::kOk;
@@ -216,7 +216,7 @@ HighsStatus solveUnconstrainedLp(HighsLpSolverObject& solver_object) {
                                solver_object.solution_, solver_object.basis_));
 }
 
-// Ported to Rust (HighsSolveRust.cpp, rust/src/lp_data/solve.rs)
+// Ported to Rust (rust/src/lp_data/solve.rs, lp_run.rs)
 // Solves an unconstrained LP without scaling, setting HighsBasis, HighsSolution
 // and HighsInfo
 HighsStatus solveUnconstrainedLp(const HighsOptions& options, const HighsLp& lp,
