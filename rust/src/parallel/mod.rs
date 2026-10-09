@@ -72,6 +72,16 @@ pub struct Task {
 
 impl Task {
     fn call(&self) -> bool {
+        // SAFETY: the slot was filled by its owner before it was published
+        let d = unsafe { &*self.data.get() };
+        if d[0] == RUST_TASK {
+            // SAFETY: a Rust task (spawn): its runner and closure
+            unsafe {
+                let f: unsafe fn(*const u64) = std::mem::transmute::<usize, unsafe fn(*const u64)>(d[1] as usize);
+                f(d.as_ptr().add(2));
+            }
+            return false;
+        }
         let f = RUN_FN.load(Relaxed);
         // SAFETY: the function set at initialization; the slot holds a
         // callable placed by its owner before it was published
@@ -941,13 +951,141 @@ pub fn initialize(num_threads: i32, run: RunFn) {
 }
 
 /// initialize_scheduler(num_threads) on a thread Rust made (the helper
-/// of the IPX race), with the run function the C++ registered (nothing if
-/// there is none: no task is run then)
+/// of the IPX race, the concurrent LNS helper), with the run function the
+/// C++ registered if any (Rust tasks need none)
 pub fn initialize_thread(num_threads: i32) {
-    let f = RUN_FN.load(Relaxed);
-    if f != 0 {
-        // SAFETY: stored from a RunFn by initialize
-        initialize(num_threads, unsafe { std::mem::transmute::<usize, RunFn>(f) });
+    EXECUTOR_HANDLE.with(|h| {
+        let mut h = h.borrow_mut();
+        if h.ptr.is_none() {
+            h.is_main = true;
+            h.ptr = Some(Executor::new(num_threads));
+        }
+    });
+}
+
+// ---- Rust tasks (HighsParallel.h's spawn, sync and TaskGroup) ----
+
+/// The first word of a slot holding a Rust task (a C++ task's is its
+/// callable's vtable pointer); the second is the runner, the closure
+/// follows
+const RUST_TASK: u64 = 0x5255_5354_5441_534b;
+
+/// The runner of a Rust task: moves the closure out of the slot and calls it
+unsafe fn run_closure<F: FnOnce()>(p: *const u64) {
+    let f = (p as *const F).read();
+    f()
+}
+
+/// spawn(localDeque, f): the task on the deque, or run now if it overflowed.
+/// The closure is plain data (Copy: raw pointers and values) of at most 40
+/// bytes, as the C++ requires trivially destructible callables; the caller
+/// syncs it before what it points to goes away
+pub fn spawn_on<F: FnOnce() + Copy + Send>(d: &Deque, f: F) {
+    const { assert!(std::mem::size_of::<F>() <= 40 && std::mem::align_of::<F>() <= 8) };
+    let t = d.push_slot();
+    if t.is_null() {
+        f();
+        return;
+    }
+    // SAFETY: the slot reserved for this owner, not yet published
+    unsafe {
+        let data = &mut *(*t).data.get();
+        data[0] = RUST_TASK;
+        data[1] = run_closure::<F> as unsafe fn(*const u64) as usize as u64;
+        (data.as_mut_ptr().add(2) as *mut F).write(f);
+    }
+    d.push_publish();
+}
+
+/// sync(localDeque): waits for (or runs) the deque's last task; true where
+/// the C++ throws HighsTask::Interrupt
+pub fn sync_on(d: &Deque) -> bool {
+    let (s, t) = d.pop();
+    match s {
+        Status::Empty => {
+            debug_assert!(false, "sync without a task");
+            false
+        }
+        // the task ran in spawn
+        Status::Overflown => false,
+        Status::Stolen => d.sync_stolen_task(t),
+        // SAFETY: the owner's own task, run unless cancelled
+        Status::Work => unsafe {
+            if (*t).stealer.load(Relaxed) == 0 {
+                (*t).call();
+            }
+            false
+        },
+    }
+}
+
+/// The calling thread's deque (it must have a scheduler)
+fn this_deque<'a>() -> &'a Deque {
+    let d = this_worker_deque();
+    assert!(!d.is_null(), "no task scheduler on this thread");
+    // SAFETY: the thread's own deque, alive while its executor is
+    unsafe { &*d }
+}
+
+/// highs::parallel::num_threads()
+pub fn num_threads() -> i32 {
+    this_deque().num_workers()
+}
+
+/// highs::parallel::thread_num()
+pub fn thread_num() -> i32 {
+    this_deque().owner_id()
+}
+
+/// A TaskGroup: the tasks spawned through it on this thread's deque; its
+/// drop cancels the unfinished ones and waits for all
+pub struct TaskGroup {
+    d: *const Deque,
+    head: i32,
+}
+
+impl Default for TaskGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TaskGroup {
+    pub fn new() -> Self {
+        let d = this_deque();
+        TaskGroup { d, head: d.current_head() }
+    }
+    fn d(&self) -> &Deque {
+        // SAFETY: the creating thread's deque
+        unsafe { &*self.d }
+    }
+    pub fn spawn<F: FnOnce() + Copy + Send>(&self, f: F) {
+        spawn_on(self.d(), f)
+    }
+    pub fn sync(&self) {
+        debug_assert!(self.d().current_head() > self.head);
+        sync_on(self.d());
+    }
+    pub fn task_wait(&self) {
+        while self.d().current_head() > self.head {
+            sync_on(self.d());
+        }
+    }
+    pub fn cancel(&self) {
+        for i in self.head..self.d().current_head() {
+            self.d().cancel_task(i);
+        }
+    }
+}
+
+impl Drop for TaskGroup {
+    fn drop(&mut self) {
+        self.cancel();
+        // no interrupt while waiting, as the C++ (the Rust tasks return
+        // early when cancelled instead of throwing)
+        let prev = self.d().set_root_task(std::ptr::null_mut());
+        self.task_wait();
+        self.d().set_root_task(prev);
     }
 }
 
@@ -1123,6 +1261,33 @@ mod tests {
                 fib_task(25);
                 assert_eq!(SUM.load(Relaxed), 75025);
             }
+            shutdown(true);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn rust_tasks() {
+        static TOTAL: AtomicI64 = AtomicI64::new(0);
+        std::thread::spawn(|| {
+            initialize_thread(3);
+            assert_eq!(num_threads(), 3);
+            let mut out = vec![0i64; 64];
+            let p = out.as_mut_ptr() as usize;
+            {
+                let tg = TaskGroup::new();
+                for i in 0..64usize {
+                    tg.spawn(move || {
+                        // SAFETY: each task writes its own element
+                        unsafe { *(p as *mut i64).add(i) = (i * i) as i64 };
+                        TOTAL.fetch_add(1, Relaxed);
+                    });
+                }
+                tg.task_wait();
+            }
+            assert_eq!(TOTAL.load(Relaxed), 64);
+            assert!(out.iter().enumerate().all(|(i, &v)| v == (i * i) as i64));
             shutdown(true);
         })
         .join()
