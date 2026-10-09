@@ -10,6 +10,18 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-09, the MIP's objects in Rust (no C++ MIP shells, Rust tasks)
+
+`perf.py <rust-port HIGHS_RUST highs (9d5590f4f4)> <this build's highs>
+--reps 1` (machine shared with other MIP runs): the MIP's object shells
+(solver, data containers, domains, pools, LP relaxation glue, search,
+separation, workers, presolve host and postsolve stack) are Rust objects
+(rust/src/mip/host) and the MIP's tasks are Rust closures on the
+scheduler. All 32 cases same path; geomean 0.996 (MIP 0.992, LP dual
+0.985, LP primal 1.000, IPM 1.003, PDLP 1.025, read model 0.989): no
+measurable change (the C++ shells were thin; the MIP loses its
+C++/Rust call boundary and some copies, e.g. the presolve's model sync).
+
 ## 2026-10-09, stage 4: the Highs object's engine is an LpHandle
 
 `perf.py <rust-port HIGHS_RUST highs (24cb955a63)> <this build's highs>
