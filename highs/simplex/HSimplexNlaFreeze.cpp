@@ -21,17 +21,8 @@ void SimplexIterate::clear() {
   this->dual_edge_weight_.clear();
 }
 
-#ifdef HIGHS_RUST
-// The INVERT is saved by the Rust factor
-void HSimplexNla::putInvert() {
-  simplex_iterate_.valid_ = true;
-  factor_.saveInvert();
-}
-void HSimplexNla::getInvert() { factor_.restoreInvert(); }
-#else
 void HSimplexNla::putInvert() {
   simplex_iterate_.valid_ = true;
   simplex_iterate_.invert_ = factor_.getInvert();
 }
 void HSimplexNla::getInvert() { factor_.setInvert(simplex_iterate_.invert_); }
-#endif

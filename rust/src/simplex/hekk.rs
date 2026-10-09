@@ -128,6 +128,12 @@ const K_HYPER_PRICE_DENSITY: f64 = 0.1;
 pub struct Shared<T>(*mut T);
 
 impl<T: Copy> Shared<T> {
+    /// # Safety (of its uses)
+    /// `p` must point to a value live for the views using it
+    #[inline]
+    pub fn new(p: *mut T) -> Self {
+        Shared(p)
+    }
     #[inline]
     pub fn get(self) -> T {
         // SAFETY: C++ passes a pointer into HEkk, live for the solve, that
@@ -146,6 +152,7 @@ type Ctx = *mut c_void;
 /// The C++ that the solve calls: see the module comment. Filled by
 /// highs/simplex/HEkkRust.cpp, `ctx` being the HEkk
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct Host {
     pub ctx: Ctx,
     /// (channel, HighsLogType, message): channel 0 for highsLogUser, 1 for
@@ -154,23 +161,15 @@ pub struct Host {
     pub log: extern "C" fn(Ctx, i32, i32, *const c_char),
     /// HEkk::timer_->read()
     pub timer_read: extern "C" fn(Ctx) -> f64,
-    /// The user interrupt part of HEkk::bailout: whether to bail out
-    /// (setting solve_bailout_ and model_status_)
+    /// The user interrupt part of HEkk::bailout: whether the user
+    /// interrupts
     pub interrupt: extern "C" fn(Ctx) -> bool,
     /// debugDualChuzcFailQuad0 (kind 1) or Quad1 (2)
     pub chuzc_fail: extern "C" fn(Ctx, i32, i32, *const WorkPair, f64, f64),
-    /// The handling of a rank deficient initial basis in
-    /// HEkk::initialiseSimplexLpBasisAndFactor (handleRankDeficiency, the
-    /// update of the status for a new basis and setNonbasicMove): returns
-    /// the (moved) saved dual edge weights
-    pub initial_rank_deficiency: extern "C" fn(Ctx, *mut CSlice<f64>),
-    /// debugNlaCheckInvert of a rank deficient INVERT, at the costly level
-    pub debug_check_invert: extern "C" fn(Ctx),
 }
 
 /// HEkk's data for the solve: see the module comment. Mirrored by
 /// highs_rs::Hekk in highs/simplex/HEkkRust.h
-#[repr(C)]
 pub struct CHekk {
     pub ekk: CEkk,
     pub host: Host,
@@ -212,6 +211,11 @@ pub struct CHekk {
     /// saved_dual_edge_weight_, and whether it has been taken (moved out)
     pub saved_dual_edge_weight: Cell<CSlice<f64>>,
     pub saved_dual_edge_weight_taken: Cell<bool>,
+    /// The vector of saved_dual_edge_weight, which a rank deficient
+    /// initial basis replaces
+    pub saved_dual_edge_weight_vec: *mut Vec<f64>,
+    /// basis_.debug_origin_name
+    pub basis_origin: *const String,
     // dual_ray_record_ and primal_ray_record_ (index and sign); C++
     // clears the value of each whose bit (1: dual, 2: primal) is set in
     // ray_value_clear
@@ -689,7 +693,6 @@ pub fn compute_factor(e: &mut EkkView, x: &CHekk) -> i32 {
         nonbasic_move: e.nonbasic_move.to_vec(),
     });
     if rank_deficiency != 0 {
-        (x.host.debug_check_invert)(x.host.ctx);
         // Have an invertible representation, but of B with column(s)
         // replacements due to singularity. So no (fresh) representation of
         // B^{-1}
@@ -1488,7 +1491,9 @@ impl Bailout {
             x.solve_bailout.set(true);
             x.model_status.set(MS_ITERATION_LIMIT);
         } else if x.interrupt_callback && (x.host.interrupt)(x.host.ctx) {
-            // The callback sets solve_bailout_ and model_status_
+            // The user interrupts
+            x.solve_bailout.set(true);
+            x.model_status.set(MS_INTERRUPT);
         }
         x.solve_bailout.get()
     }
@@ -1695,13 +1700,90 @@ fn initialise_simplex_lp_basis_and_factor(e: &mut EkkView, x: &CHekk) {
         if rank_deficiency != 0 {
             // Basis is rank deficient: account for it by correcting
             // nonbasicFlag
-            let mut saved = CSlice { p: std::ptr::null_mut(), n: 0 };
-            (x.host.initial_rank_deficiency)(x.host.ctx, &mut saved);
-            x.saved_dual_edge_weight.set(saved);
+            initial_rank_deficiency(e, x);
         }
         // Record the synthetic clock for INVERT, and zero it for UPDATE
         reset_synthetic_clock(e, x);
     }
+}
+
+/// The handling of a rank deficient initial basis in
+/// HEkk::initialiseSimplexLpBasisAndFactor: handleRankDeficiency, the
+/// update of the status for a new basis and setNonbasicMove
+pub fn initial_rank_deficiency(e: &mut EkkView, x: &CHekk) {
+    let rank_deficiency = e.factor.rank_deficiency;
+    x.dev(LOG_INFO, || {
+        // SAFETY: basis_.debug_origin_name, unchanged during the call
+        let origin = unsafe { &*x.basis_origin };
+        sprintf!(
+            "HEkk::initialiseSimplexLpBasisAndFactor (%s) Rank_deficiency %d: Id = %d; UpdateCount = %d\n",
+            origin,
+            rank_deficiency,
+            x.basis_debug_id.get(),
+            x.basis_debug_update_count.get()
+        )
+    });
+    // HEkk::handleRankDeficiency
+    let num_col = e.num_col as i32;
+    for k in 0..rank_deficiency.max(0) as usize {
+        let row_in = e.factor.row_with_no_pivot[k];
+        let variable_in = num_col + row_in;
+        let variable_out = e.factor.var_with_no_pivot[k];
+        e.nonbasic_flag[variable_in as usize] = 0;
+        e.nonbasic_flag[variable_out as usize] = 1;
+        let row_out = row_in;
+        x.dev(LOG_INFO, || {
+            sprintf!(
+                "HEkk::handleRankDeficiency: %4d: Basic row of leaving variable (%4d is %s %4d) is %4d; Entering logical = %4d is variable %d)\n",
+                k as i32,
+                variable_out,
+                if variable_out < num_col { " column" } else { "logical" },
+                if variable_out < num_col { variable_out } else { variable_out - num_col },
+                row_out,
+                row_in,
+                variable_in
+            )
+        });
+        // variable_in is the logical that must not come out to be replaced
+        // by the structural variable_out
+        x.records().add_bad_basis_change(row_out, variable_in, variable_out, super::basis_records::REASON_SINGULAR, true);
+    }
+    e.status.has_ar_matrix = false;
+    // HEkk::updateStatus(LpAction::kNewBasis): keep the weights of the
+    // outgoing basis
+    x.dual_values_valid.set(false);
+    let num_row = e.basic_index.len() as i32;
+    let saved = super::lp_solver::scatter_dual_edge_weights(
+        e.status,
+        e.basic_index,
+        e.nonbasic_flag.len(),
+        e.dual_edge_weight,
+        num_row,
+        num_row,
+        None,
+    );
+    // invalidateBasis
+    e.status.has_basis = false;
+    e.status.has_ar_matrix = false;
+    e.status.has_dual_steepest_edge_weights = false;
+    e.status.has_invert = false;
+    e.status.has_fresh_invert = false;
+    e.status.has_fresh_rebuild = false;
+    e.status.has_dual_objective_value = false;
+    e.status.has_primal_objective_value = false;
+    clear_ray_records(x);
+    if !saved.is_empty() {
+        // SAFETY: saved_dual_edge_weight_, not otherwise borrowed now
+        unsafe {
+            let v = &mut *x.saved_dual_edge_weight_vec;
+            *v = saved;
+            x.saved_dual_edge_weight.set(CSlice { p: v.as_mut_ptr(), n: v.len() as i32 });
+        }
+    }
+    e.set_nonbasic_move();
+    e.status.has_basis = true;
+    e.status.has_invert = true;
+    e.status.has_fresh_invert = true;
 }
 
 /// HEkk::initialiseForSolve
@@ -1933,16 +2015,6 @@ pub fn status<'a>(e: &'a mut EkkView) -> &'a mut SimplexStatus {
 
 mod ffi {
     use super::*;
-
-    /// HEkk::solve for the serial dual and primal strategies, between the
-    /// C++ set-up and returnFromEkkSolve: returns the HighsStatus
-    ///
-    /// # Safety
-    /// `x` filled by HEkk::rustHekk() for a solve, the vectors sized
-    #[no_mangle]
-    pub unsafe extern "C" fn highs_rs_ekk_solve(x: *const CHekk, force_phase2: bool) -> i32 {
-        solve(&*x, force_phase2)
-    }
 
     /// The hot start record of the last INVERT of a solve: copies of the
     /// refactorization information and nonbasicMove, or false if none

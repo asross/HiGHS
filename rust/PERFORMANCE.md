@@ -10,6 +10,27 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-08, the simplex engine's data owned by Rust (LpSolver)
+
+`perf.py <rust-port HIGHS_RUST highs> <this build's highs> --reps 3`
+(the M1 shared with MIP log comparisons, so +-3% is noise): HEkk's data
+(status, info, basis, work arrays, edge weights, row-wise and scaled
+matrices, factor, iterate, rays) moved into the Rust `LpSolver`; the
+kernels get the same views, now built in Rust, and each HEkk call passes
+an `LpsEnv` (a view of the LP, the option values, the host functions)
+instead of C++ filling ~150 view fields. Every case same path; no
+measurable cost.
+
+| Group | Geomean before -> after |
+|---|---|
+| MIP | 1.000 |
+| LP dual simplex | 0.999 |
+| LP primal simplex | 1.011 |
+| IPM (IPX) | 0.997 |
+| PDLP | 0.987 |
+| Read model (time_limit 0) | 1.016 |
+| **All** | **1.002** |
+
 ## 2026-10-07, crest (the Rust binary) against the C++ highs app
 
 `python3 rust/bench/perf.py build/bin/highs build-static/bin/crest`

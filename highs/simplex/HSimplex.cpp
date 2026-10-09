@@ -23,6 +23,9 @@ using std::max;
 using std::min;
 // using std::runtime_error;
 
+#ifndef HIGHS_RUST
+// The simplex basis and its unscaled infeasibilities are the Rust simplex
+// engine's (rust/src/simplex/lp_solver.rs)
 void SimplexBasis::clear() {
   this->hash = 0;
   this->basicIndex_.clear();
@@ -43,7 +46,6 @@ void SimplexBasis::setup(const HighsInt num_col, const HighsInt num_row) {
   this->debug_origin_name = "None";
 }
 
-#ifndef HIGHS_RUST
 void appendNonbasicColsToBasis(HighsLp& lp, HighsBasis& highs_basis,
                                HighsInt XnumNewCol) {
   assert(highs_basis.valid);
@@ -154,7 +156,6 @@ void appendBasicRowsToBasis(HighsLp& lp, SimplexBasis& basis,
     basis.basicIndex_[iRow] = lp.num_col_ + iRow;
   }
 }
-#endif
 
 void getUnscaledInfeasibilities(const HighsOptions& options,
                                 const HighsScale& scale,
@@ -255,6 +256,8 @@ void getUnscaledInfeasibilities(const HighsOptions& options,
   setSolutionStatus(highs_info);
 }
 
+#endif
+
 void setSolutionStatus(HighsInfo& highs_info) {
   if (highs_info.num_primal_infeasibilities < 0) {
     highs_info.primal_solution_status = kSolutionStatusNone;
@@ -321,6 +324,7 @@ void unscaleSimplexCost(HighsLp& lp, double cost_scale) {
 }
 #endif
 
+#ifndef HIGHS_RUST
 bool isBasisRightSize(const HighsLp& lp, const SimplexBasis& basis) {
   bool right_size = true;
   right_size =
@@ -332,3 +336,4 @@ bool isBasisRightSize(const HighsLp& lp, const SimplexBasis& basis) {
   right_size = (HighsInt)basis.basicIndex_.size() == lp.num_row_ && right_size;
   return right_size;
 }
+#endif

@@ -19,12 +19,176 @@
 #include "util/HighsRandom.h"
 
 class HighsLpSolverObject;
+
 #ifdef HIGHS_RUST
-namespace highs_rs {
-struct Ekk;
-struct Hekk;
-}  // namespace highs_rs
-#endif
+#include "simplex/HEkkRust.h"
+
+// HEkk is a shell of the Rust-owned simplex engine (rust/src/simplex/
+// lp_solver.rs): it keeps the LP moved in from the Highs object, the
+// pointers to the options, callback and timer, the analysis, the LP of the
+// simplex NLA, the dualization data and the records the API returns by
+// reference; the rest is Rust's. The scalars that C++ reads and writes
+// (status_, info_, model_status_, ...) are references into the Rust
+// object.
+class HEkk {
+ public:
+  HEkk();
+  ~HEkk();
+  HEkk(const HEkk&) = delete;
+  HEkk& operator=(const HEkk&) = delete;
+
+  void clear();
+  void clearEkkLp();
+  void clearEkkDualize();
+  void clearRayRecords();
+  void invalidate();
+  void updateStatus(LpAction action);
+  void setNlaPointersForLpAndScale(const HighsLp& lp);
+  void btran(HVector& rhs, const double expected_density);
+  void ftran(HVector& rhs, const double expected_density);
+  void moveLp(HighsLpSolverObject& solver_object);
+  void setPointers(HighsCallback* callback, HighsOptions* options,
+                   HighsTimer* timer);
+
+  HighsStatus dualize();
+  HighsStatus undualize();
+  HighsStatus permute();
+  HighsStatus unpermute();
+  HighsStatus solve(const bool force_phase2 = false);
+  HighsStatus setBasis();
+  HighsStatus setBasis(const HighsBasis& highs_basis);
+
+  void putIterate();
+  HighsStatus getIterate();
+
+  void addCols(const HighsLp& lp, const HighsSparseMatrix& scaled_a_matrix);
+  void addRows(const HighsLp& lp, const HighsSparseMatrix& scaled_ar_matrix);
+  void deleteCols(const HighsIndexCollection& index_collection);
+  void deleteRows(const HighsIndexCollection& index_collection);
+  void unscaleSimplex(const HighsLp& incumbent_lp);
+  bool proofOfPrimalInfeasibility();
+
+  HighsSolution getSolution();
+  HighsBasis getHighsBasis(HighsLp& use_lp) const;
+  double computeBasisCondition(const HighsLp& lp, const bool exact = false,
+                               const bool report = false) const;
+  double computeBasisCondition() const {
+    return computeBasisCondition(this->lp_, false, false);
+  }
+  HighsStatus initialiseSimplexLpBasisAndFactor(
+      const bool only_from_known_basis = false);
+  bool lpFactorRowCompatible() const;
+  bool lpFactorRowCompatible(const HighsInt expectedNumRow) const;
+  std::string simplexStrategyToString(const HighsInt simplex_strategy) const;
+  // getUnscaledInfeasibilities (simplex/HSimplex.cpp) of the scaled
+  // simplex data, with `lp`'s scale factors
+  void getUnscaledInfeasibilities(const HighsLp& lp,
+                                  HighsInfo& highs_info) const;
+
+  // The simplex basis (valid until it changes); the slices are empty
+  // unless `use`
+  HighsInt* basicIndex() const;
+  RsMut<HighsInt> basicIndexSlice(const bool use = true) const;
+  RsMut<int8_t> nonbasicSlice(const bool move, const bool use = true) const;
+  HighsInt dualRayIndex() const { return sh_.dual_ray_index; }
+  HighsInt dualRaySign() const { return sh_.dual_ray_sign; }
+  // For new nonbasic columns: resize the simplex basis to num_tot
+  void resizeBasis(const HighsInt num_tot);
+  void appendBasicRows(const HighsInt num_col, const HighsInt num_row,
+                       const HighsInt new_num_row);
+  void flipNonbasicMove(const HighsInt var);
+  // The DSE weights, if any
+  const double* dualEdgeWeights() const;
+  // The values of the dual and primal ray records
+  std::vector<double> rayValue(const bool primal) const;
+  void setRayValue(const bool primal, const std::vector<double>& value);
+  highs_rs::RangingSlices rangingSlices();
+
+  const HighsSimplexStats& getSimplexStats() const { return simplex_stats_; }
+  void initialiseSimplexStats() { simplex_stats_.initialise(iteration_count_); }
+  void reportSimplexStats(FILE* file, const std::string message = "") const {
+    simplex_stats_.report(file, message);
+  }
+  // Debugging is left out of this build
+  HighsDebugStatus debugRetainedDataOk(const HighsLp&) const {
+    return HighsDebugStatus::kNotChecked;
+  }
+  HighsDebugStatus debugNlaCheckInvert(const std::string,
+                                       const HighsInt = -1) const {
+    return HighsDebugStatus::kNotChecked;
+  }
+  bool debugNlaScalingOk(const HighsLp&) const { return true; }
+
+  // Data members
+  HighsCallback* callback_;
+  HighsOptions* options_;
+  HighsTimer* timer_;
+  HighsSimplexAnalysis analysis_;
+
+  HighsLp lp_;
+  std::string lp_name_;
+
+  // The Rust simplex engine and its shared scalars
+  void* rs_;
+  highs_rs::HEkkShared& sh_;
+  HighsSimplexStatus& status_;
+  highs_rs::HEkkInfo& info_;
+  HighsModelStatus& model_status_;
+  HighsInt& iteration_count_;
+  SimplexAlgorithm& exit_algorithm_;
+  bool& dual_values_valid_;
+  HighsInt& debug_solve_call_num_;
+  HighsInt& debug_initial_build_synthetic_tick_;
+
+  // The LP of the simplex NLA and its scale factors if they are to be
+  // applied (HSimplexNla::lp_, scale_)
+  const HighsLp* nla_lp_;
+  const HighsScale* nla_scale_;
+
+  // Unused, but retained since there is a const reference to this in
+  // a deprecated method
+  HotStart hot_start_;
+  std::vector<double> primal_phase1_dual_;
+  HighsSimplexStats simplex_stats_;
+
+  // Data to be retained when dualizing
+  HighsInt original_num_col_;
+  HighsInt original_num_row_;
+  HighsInt original_num_nz_;
+  double original_offset_;
+  vector<double> original_col_cost_;
+  vector<double> original_col_lower_;
+  vector<double> original_col_upper_;
+  vector<double> original_row_lower_;
+  vector<double> original_row_upper_;
+  vector<HighsInt> upper_bound_col_;
+  vector<HighsInt> upper_bound_row_;
+
+ private:
+  struct RustHost;
+  // The factor's log options: a copy of the options' log flags made when
+  // the simplex NLA is set up, without callbacks (HFactor::log_options)
+  struct FactorLogData {
+    bool output_flag = false;
+    bool log_to_console = true;
+    HighsInt log_dev_level = 0;
+  };
+  FactorLogData factor_log_data_;
+  HighsLogOptions factor_log_options_;
+  void snapshotFactorLog();
+  // What clear() clears on the C++ side
+  void clearCpp();
+  // The view of the LP, the NLA's LP, the options and the host functions
+  // for a call
+  highs_rs::LpsEnv rsEnv(RustHost& host) const;
+  // Take what a solve or INVERT left in the Rust records
+  void takeRustOut();
+  void setNlaLp(const HighsLp& lp);
+  HighsStatus returnFromEkkSolve(const HighsStatus return_status,
+                                 const highs_rs::LpsSolveOut& out);
+};
+
+#else
 
 class HEkk {
  public:
@@ -133,6 +297,11 @@ class HEkk {
   HighsBasis getHighsBasis(HighsLp& use_lp) const;
 
   const SimplexBasis& getSimplexBasis() { return basis_; }
+  HighsInt* basicIndex() const {
+    return const_cast<HighsInt*>(basis_.basicIndex_.data());
+  }
+  HighsInt dualRayIndex() const { return dual_ray_record_.index; }
+  HighsInt dualRaySign() const { return dual_ray_record_.sign; }
   double computeBasisCondition(const HighsLp& lp, const bool exact = false,
                                const bool report = false) const;
   double computeBasisCondition() const {
@@ -179,15 +348,6 @@ class HEkk {
       const std::string message, const HighsInt alt_debug_level = -1) const;
   bool debugNlaScalingOk(const HighsLp& lp) const;
 
-#ifdef HIGHS_RUST
-  // The view of the data for the Rust kernels (simplex/HEkkRust.cpp)
-  highs_rs::Ekk rustView();
-  // HEkk::solve in Rust (rust/src/simplex/hekk.rs): its set-up and
-  // wrap-up, and the C++ it calls, are in HEkkRustSolve.cpp
-  HighsStatus solveRust(const bool force_phase2);
-  highs_rs::Hekk rustHekk(void* host_ctx, const bool draw_random_vectors);
-  struct RustHost;
-#endif
 
   // Data members
   HighsCallback* callback_;
@@ -201,21 +361,7 @@ class HEkk {
   HighsSimplexInfo info_;
   HighsModelStatus model_status_;
   SimplexBasis basis_;
-#ifdef HIGHS_RUST
-  // The records of visited bases and bad basis changes, owned by Rust
-  // (rust/src/simplex/basis_records.rs) so that the dual simplex
-  // iterations in Rust reach them directly
-  struct RustBasisRecords {
-    void* p;
-    RustBasisRecords();
-    RustBasisRecords(const RustBasisRecords& other);
-    RustBasisRecords& operator=(const RustBasisRecords& other);
-    ~RustBasisRecords();
-  };
-  RustBasisRecords basis_records_;
-#else
   HighsHashTable<uint64_t> visited_basis_;
-#endif
   HighsRandom random_;
   std::vector<double> dual_edge_weight_;
   std::vector<double> scattered_dual_edge_weight_;
@@ -332,9 +478,7 @@ class HEkk {
   bool debug_dual_feasible;
   double debug_max_relative_dual_steepest_edge_weight_error;
 
-#ifndef HIGHS_RUST
   std::vector<HighsSimplexBadBasisChangeRecord> bad_basis_change_;
-#endif
   std::vector<double> primal_phase1_dual_;
 
   HighsSimplexStats simplex_stats_;
@@ -496,5 +640,7 @@ class HEkk {
   friend class HEkkDualRow;
   friend class HEkkDualRHS;  // For  HEkkDualRHS::assessOptimality
 };
+
+#endif  // HIGHS_RUST
 
 #endif /* SIMPLEX_HEKK_H_ */

@@ -453,7 +453,6 @@ set(highs_sources
     simplex/HEkkInterface.cpp
     simplex/HEkkPrimal.cpp
     simplex/HEkkRust.cpp
-    simplex/HEkkRustSolve.cpp
     simplex/HighsSimplexAnalysis.cpp
     simplex/HSimplex.cpp
     simplex/HSimplexDebug.cpp

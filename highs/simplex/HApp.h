@@ -104,8 +104,15 @@ inline HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
 
   HEkk& ekk_instance = solver_object.ekk_instance_;
   HighsLp& ekk_lp = ekk_instance.lp_;
+#ifdef HIGHS_RUST
+  // The simplex data are the Rust simplex engine's
+  highs_rs::HEkkInfo& ekk_info = ekk_instance.info_;
+  HighsInt& dual_ray_index = ekk_instance.sh_.dual_ray_index;
+#else
   HighsSimplexInfo& ekk_info = ekk_instance.info_;
   SimplexBasis& ekk_basis = ekk_instance.basis_;
+  HighsInt& dual_ray_index = ekk_instance.dual_ray_record_.index;
+#endif
   HighsSimplexStatus& status = ekk_instance.status_;
 
   // Check that any retained Ekk data - basis and NLA - are OK on entry
@@ -301,8 +308,12 @@ inline HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
       ekk_instance.setNlaPointersForLpAndScale(incumbent_lp);
       unscaleSolution(solution, incumbent_lp.scale_);
       // Determine whether the unscaled LP has been solved
+#ifdef HIGHS_RUST
+      ekk_instance.getUnscaledInfeasibilities(incumbent_lp, highs_info);
+#else
       getUnscaledInfeasibilities(options, incumbent_lp.scale_, ekk_basis,
                                  ekk_info, highs_info);
+#endif
       num_unscaled_primal_infeasibilities =
           highs_info.num_primal_infeasibilities;
       num_unscaled_dual_infeasibilities = highs_info.num_dual_infeasibilities;
@@ -387,9 +398,9 @@ inline HighsStatus solveLpSimplex(HighsLpSolverObject& solver_object) {
     // proof being true
     if (scaled_model_status == HighsModelStatus::kInfeasible &&
         ekk_instance.exit_algorithm_ == SimplexAlgorithm::kDual)
-      assert(ekk_instance.dual_ray_record_.index != kNoRayIndex);
+      assert(dual_ray_index != kNoRayIndex);
     if (scaled_model_status == HighsModelStatus::kInfeasible &&
-        ekk_instance.dual_ray_record_.index != kNoRayIndex) {
+        dual_ray_index != kNoRayIndex) {
       ekk_instance.setNlaPointersForLpAndScale(ekk_lp);
       if (ekk_instance.proofOfPrimalInfeasibility()) solve_unscaled_lp = false;
     }

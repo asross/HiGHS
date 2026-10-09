@@ -2199,15 +2199,15 @@ HighsStatus Highs::getDualRay(bool& has_dual_ray, double* dual_ray_value) {
 
 HighsStatus Highs::getDualRaySparse(bool& has_dual_ray,
                                     HVector& row_ep_buffer) {
-  has_dual_ray = ekk_instance_.dual_ray_record_.index != kNoRayIndex;
+  has_dual_ray = ekk_instance_.dualRayIndex() != kNoRayIndex;
   if (has_dual_ray) {
     ekk_instance_.setNlaPointersForLpAndScale(model_.lp_);
     row_ep_buffer.clear();
     row_ep_buffer.count = 1;
     row_ep_buffer.packFlag = true;
-    HighsInt iRow = ekk_instance_.dual_ray_record_.index;
+    HighsInt iRow = ekk_instance_.dualRayIndex();
     row_ep_buffer.index[0] = iRow;
-    row_ep_buffer.array[iRow] = ekk_instance_.dual_ray_record_.sign;
+    row_ep_buffer.array[iRow] = ekk_instance_.dualRaySign();
 
     ekk_instance_.btran(row_ep_buffer, ekk_instance_.info_.row_ep_density);
   }
@@ -2306,7 +2306,7 @@ bool Highs::hasInvert() const { return ekk_instance_.status_.has_invert; }
 
 const HighsInt* Highs::getBasicVariablesArray() const {
   assert(ekk_instance_.status_.has_invert);
-  return ekk_instance_.basis_.basicIndex_.data();
+  return ekk_instance_.basicIndex();
 }
 
 HighsStatus Highs::getBasicVariables(HighsInt* basic_variables) {

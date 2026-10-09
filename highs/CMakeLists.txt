@@ -61,6 +61,14 @@ if(HIGHS_RUST)
     simplex/HEkkDualRowRust.cpp
     simplex/HEkkPrimal.cpp
     simplex/HSimplexNlaProductForm.cpp
+    # HEkk's data and logic are Rust (rust/src/simplex/lp_solver.rs):
+    # HEkkRust.cpp is its C++ shell
+    simplex/HEkk.cpp
+    simplex/HEkkControl.cpp
+    simplex/HEkkDebug.cpp
+    simplex/HSimplexNla.cpp
+    simplex/HSimplexNlaDebug.cpp
+    simplex/HSimplexNlaFreeze.cpp
     # unused once the C++ simplex is gone (HighsLinearSumBounds: presolve
     # and the MIP domain are Rust)
     simplex/HEkkInterface.cpp

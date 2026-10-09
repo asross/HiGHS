@@ -1247,6 +1247,11 @@ HighsStatus Highs::scaleColInterface(const HighsInt col,
     }
   }
   if (simplex_status.initialised_for_solve) {
+#ifdef HIGHS_RUST
+    // Negative, so flip any nonbasic status
+    if (scale_value < 0 && simplex_status.has_basis)
+      ekk_instance_.flipNonbasicMove(col);
+#else
     SimplexBasis& simplex_basis = ekk_instance_.basis_;
     if (scale_value < 0 && simplex_status.has_basis) {
       // Negative, so flip any nonbasic status
@@ -1256,6 +1261,7 @@ HighsStatus Highs::scaleColInterface(const HighsInt col,
         simplex_basis.nonbasicMove_[col] = kNonbasicMoveUp;
       }
     }
+#endif
   }
   // Deduce the consequences of a scaled column
   invalidateModelStatusSolutionAndInfo();
@@ -1293,6 +1299,11 @@ HighsStatus Highs::scaleRowInterface(const HighsInt row,
     }
   }
   if (simplex_status.initialised_for_solve) {
+#ifdef HIGHS_RUST
+    // Negative, so flip any nonbasic status
+    if (scale_value < 0 && simplex_status.has_basis)
+      ekk_instance_.flipNonbasicMove(lp.num_col_ + row);
+#else
     SimplexBasis& simplex_basis = ekk_instance_.basis_;
     if (scale_value < 0 && simplex_status.has_basis) {
       // Negative, so flip any nonbasic status
@@ -1303,6 +1314,7 @@ HighsStatus Highs::scaleRowInterface(const HighsInt row,
         simplex_basis.nonbasicMove_[var] = kNonbasicMoveUp;
       }
     }
+#endif
   }
   // Deduce the consequences of a scaled row
   invalidateModelStatusSolutionAndInfo();
@@ -1534,16 +1546,11 @@ void Highs::appendNonbasicColsToBasisInterface(const HighsInt ext_num_new_col) {
 }
 
 #else
-static RsMut<int8_t> rsMutIf(std::vector<int8_t>& v, const bool use) {
-  return use ? rsMut(v) : RsMut<int8_t>{nullptr, 0};
-}
-
 void Highs::setNonbasicStatusInterface(
     const HighsIndexCollection& index_collection, const bool columns) {
   HighsBasis& highs_basis = basis_;
   if (!highs_basis.valid) return;
   const bool has_simplex_basis = ekk_instance_.status_.has_basis;
-  SimplexBasis& simplex_basis = ekk_instance_.basis_;
   HighsLp& lp = model_.lp_;
   assert(ok(index_collection));
   const RsIndexCollection ic = rsIndexCollection(index_collection);
@@ -1553,8 +1560,8 @@ void Highs::setNonbasicStatusInterface(
       &ic, columns, rsBasisStatus(status),
       rsMut(columns ? lp.col_lower_ : lp.row_lower_),
       rsMut(columns ? lp.col_upper_ : lp.row_upper_),
-      rsMutIf(simplex_basis.nonbasicFlag_, has_simplex_basis),
-      rsMutIf(simplex_basis.nonbasicMove_, has_simplex_basis),
+      ekk_instance_.nonbasicSlice(false, has_simplex_basis),
+      ekk_instance_.nonbasicSlice(true, has_simplex_basis),
       columns ? 0 : lp.num_col_);
 }
 
@@ -1563,25 +1570,20 @@ void Highs::appendNonbasicColsToBasisInterface(const HighsInt ext_num_new_col) {
   HighsBasis& highs_basis = basis_;
   if (!highs_basis.useful) return;
   const bool has_simplex_basis = ekk_instance_.status_.has_basis;
-  SimplexBasis& simplex_basis = ekk_instance_.basis_;
   HighsLp& lp = model_.lp_;
   assert(highs_basis.col_status.size() == static_cast<size_t>(lp.num_col_));
   assert(highs_basis.row_status.size() == static_cast<size_t>(lp.num_row_));
   const HighsInt newNumCol = lp.num_col_ + ext_num_new_col;
   const HighsInt newNumTot = newNumCol + lp.num_row_;
   highs_basis.col_status.resize(newNumCol);
-  if (has_simplex_basis) {
-    simplex_basis.nonbasicFlag_.resize(newNumTot);
-    simplex_basis.nonbasicMove_.resize(newNumTot);
-  }
+  if (has_simplex_basis) ekk_instance_.resizeBasis(newNumTot);
   highs_rs_append_nonbasic_cols(
       lp.num_col_, lp.num_row_, ext_num_new_col,
       rsBasisStatus(highs_basis.col_status), rsMut(lp.col_lower_),
       rsMut(lp.col_upper_),
-      rsMutIf(simplex_basis.nonbasicFlag_, has_simplex_basis),
-      rsMutIf(simplex_basis.nonbasicMove_, has_simplex_basis),
-      has_simplex_basis ? rsMut(simplex_basis.basicIndex_)
-                        : RsMut<HighsInt>{nullptr, 0});
+      ekk_instance_.nonbasicSlice(false, has_simplex_basis),
+      ekk_instance_.nonbasicSlice(true, has_simplex_basis),
+      ekk_instance_.basicIndexSlice(has_simplex_basis));
 }
 #endif
 
@@ -1590,7 +1592,9 @@ void Highs::appendBasicRowsToBasisInterface(const HighsInt ext_num_new_row) {
   HighsBasis& highs_basis = basis_;
   if (!highs_basis.useful) return;
   const bool has_simplex_basis = ekk_instance_.status_.has_basis;
+#ifndef HIGHS_RUST
   SimplexBasis& simplex_basis = ekk_instance_.basis_;
+#endif
   HighsLp& lp = model_.lp_;
 
   assert(highs_basis.col_status.size() == static_cast<size_t>(lp.num_col_));
@@ -1604,6 +1608,9 @@ void Highs::appendBasicRowsToBasisInterface(const HighsInt ext_num_new_row) {
     highs_basis.row_status[iRow] = HighsBasisStatus::kBasic;
   if (has_simplex_basis) {
     // Add the new rows to the simplex basis
+#ifdef HIGHS_RUST
+    ekk_instance_.appendBasicRows(lp.num_col_, lp.num_row_, newNumRow);
+#else
     HighsInt newNumTot = lp.num_col_ + newNumRow;
     simplex_basis.nonbasicFlag_.resize(newNumTot);
     simplex_basis.nonbasicMove_.resize(newNumTot);
@@ -1613,6 +1620,7 @@ void Highs::appendBasicRowsToBasisInterface(const HighsInt ext_num_new_row) {
       simplex_basis.nonbasicMove_[lp.num_col_ + iRow] = 0;
       simplex_basis.basicIndex_[iRow] = lp.num_col_ + iRow;
     }
+#endif
   }
 }
 
@@ -1647,7 +1655,7 @@ HighsStatus Highs::getBasicVariablesInterface(HighsInt* basic_variables) {
   assert(ekk_status.has_invert);
 
   for (HighsInt row = 0; row < num_row; row++) {
-    HighsInt var = ekk_instance_.basis_.basicIndex_[row];
+    HighsInt var = ekk_instance_.basicIndex()[row];
     if (var < num_col) {
       basic_variables[row] = var;
     } else {

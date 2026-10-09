@@ -22,7 +22,6 @@
 using std::abs;
 using std::max;
 
-#ifndef HIGHS_RUST
 const double ok_feasibility_difference = 1e-3;
 
 const double large_basic_dual = 1e-12;
@@ -1721,88 +1720,3 @@ bool HEkk::debugNoShiftsOrPerturbations() const {
   }
   return true;
 }
-#else
-// Debugging is not in Crestline: the checks are no-ops
-void HEkk::debugInitialise() {
-}
-void HEkk::debugReportInitialBasis() {
-}
-void HEkk::timeReporting(const HighsInt save_mod_recover) {
-}
-void HEkk::debugReporting(const HighsInt save_mod_recover,
-                          const HighsInt log_dev_level_) {
-}
-HighsDebugStatus HEkk::debugSimplex(const std::string message,
-                                    const SimplexAlgorithm algorithm,
-                                    const HighsInt phase,
-                                    const bool initialise) const {
-  return HighsDebugStatus::kNotChecked;
-}
-void HEkk::debugReportReinvertOnNumericalTrouble(
-    const std::string method_name, const double numerical_trouble_measure,
-    const double alpha_from_col, const double alpha_from_row,
-    const double numerical_trouble_tolerance, const bool reinvert) const {
-}
-HighsDebugStatus HEkk::debugUpdatedDual(const double updated_dual,
-                                        const double computed_dual) const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugRetainedDataOk(const HighsLp& lp) const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugBasisCorrect(const HighsLp* lp) const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugBasisConsistent() const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugNonbasicFlagConsistent() const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugNonbasicMove(const HighsLp* pass_lp) const {
-  return HighsDebugStatus::kNotChecked;
-}
-bool HEkk::debugNlaScalingOk(const HighsLp& lp) const {
-  return true;
-}
-HighsDebugStatus HEkk::debugNlaCheckInvert(
-    const std::string message, const HighsInt alt_debug_level) const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugOkForSolve(const SimplexAlgorithm algorithm,
-                                       const HighsInt phase) const {
-  return HighsDebugStatus::kNotChecked;
-}
-bool HEkk::debugWorkArraysOk(const SimplexAlgorithm algorithm,
-                             const HighsInt phase) const {
-  return true;
-}
-bool HEkk::debugOneNonbasicMoveVsWorkArraysOk(const HighsInt var) const {
-  return true;
-}
-HighsDebugStatus HEkk::debugNonbasicFreeColumnSet(
-    const HighsInt num_free_col, const HSet nonbasic_free_col_set) const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::devDebugDualSteepestEdgeWeights(
-    const std::string message) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugDualSteepestEdgeWeights(
-    const HighsInt alt_debug_level) {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugRowMatrix() const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugComputeDual(const bool initialise) const {
-  return HighsDebugStatus::kNotChecked;
-}
-HighsDebugStatus HEkk::debugSimplexDualInfeasible(const std::string message,
-                                                  const bool force_report) {
-  return HighsDebugStatus::kNotChecked;
-}
-bool HEkk::debugNoShiftsOrPerturbations() const {
-  return true;
-}
-#endif

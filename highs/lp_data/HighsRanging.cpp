@@ -671,25 +671,25 @@ HighsStatus getRangingData(HighsRanging& ranging,
     // Unscale the simplex data if the LP has been solved in the scaled space
     ekk_instance.unscaleSimplex(use_lp);
   }
-  const HighsSimplexInfo& info = ekk_instance.info_;
-  const SimplexBasis& basis = ekk_instance.basis_;
+  // The simplex data, owned by the Rust simplex engine
+  const highs_rs::RangingSlices s = ekk_instance.rangingSlices();
   const HighsInt num_col = use_lp.num_col_;
   const HighsInt num_row = use_lp.num_row_;
   c.num_col = num_col;
   c.num_row = num_row;
   c.sense = use_lp.sense_ == ObjSense::kMaximize ? -1 : 1;
   c.objective = solver_object.highs_info_.objective_function_value;
-  c.work_value = rsMut(info.workValue_);
-  c.work_dual = rsMut(info.workDual_);
-  c.work_cost = rsMut(info.workCost_);
-  c.work_lower = rsMut(info.workLower_);
-  c.work_upper = rsMut(info.workUpper_);
-  c.base_value = rsMut(info.baseValue_);
-  c.base_lower = rsMut(info.baseLower_);
-  c.base_upper = rsMut(info.baseUpper_);
-  c.nonbasic_flag = rsMut(basis.nonbasicFlag_);
-  c.nonbasic_move = rsMut(basis.nonbasicMove_);
-  c.basic_index = rsMut(basis.basicIndex_);
+  c.work_value = s.work_value;
+  c.work_dual = s.work_dual;
+  c.work_cost = s.work_cost;
+  c.work_lower = s.work_lower;
+  c.work_upper = s.work_upper;
+  c.base_value = s.base_value;
+  c.base_lower = s.base_lower;
+  c.base_upper = s.base_upper;
+  c.nonbasic_flag = s.nonbasic_flag;
+  c.nonbasic_move = s.nonbasic_move;
+  c.basic_index = s.basic_index;
   RangingFtran f{ekk_instance, use_lp.a_matrix_, HVector()};
   f.column.setup(num_row);
   c.ftran = rangingFtran;

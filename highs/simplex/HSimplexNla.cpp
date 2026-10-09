@@ -47,12 +47,10 @@ void HSimplexNla::setLpAndScalePointers(const HighsLp* for_lp) {
     this->scale_ = &(for_lp->scale_);
 }
 
-#ifndef HIGHS_RUST
 void HSimplexNla::setBasicIndexPointers(HighsInt* basic_index) {
   this->basic_index_ = basic_index;
   this->factor_.basic_index = basic_index;
 }
-#endif
 
 void HSimplexNla::setPointers(const HighsLp* for_lp,
                               const HighsSparseMatrix* factor_a_matrix,
@@ -121,22 +119,16 @@ void HSimplexNla::ftranInScaledSpace(
   factor_.ftranCall(rhs, expected_density, factor_timer_clock_pointer);
 }
 
-#ifndef HIGHS_RUST
 void HSimplexNla::update(HVector* aq, HVector* ep, HighsInt* iRow,
                          HighsInt* hint) {
   reportPackValue("  pack: aq Bf ", aq);
   reportPackValue("  pack: ep Bf ", ep);
   factor_.clearRefactorInfo();
-#ifdef HIGHS_RUST
-  // The product form update is not used (nothing sets it up)
-  factor_.update(aq, ep, iRow, hint);
-#else
   if (!update_.valid_) {
     factor_.update(aq, ep, iRow, hint);
   } else {
     *hint = update_.update(aq, iRow);
   }
-#endif
 }
 
 double HSimplexNla::rowEp2NormInScaledSpace(const HighsInt iRow,
@@ -249,7 +241,6 @@ double HSimplexNla::pivotInScaledSpace(const HVector* aq,
 void HSimplexNla::setPivotThreshold(const double new_pivot_threshold) {
   factor_.setPivotThreshold(new_pivot_threshold);
 }
-#endif
 
 void HSimplexNla::applyBasisMatrixRowScale(HVector& rhs) const {
   if (scale_ == NULL) return;
@@ -281,7 +272,6 @@ void HSimplexNla::applyBasisMatrixColScale(HVector& rhs) const {
   }
 }
 
-#ifndef HIGHS_RUST
 void HSimplexNla::unapplyBasisMatrixRowScale(HVector& rhs) const {
   if (scale_ == NULL) return;
   const vector<double>& row_scale = scale_->row;
@@ -293,7 +283,6 @@ void HSimplexNla::unapplyBasisMatrixRowScale(HVector& rhs) const {
     rhs.array[iRow] /= row_scale[iRow];
   }
 }
-#endif
 
 void HSimplexNla::addCols(const HighsLp* updated_lp) {
   // Adding columns is easy, since they are nonbasic
@@ -305,7 +294,6 @@ void HSimplexNla::addCols(const HighsLp* updated_lp) {
   setLpAndScalePointers(updated_lp);
 }
 
-#ifndef HIGHS_RUST
 void HSimplexNla::addRows(const HighsLp* updated_lp, HighsInt* basic_index,
                           const HighsSparseMatrix* scaled_ar_matrix) {
   // Adding rows is not so easy, since their slacks are basic
@@ -317,7 +305,6 @@ void HSimplexNla::addRows(const HighsLp* updated_lp, HighsInt* basic_index,
   factor_.basic_index = basic_index;
   factor_.addRows(scaled_ar_matrix);
 }
-#endif
 
 bool HSimplexNla::sparseLoopStyle(const HighsInt count, const HighsInt dim,
                                   HighsInt& to_entry) const {
@@ -414,7 +401,6 @@ void HSimplexNla::reportArraySparse(const std::string message,
   printf("\n");
 }
 
-#ifndef HIGHS_RUST
 void HSimplexNla::reportPackValue(const std::string message,
                                   const HVector* vector,
                                   const bool force) const {
@@ -434,7 +420,6 @@ void HSimplexNla::reportPackValue(const std::string message,
   }
   printf("\n");
 }
-#endif
 
 HighsDebugStatus HSimplexNla::debugCheckData(const std::string message) const {
   std::string scale_status;

@@ -88,8 +88,10 @@ file readers in parallel. IPX, PDLP and QP last.
   loops that clang leaves rolled.
 - **C++ switch.** `HIGHS_RUST` is defined in `HConfig.h`, so every
   translation unit sees the same class layouts.
-- **HEkk's data** is reached through `EkkView` (rust/src/simplex/ekk.rs,
-  see its module comment), filled per call by `HEkk::rustView()`.
+- **HEkk's data** is Rust's: an `LpSolver` (rust/src/simplex/lp_solver.rs,
+  see "The simplex engine's data") owned by the C++ HEkk shell. The
+  kernels work on `EkkView`s (rust/src/simplex/ekk.rs) that LpSolver
+  builds from its fields and a view of the LP.
 - **Rust owns ported state.** A ported class keeps its C++ header as a thin
   wrapper around an opaque Rust handle until its callers are ported.
 - **Tests:** `cargo test` for each module, and the C++ unit tests
@@ -220,17 +222,76 @@ integers, best estimate).
 
 HEkk::solve runs in Rust from initialiseForSolve down (simplex/hekk.rs,
 dual.rs, primal.rs; simplex analysis, debugging and SIP/PAMI are left out
-of the build). HEkk's data stays
-C++-owned: HEkk::solveRust (highs/simplex/HEkkRustSolve.cpp) sizes every
-vector the solve could resize, fills a `CHekk` of views and pointers,
-calls `highs_rs_ekk_solve`, then takes what Rust left for C++ vectors
-(hot start record, primal phase 1 duals, ray values to clear) and does
-returnFromEkkSolve. Rust calls C++ only through `Host`: log messages
-(formatted in Rust with util/printf.rs, which matches C's printf), the
-run clock (once per solver with a
-time limit), a user interrupt callback, and the rare rank deficient
-initial basis. The factor's refactorization information and the saved
-INVERT of putIterate/getIterate are held by the Rust factor.
+of the build), on the Rust-owned `LpSolver` (see "The simplex engine's
+data"): LpSolver::solve sizes every vector the solve could resize, builds
+the `CHekk` of views and pointers into itself, runs the solve and takes
+what it left (ray values to clear, saved edge weights taken); the C++
+shell copies the hot start record and primal phase 1 duals the API
+returns by reference and does the simplex stats of returnFromEkkSolve.
+Rust calls C++ only through `Host`: log messages (formatted in Rust with
+util/printf.rs, which matches C's printf), the run clock (once per solver
+with a time limit), a user interrupt callback and the CHUZC failure
+reports (dev log). The factor's refactorization information and the
+saved INVERT of putIterate/getIterate are held by the Rust factor.
+
+## The simplex engine's data (LpSolver)
+
+Everything HEkk owned but its LP is Rust's: `LpSolver`
+(rust/src/simplex/lp_solver.rs) holds the status flags, HighsSimplexInfo
+(work, base and random vectors, the backtracking basis, densities,
+counters, perturbation and cleanup state), the simplex basis, the edge
+weights (with the saved weights carried over LP edits), the row-wise
+partitioned matrix, the scaled copy of the constraint matrix, the Rust
+factor with HFactor's set-up parameters (HSimplexNla and the C++ HFactor
+shell are gone from HEkk), the saved iterate of putIterate/getIterate, the
+dual-value reuse state, the ray records and the basis records. Its methods
+are the rest of HEkk.cpp, HEkkControl.cpp and HSimplexNla: clear and
+invalidate, updateStatus (with the DSE weights kept over basis changes and
+row additions/deletions), moveLp's checks, initialiseEkk with
+setSimplexOptions/initialiseControl and the random vectors, setBasis
+(logical or from a HighsBasis), getHighsBasis, getSolution, unscaleSimplex,
+getUnscaledInfeasibilities, addRows/deleteRows, the basis edits of the
+Highs interface (appending nonbasic columns and basic rows, the flip for a
+negative scale factor), the undualized basis, initialiseSimplexLpBasisAndFactor
+(the rank deficient basis handling is hekk.rs `initial_rank_deficiency`),
+the NLA solves (FTRAN/BTRAN with the basis matrix scaling of the NLA's LP),
+put/getIterate, computeBasisCondition and proofOfPrimalInfeasibility.
+
+The C++ HEkk (highs/simplex/HEkk.h under HIGHS_RUST, HEkkRust.cpp) is a
+shell: it keeps the LP (still a C++ HighsLp, moved in from and back to the
+Highs object around a solve), the pointers to the options, callback and
+timer, the analysis (whose report data the simplex logs use), which LP the
+simplex NLA scales by (setNlaPointersForLpAndScale), dualize() and the LP
+part of undualize() (simplex_dualize_strategy is off by default), the
+factor's log options (copied at set-up, as HFactor did), and the hot start,
+primal phase 1 duals and simplex stats the API returns by reference. The
+scalars C++ code reads and writes (status_, info_'s objective values,
+infeasibilities, densities, pivot threshold and edge weight strategy,
+model_status_, iteration_count_, exit_algorithm_, the ray indices and
+signs, dual_values_valid_) are `EkkShared`, a repr(C) struct inside the
+Rust object that the shell refers to with HEkk's old member names; the
+basis, edge weights, work arrays and ray values are reached through
+accessors. Every call passes an `LpsEnv`: a view of the LP (`RsLp`), the
+NLA's LP dimensions and scale factors, the option values the simplex reads
+and the host functions.
+
+Still C++ on the LP side: the LP itself (HighsLp and HighsSparseMatrix in
+the Highs object, moved into HEkk for a solve), solveLpSimplex (simplex/
+HApp.h: scaling decisions, moving the LP, the unscaled clean-up solve,
+copying the solution, basis and info back), the Highs class and its
+HighsLp/HighsSolution/HighsBasis/HighsInfo/HighsOptions, and the LP
+relaxation's `Highs` object (see "What remains C++" of the MIP driver).
+The next steps, in order: (1) LpSolver owns the LP (columns/rows,
+HighsSparseMatrix column-wise copy, scaling, names) with the Highs object's
+model LP as a handle to it (C++ readers of getLp() get a synced copy), so
+moveLp becomes free and solveLpSimplex, HighsSparseMatrix's edits and the
+add/delete/change interfaces move to Rust; (2) LpSolver gains the
+solution, basis, info, model status and the option values, with run.rs's
+`Op`s implemented on them for an LP (presolve via the Rust presolve on the
+Rust LP, the postsolve stack's storage Rust's); (3) HighsLpRelaxation uses
+LpSolver directly (no `Highs`): model edits, solves with iteration limits,
+basis store/recover, get/putIterate, rays, basis inverse rows, the IPX
+race with the Rust IPX; the C++ `Highs` keeps a handle for the API.
 
 ## The MIP domain (HighsDomain)
 
@@ -610,11 +671,12 @@ callbacks; about 240 op codes):
   addRows/deleteRows, changeColsBounds/Cost, setBasis/getBasis, run with
   the IPX race, getSolution/getInfo, getDualRay, getBasisInverseRow,
   putIterate/getIterate, options), and the same for the analytic centre
-  (IPM) and the repair LP. The LP algorithms are Rust, but HEkk's data and
-  the Highs LP API stay C++ (HEkkRustSolve.cpp views); a Rust-owned LP
-  relaxation needs a Rust-owned HEkk with the incremental model updates
-  and status bookkeeping of HEkk.cpp and Highs' modification methods,
-  shared with the top-level port (lp_data).
+  (IPM) and the repair LP. The LP algorithms and the simplex engine's
+  data are Rust (`LpSolver`), but the LP itself and the Highs LP API stay
+  C++; a Rust-owned LP relaxation needs the LP, solution, basis, info and
+  options in LpSolver with the incremental model updates of Highs'
+  modification methods and the run path of run.rs on Rust data (see "The
+  simplex engine's data").
 - The object shells: HighsMipSolver (options, models, callback, timer,
   terminator), HighsMipSolverData's containers (deques of LP relaxations,
   domains, pool and pseudocost handles, workers), HighsSearch (local
@@ -948,18 +1010,14 @@ What blocks a C++-free crest: the whole C++ column of the table below.
 In order of size: the `Highs` class and its data (Highs.cpp,
 HighsInterface.cpp, HighsLp/HighsSolution/HighsOptions/HighsInfo records,
 HighsIO logging), the MIP solver's C++ classes, init, restarts, workers
-and the HighsTask scheduler (concurrent port), HEkk's data (its
-remaining methods: basis set-up, LP moves, dualize, model edits,
-getSolution, the infeasibility proof, the condition estimate, the NLA
-wrapper of the API solves; HApp.h), HighsSparseMatrix, the IPX and QP
-glue, the
-IIS and the utilities. highspy stays a C++ wrapper of `Highs`.
+and the HighsTask scheduler (concurrent port), the HEkk shell (the LP
+moves, dualize; solveLpSimplex of HApp.h), HighsSparseMatrix, the IPX and
+QP glue, the IIS and the utilities. highspy stays a C++ wrapper of `Highs`.
 In order of size: the `Highs` class and its data (the API wrappers of
 Highs.cpp and HighsInterface.cpp, the step glue of HighsRunRust.cpp,
 HighsLp/HighsSolution/HighsOptions/HighsInfo records), the MIP solver's
 C++ classes, init, restarts, workers and the HighsTask scheduler
-(concurrent port), HEkk's data and the C++ simplex fallback (the product
-form update), and the utilities. crest still links all of libhighs.a:
+(concurrent port), the HEkk shell and HApp.h, and the utilities. crest still links all of libhighs.a:
 the C++ files of lp_data, io and model are now mostly glue between the
 C++ data and the Rust logic, which goes when the data becomes Rust's.
 highspy stays a C++ wrapper of `Highs`.
@@ -1028,25 +1086,16 @@ HIGHS_RUST (unifdef). Kinds: "glue" is Rust-call glue, "part ported" has
 code under `#ifndef HIGHS_RUST`, "C++" is compiled whole (live, a fallback
 for paths Rust does not take, or debug only, as the last column says).
 
-By area (code lines, C++ build -> HIGHS_RUST): lp_data 19983 -> 13138,
-mip 19455 -> 11161 (concurrent port), simplex 13169 -> 3314 (the C++
-simplex is not built), util 6762 -> 2775, presolve 9015 -> 1176, ipm 1303 -> 997 (the IPX glue),
-io 3459 -> 736, model 811, qpsolver 278 -> 379, pdlp 141 (cuPDLP-C glue),
-highs 99 (third-party notice), app 95 -> 3: in all 68766 -> 34731 lines
-in 106 files (the C++ build column counts only the files still built). Before HiPO, HiPDLP, SIP/PAMI, iCrash, multi-objective,
-debugging, the C API and the fixed MPS reader were left out ("Left out
-of the HIGHS_RUST build"), it was 60977 lines in 160 files.
-By area (code lines, C++ build -> HIGHS_RUST): lp_data 19987 -> 9871,
-mip 19455 -> 11161 (concurrent port), simplex 13169 -> 10414 (glue
-added; the C++ dual and primal remain as the product form fallback),
-util 6762 -> 4388, presolve 9015 -> 963, ipm 1304 -> 350 (glue), io 3460
--> 667, model 813 -> 198, qpsolver 281 -> 165 (glue), pdlp 141 (cuPDLP-C
-glue), highs 99 (third-party notice), app 95 -> 3: in all 74609 -> 38421
-lines in 121 files (43444 before lp_data's logging, Hessian, reports,
-drivers, IIS, IPX, QP and ill-conditioning glue moved). Before HiPO,
-HiPDLP, SIP/PAMI, iCrash, multi-objective, debugging, the C API and the
-fixed MPS reader were left out ("Left out of the HIGHS_RUST build"), it
-was 60977 lines in 160 files.
+By area (code lines, C++ build -> HIGHS_RUST): lp_data 19987 -> 9840, mip
+19455 -> 6905, util 6360 -> 2775, simplex 1697 -> 1277, presolve 9015 ->
+963, io 3460 -> 667, ipm 1304 -> 350, model 813 -> 198, qpsolver 281 ->
+165, pdlp 141 -> 141, highs 99 -> 99, app 95 -> 3, parallel 28 -> 1: in
+all 62735 -> 23384 lines in 103 files (the C++ build column counts only
+the files still built). Before the simplex engine's data moved to Rust
+(LpSolver) it was 25452 lines in 110 files; before HiPO, HiPDLP, SIP/PAMI,
+iCrash, multi-objective, debugging, the C API and the fixed MPS reader
+were left out ("Left out of the HIGHS_RUST build"), 60977 lines in 160
+files.
 
 | file | C++ build | HIGHS_RUST | kind | what is left |
 |---|---:|---:|---|---|
@@ -1072,16 +1121,16 @@ was 60977 lines in 160 files.
 | highs/lp_data/HighsIllCondRust.cpp | 1 | 100 | glue |  |
 | highs/lp_data/HighsInfo.cpp | 396 | 3 | part ported | part ported (see "The top level") |
 | highs/lp_data/HighsInfoDebug.cpp | 158 | 10 | stubs | no-op stubs (debugging is left out) |
-| highs/lp_data/HighsInterface.cpp | 3750 | 1229 | part ported | live: add/delete/change/scale interfaces, user scaling, PDLP clean-up, HighsProfiling |
+| highs/lp_data/HighsInterface.cpp | 3750 | 1198 | part ported | live: add/delete/change/scale interfaces, user scaling, PDLP clean-up, HighsProfiling |
 | highs/lp_data/HighsLp.cpp | 471 | 339 | part ported | live: HighsLp methods (equality, names, dimensions) |
 | highs/lp_data/HighsLpUtils.cpp | 3272 | 497 | part ported | live: considerScaling, appending to LP vectors, withoutSemiVariables, getLp* copies |
 | highs/lp_data/HighsLpUtilsRust.cpp | 1 | 625 | glue |  |
 | highs/lp_data/HighsModelUtils.cpp | 1419 | 127 | part ported | glue: names and status strings (model_utils.rs) |
 | highs/lp_data/HighsOptions.cpp | 1051 | 29 | part ported | part ported (see "The top level") |
 | highs/lp_data/HighsOptionsRust.cpp | 1 | 612 | glue |  |
-| highs/lp_data/HighsRanging.cpp | 592 | 135 | part ported | part ported (see "The top level") |
+| highs/lp_data/HighsRanging.cpp | 592 | 134 | part ported | part ported (see "The top level") |
 | highs/lp_data/HighsRunData.cpp | 219 | 219 | C++ | live: run data (record of a run) |
-| highs/lp_data/HighsRunRust.cpp | 1 | 1700 | glue |  |
+| highs/lp_data/HighsRunRust.cpp | 1 | 1701 | glue |  |
 | highs/lp_data/HighsSolution.cpp | 1894 | 218 | part ported | live: HighsSolution/HighsBasis struct methods, right-size checks |
 | highs/lp_data/HighsSolutionDebug.cpp | 420 | 90 | stubs | no-op stubs (debugging is left out) |
 | highs/lp_data/HighsSolutionRust.cpp | 1 | 360 | glue |  |
@@ -1093,7 +1142,7 @@ was 60977 lines in 160 files.
 | highs/mip/HighsConflictPool.cpp | 245 | 65 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsCutGeneration.cpp | 1060 | 1 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsCutPool.cpp | 511 | 113 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
-| highs/mip/HighsDomain.cpp | 3164 | 3249 | C++ | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
+| highs/mip/HighsDomain.cpp | 3164 | 523 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsDynamicRowMatrix.cpp | 150 | 5 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsFeasibilityJump.cpp | 111 | 119 | C++ | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsGFkSolve.cpp | 79 | 79 | C++ | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
@@ -1101,17 +1150,17 @@ was 60977 lines in 160 files.
 | highs/mip/HighsImplications.cpp | 700 | 281 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsLpAggregator.cpp | 33 | 1 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsLpRelaxation.cpp | 1401 | 921 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
-| highs/mip/HighsMipSolver.cpp | 1210 | 792 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
-| highs/mip/HighsMipSolverData.cpp | 2639 | 2403 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
-| highs/mip/HighsMipWorker.cpp | 161 | 173 | C++ | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
+| highs/mip/HighsMipSolver.cpp | 1210 | 780 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
+| highs/mip/HighsMipSolverData.cpp | 2639 | 949 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
+| highs/mip/HighsMipWorker.cpp | 161 | 143 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsModkSeparator.cpp | 197 | 1 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsNodeQueue.cpp | 361 | 53 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsObjectiveFunction.cpp | 92 | 92 | C++ | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsPathSeparator.cpp | 443 | 1 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
-| highs/mip/HighsPrimalHeuristics.cpp | 1529 | 1046 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
+| highs/mip/HighsPrimalHeuristics.cpp | 1529 | 1018 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsPseudocost.cpp | 119 | 77 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsRedcostFixing.cpp | 252 | 137 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
-| highs/mip/HighsSearch.cpp | 1648 | 704 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
+| highs/mip/HighsSearch.cpp | 1648 | 698 | part ported | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsSeparation.cpp | 164 | 164 | C++ | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
 | highs/mip/HighsSeparationRust.cpp | 1 | 316 | glue |  |
 | highs/mip/HighsSeparator.cpp | 23 | 23 | C++ | MIP (concurrent port): C++ class handles, callbacks, init/restart/workers |
@@ -1133,16 +1182,9 @@ was 60977 lines in 160 files.
 | highs/qpsolver/QpRust.cpp | 1 | 163 | glue |  |
 | highs/qpsolver/a_asm.cpp | 124 | 1 | part ported | empty: the QP glue is Rust (qp/glue.rs) |
 | highs/qpsolver/a_quass.cpp | 156 | 1 | part ported | empty: the QP glue is Rust (qp/glue.rs) |
-| highs/simplex/HEkk.cpp | 3618 | 1841 | part ported | live: HEkk data owner (basis, LP moves, dualize, edits, getSolution, proofs, condition) |
-| highs/simplex/HEkkControl.cpp | 112 | 29 | part ported | live: HEkk data owner, NLA wrapper, setup |
-| highs/simplex/HEkkDebug.cpp | 1552 | 92 | stubs | no-op stubs (debugging is left out) |
-| highs/simplex/HEkkRust.cpp | 1 | 131 | glue |  |
-| highs/simplex/HEkkRustSolve.cpp | 3 | 340 | glue |  |
-| highs/simplex/HSimplex.cpp | 261 | 137 | part ported | live: HEkk data owner, NLA wrapper, setup |
+| highs/simplex/HEkkRust.cpp | 1 | 846 | glue |  |
+| highs/simplex/HSimplex.cpp | 261 | 23 | part ported | live: setSolutionStatus |
 | highs/simplex/HSimplexDebug.cpp | 121 | 66 | part ported | live: CHUZC failure reports (dev log) |
-| highs/simplex/HSimplexNla.cpp | 430 | 301 | part ported | live: NLA wrapper (scaling around the Rust factor) for the API solves |
-| highs/simplex/HSimplexNlaDebug.cpp | 314 | 22 | stubs | no-op stubs (debugging is left out) |
-| highs/simplex/HSimplexNlaFreeze.cpp | 13 | 13 | C++ | live: HEkk data owner, NLA wrapper, setup |
 | highs/simplex/HighsSimplexAnalysis.cpp | 1314 | 342 | stubs | live: setup and stubs (the logs are rust/src/simplex/report.rs) |
 | highs/util/HFactor.cpp | 1971 | 158 | part ported | glue: HFactor over the Rust factor |
 | highs/util/HFactorDebug.cpp | 212 | 42 | stubs | no-op stubs (debugging is left out) |
@@ -1160,4 +1202,4 @@ was 60977 lines in 160 files.
 | highs/util/HighsUtils.cpp | 1132 | 537 | part ported | live: index collections, value analysis logs, user data checks |
 | highs/util/stringutil.cpp | 54 | 54 | C++ | live: utilities |
 | app/RunHighs.cpp | 95 | 3 | part ported | main: calls the Rust app (rust/src/lp_data/app.rs) |
-| **total** (110 files) | 68777 | 29708 | | |
+| **total** (103 files) | 62735 | 23384 | | |

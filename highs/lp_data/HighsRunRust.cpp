@@ -714,13 +714,12 @@ struct HighsRunRust {
         *static_cast<RsSolution*>(p) = rsSolution(h.solution_);
         return 0;
       case RunOp::kRayRecord: {
-        const HighsRayRecord& record = arg ? h.ekk_instance_.primal_ray_record_
-                                           : h.ekk_instance_.dual_ray_record_;
+        const HEkk& ekk = h.ekk_instance_;
         RsRayRecord& r = *static_cast<RsRayRecord*>(p);
-        r.index = record.index;
-        r.sign = record.sign;
-        r.value_size = record.value.size();
-        r.has_invert = h.ekk_instance_.status_.has_invert;
+        r.index = arg ? ekk.sh_.primal_ray_index : ekk.sh_.dual_ray_index;
+        r.sign = arg ? ekk.sh_.primal_ray_sign : ekk.sh_.dual_ray_sign;
+        r.value_size = ekk.rayValue(arg).size();
+        r.has_invert = ekk.status_.has_invert;
         return 0;
       }
       case RunOp::kFeasibilityProblem: {
@@ -732,13 +731,17 @@ struct HighsRunRust {
           h.getOptionValue("solve_relaxation", saved_solve_relaxation);
           std::vector<double> zero_costs;
           zero_costs.assign(lp.num_col_, 0);
-          HighsRayRecord primal_ray_record =
-              h.ekk_instance_.primal_ray_record_.getRayRecord();
+          HEkk& ekk = h.ekk_instance_;
+          const HighsInt ray_index = ekk.sh_.primal_ray_index;
+          const HighsInt ray_sign = ekk.sh_.primal_ray_sign;
+          const std::vector<double> ray_value = ekk.rayValue(true);
           HighsStatus status =
               h.changeColsCost(0, lp.num_col_ - 1, zero_costs.data());
           assert(status == HighsStatus::kOk);
           (void)status;
-          h.ekk_instance_.primal_ray_record_.setRayRecord(primal_ray_record);
+          ekk.sh_.primal_ray_index = ray_index;
+          ekk.sh_.primal_ray_sign = ray_sign;
+          ekk.setRayValue(true, ray_value);
           if (is_qp) {
             HighsHessian zero_hessian;
             h.passHessian(zero_hessian);
@@ -773,9 +776,7 @@ struct HighsRunRust {
         return st(h.run());
       case RunOp::kCopyRay: {
         double* value = static_cast<double*>(p);
-        const std::vector<double>& ray =
-            arg ? h.ekk_instance_.primal_ray_record_.value
-                : h.ekk_instance_.dual_ray_record_.value;
+        const std::vector<double> ray = h.ekk_instance_.rayValue(arg);
         const HighsInt n = arg ? lp.num_col_ : lp.num_row_;
         for (HighsInt i = 0; i < n; i++) value[i] = ray[i];
         return 0;
@@ -784,28 +785,29 @@ struct HighsRunRust {
         double* dual_ray_value = static_cast<double*>(p);
         const HighsInt num_row = lp.num_row_;
         std::vector<double> rhs;
-        HighsInt iRow = h.ekk_instance_.dual_ray_record_.index;
+        HighsInt iRow = h.ekk_instance_.sh_.dual_ray_index;
         rhs.assign(num_row, 0);
-        rhs[iRow] = h.ekk_instance_.dual_ray_record_.sign;
+        rhs[iRow] = h.ekk_instance_.sh_.dual_ray_sign;
         HighsInt* dual_ray_num_nz = 0;
         h.basisSolveInterface(rhs, dual_ray_value, dual_ray_num_nz, NULL, true);
-        h.ekk_instance_.dual_ray_record_.value.resize(num_row);
-        for (HighsInt i = 0; i < num_row; i++)
-          h.ekk_instance_.dual_ray_record_.value[i] = dual_ray_value[i];
+        h.ekk_instance_.setRayValue(
+            false,
+            std::vector<double>(dual_ray_value, dual_ray_value + num_row));
         return 0;
       }
       case RunOp::kComputePrimalRay: {
         double* primal_ray_value = static_cast<double*>(p);
         const HighsInt num_row = lp.num_row_;
         const HighsInt num_col = lp.num_col_;
-        HighsInt col = h.ekk_instance_.primal_ray_record_.index;
-        assert(h.ekk_instance_.basis_.nonbasicFlag_[col] == kNonbasicFlagTrue);
+        HighsInt col = h.ekk_instance_.sh_.primal_ray_index;
+        assert(h.ekk_instance_.nonbasicSlice(false).ptr[col] ==
+               kNonbasicFlagTrue);
         std::vector<double> rhs;
         std::vector<double> column;
         column.assign(num_row, 0);
         rhs.assign(num_row, 0);
         lp.ensureColwise();
-        HighsInt primal_ray_sign = h.ekk_instance_.primal_ray_record_.sign;
+        HighsInt primal_ray_sign = h.ekk_instance_.sh_.primal_ray_sign;
         if (col < num_col) {
           for (HighsInt iEl = lp.a_matrix_.start_[col];
                iEl < lp.a_matrix_.start_[col + 1]; iEl++)
@@ -819,14 +821,13 @@ struct HighsRunRust {
         for (HighsInt iCol = 0; iCol < num_col; iCol++)
           primal_ray_value[iCol] = 0;
         for (HighsInt iRow = 0; iRow < num_row; iRow++) {
-          HighsInt iCol = h.ekk_instance_.basis_.basicIndex_[iRow];
+          HighsInt iCol = h.ekk_instance_.basicIndex()[iRow];
           if (iCol < num_col) primal_ray_value[iCol] = column[iRow];
         }
         if (col < num_col) primal_ray_value[col] = -primal_ray_sign;
-        h.ekk_instance_.primal_ray_record_.value.resize(num_col);
-        for (HighsInt iCol = 0; iCol < num_col; iCol++)
-          h.ekk_instance_.primal_ray_record_.value[iCol] =
-              primal_ray_value[iCol];
+        h.ekk_instance_.setRayValue(
+            true,
+            std::vector<double>(primal_ray_value, primal_ray_value + num_col));
         return 0;
       }
       case RunOp::kNeedsMods:

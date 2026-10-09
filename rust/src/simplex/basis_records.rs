@@ -27,6 +27,7 @@ impl Hasher for U64Hasher {
 
 /// BadBasisChangeReason
 pub const REASON_ALL: i32 = 0;
+pub const REASON_SINGULAR: i32 = 1;
 pub const REASON_CYCLING: i32 = 2;
 pub const REASON_FAILED_INFEASIBILITY_PROOF: i32 = 3;
 
