@@ -238,6 +238,139 @@ impl Profiling {
     }
 }
 
+/// The sub-solver clocks' names (kFromSubSolver to kToSubSolver)
+const SUB_SOLVER_NAMES: [&str; TO_SUB_SOLVER - SUB_SOLVER_MIP] = [
+    "MIP",
+    "Du simplex (basis)",
+    "Du simplex (no basis)",
+    "Pr simplex (basis)",
+    "Pr simplex (no basis)",
+    "HiPO",
+    "IPX",
+    "HiPO (AC)",
+    "IPX (AC)",
+    "PDLP",
+    "QP ASM",
+    "Sub-MIP",
+];
+
+impl Profiling {
+    /// Highs::reportProfiling: the sub-solver times by thread (only with
+    /// sub-solver profiling, log_dev_level > 0)
+    pub fn report(&self, log: &super::Log) {
+        use super::LogType::Info;
+        use crate::log_user;
+        use crate::util::printf::sprintf;
+        if !self.sub_solver {
+            return;
+        }
+        const SUB_MIP: usize = TO_SUB_SOLVER - 1;
+        let num_thread = self.num_thread().min(self.record.len());
+        let (mut mip_time, mut max_submip_time) = (0.0f64, 0.0f64);
+        for t in 0..num_thread {
+            mip_time = mip_time.max(self.record[t].run_time[SUB_SOLVER_MIP]);
+            max_submip_time = max_submip_time.max(self.record[t].run_time[SUB_MIP]);
+        }
+        let used_thread: Vec<usize> = (0..num_thread)
+            .filter(|&t| {
+                (SUB_SOLVER_MIP..TO_SUB_SOLVER)
+                    .any(|i| self.record[t].num_call[i] != 0 || self.submip_record[t].num_call[i] != 0)
+            })
+            .collect();
+        let name = |i: usize| SUB_SOLVER_NAMES[i - SUB_SOLVER_MIP];
+        let mut used = [[false; TO_SUB_SOLVER]; 2];
+        let to_k = if max_submip_time > 0.0 { 2 } else { 1 };
+        let mut sum_sum = 0.0;
+        for k in 0..to_k {
+            if k == 0 {
+                log_user!(log, Info, "\nMIP sub-solver profiling: number of threads used = %d\n", used_thread.len() as i32);
+            } else {
+                log_user!(log, Info, "\nSub-MIP sub-solver profiling\n");
+            }
+            let records = if k == 0 { &self.record } else { &self.submip_record };
+            for &t in &used_thread {
+                let ideal_time = if k == 0 { mip_time } else { self.record[t].run_time[SUB_MIP] };
+                if ideal_time <= 0.0 {
+                    continue;
+                }
+                let r = &records[t];
+                let mut s = sprintf("\nThread %d\nSolver                    Calls    Time       Time/call", &[(t as i32).into()]);
+                s.push_str(if k == 0 { "      MIP%" } else { "  Sub-MIP%" });
+                log_user!(log, Info, "%s\n", s.as_str());
+                let mut sum = 0.0;
+                for i in SUB_SOLVER_MIP..TO_SUB_SOLVER {
+                    if r.num_call[i] == 0 {
+                        continue;
+                    }
+                    used[k][i] = true;
+                    let mut s = sprintf(
+                        "%-21s %9d %11.4e %11.4e",
+                        &[name(i).into(), r.num_call[i].into(), r.run_time[i].into(), (r.run_time[i] / r.num_call[i] as f64).into()],
+                    );
+                    if i != SUB_SOLVER_MIP {
+                        sum += r.run_time[i];
+                        s.push_str(&sprintf("     %5.1f", &[(1e2 * r.run_time[i] / ideal_time).into()]));
+                    }
+                    log_user!(log, Info, "%s\n", s.as_str());
+                }
+                sum_sum += sum;
+                if sum > 0.0 {
+                    log_user!(log, Info, "TOTAL                           %11.4e                 %5.1f\n", sum, 1e2 * sum / ideal_time);
+                }
+            }
+        }
+        if mip_time <= 0.0 || sum_sum <= 0.0 {
+            return;
+        }
+        let hrule = || {
+            let s = format!("====================={}", "======".repeat(used_thread.len()));
+            log_user!(log, Info, "%s\n", s.as_str());
+        };
+        log_user!(log, Info, "\nPercent (sub-)MIP time by thread\n");
+        for k in 0..to_k {
+            let mut s = String::from(if k == 0 { "\nMIP sub-solver       " } else { "\nSub-MIP sub-solver   " });
+            if k == 1 && max_submip_time <= 0.0 {
+                continue;
+            }
+            for &t in &used_thread {
+                s.push_str(&sprintf("%6d", &[(t as i32).into()]));
+            }
+            log_user!(log, Info, "%s\n", s.as_str());
+            let records = if k == 0 { &self.record } else { &self.submip_record };
+            let mut total = vec![0.0; used_thread.len()];
+            for i in SUB_SOLVER_MIP + 1..TO_SUB_SOLVER {
+                if !used[k][i] {
+                    continue;
+                }
+                let mut s = sprintf("%-21s", &[name(i).into()]);
+                for (x, &t) in used_thread.iter().enumerate() {
+                    let ideal_time = if k == 0 { mip_time } else { self.record[t].run_time[SUB_MIP] };
+                    let (num_call, run_time) = (records[t].num_call[i], records[t].run_time[i]);
+                    if num_call != 0 && ideal_time > 0.0 {
+                        let pct = 1e2 * run_time / ideal_time;
+                        total[x] += pct;
+                        s.push_str(&sprintf(" %5.1f", &[pct.into()]));
+                    } else {
+                        s.push_str("      ");
+                    }
+                }
+                log_user!(log, Info, "%s\n", s.as_str());
+            }
+            hrule();
+            let mut s = String::from("Total                ");
+            for &p in &total {
+                if p != 0.0 {
+                    s.push_str(&sprintf(" %5.1f", &[p.into()]));
+                } else {
+                    s.push_str("      ");
+                }
+            }
+            log_user!(log, Info, "%s\n", s.as_str());
+            hrule();
+        }
+    }
+}
+
 impl Default for Profiling {
     fn default() -> Self {
         Profiling::new()

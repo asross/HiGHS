@@ -241,7 +241,10 @@ unsafe extern "C" fn open_log_file_cb(ctx: *mut c_void, p: *const u8, n: usize) 
     let c = &*(ctx as *const LogFileCtx);
     let name = crate::ffi::sl(p, n as i32).to_vec();
     reopen_log_stream(&mut *c.head, &name);
-    *c.log_file = name;
+    // (the value keeps its buffer, which the option table views)
+    let v = &mut *c.log_file;
+    v.clear();
+    v.extend_from_slice(&name);
 }
 
 unsafe extern "C" fn write_file_cb(file: *mut c_void, p: *const u8, n: usize) {
@@ -607,11 +610,12 @@ impl Highs {
     }
 
     /// The end of a profiling this object made: cleared and freed
-    fn end_profiling(&mut self) {
+    fn end_profiling(&mut self, report: bool) {
         let p = self.profiling;
-        // ponytail: reportProfiling's sub-solver table (log_dev_level > 0
-        // only) is not printed; port HighsInterface.cpp's reportProfiling
-        // if dev runs need it
+        if report && !p.is_null() {
+            // SAFETY: a live Profiling of this object
+            unsafe { (*p).report(&self.log()) };
+        }
         self.clear_profiling();
         if !p.is_null() {
             // SAFETY: made by Box::into_raw in top_op
@@ -732,7 +736,7 @@ impl Highs {
                 }
                 H_PROFILING_END | H_PROFILING_SINGLE_END => {
                     if arg == 0 {
-                        self.end_profiling();
+                        self.end_profiling(code == H_PROFILING_END);
                     }
                     0
                 }
@@ -1900,7 +1904,7 @@ impl Highs {
 impl Drop for Highs {
     fn drop(&mut self) {
         self.close_log_file();
-        self.end_profiling();
+        self.end_profiling(false);
     }
 }
 

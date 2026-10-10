@@ -7,8 +7,9 @@ command-line binary is pure Rust. Extraction plan: `git filter-repo
 CI test oracle for bit-identical paths; MIT licence with the HiGHS
 copyright notice and attribution kept; README states it is a Rust port of
 HiGHS, bit-compatible with HiGHS v1.15. Until then development continues
-on the `rust-port` branch here. The binary is already `crest` (see "The
-app and crest"); the crate keeps its name `highs-rs` (staticlib
+on the `rust-port` branch here. The binary is already `crest`, all Rust,
+built by cargo alone (`cd rust && cargo build --release --bin crest`; see
+"The app and crest"); the crate keeps its name `highs-rs` (staticlib
 `highs_rs`, which CMake links) until the extraction renames it.
 
 **Crestline's scope** (decided 2026-10-07): not ported, left out of
@@ -47,8 +48,10 @@ file readers in parallel. IPX, PDLP and QP last.
 Checks cost: run the cheap ones per change, the expensive ones per batch.
 
 - **Every change (~3 min):** build, then `rust/bench/quick_check.sh
-  <C++ build> <Rust build>`: cargo test, LP logs on 12 instances (presolve
-  on/off), 9 MIPs at 200 nodes, api_compare, cli_compare. Exit status 0
+  <C++ build> <Rust build> [<crest binary>]`: cargo test, LP logs on 12
+  instances (presolve on/off), 9 MIPs at 200 nodes, api_compare,
+  cli_compare; given the cargo-built crest (rust/target/release/crest),
+  the same solves with it plus the .lp and .gz models. Exit status 0
   iff all match, so `git bisect run rust/bench/quick_check.sh ...` finds
   the commit that broke a path.
 - **Every batch of a few commits:** the full MIP log comparison at 100
@@ -1292,73 +1295,113 @@ command line parse, the version / notice text, the options file and
 command-line options into a separate HighsOptions, opening the log file,
 passing the options, reading the model, presolve and write_presolved_model
 or run, and runHighsReturn with its copyright lines, including the C++
-app's quirk of calling runHighsReturn twice after a run error. The
-`Highs` instance and the loaded options stay C++ (HighsAppRust.cpp in
-libhighs: `highs_app_create`, one `op` per step, `highs_app_destroy`);
-stdout and stderr text goes through C's stdio so it interleaves with the
-C++ logging as before, and --version exits through C's exit as the C++
-did. Under HIGHS_RUST app/RunHighs.cpp's main is one call of
+app's quirk of calling runHighsReturn twice after a run error. Its
+`Highs` instance and loaded options are its host's (`AppHost`): for the
+C++ app under HIGHS_RUST the C++ ones (HighsAppRust.cpp in libhighs:
+`highs_app_create`, one `op` per step, `highs_app_destroy`), for crest
+the Rust ones (below); stdout and stderr text goes through C's stdio so it
+interleaves with the logging as before, and --version exits through C's
+exit as the C++ did. Under HIGHS_RUST app/RunHighs.cpp's main is one call of
 `highs_app_main`; the CLI11 code of RunHighs.cpp and HighsRuntimeOptions.h
 is compiled only without HIGHS_RUST.
 
-`crest` (rust/src/bin/crest.rs, cargo feature `crest`) is the Rust binary:
-its main calls `app_main` of the crate, so its Rust code is the crate's own
-(no second copy). It links the C++ that is not ported yet as a static
-library: libhighs.a of a static HIGHS_RUST build (`-DHIGHS_RUST=ON
--DBUILD_SHARED_LIBS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`, IPO so
-that the C++ is compiled as in the shared library), found through
-`HIGHS_LIB_DIR` by rust/build.rs, with libc++ (libstdc++, pthread and dl
-on Linux) and zlib when that build found it. Such a CMake build builds it
-as the `crest` target into bin/ (own cargo target dir rust-crest/); by
-hand: `HIGHS_LIB_DIR=<build>/lib cargo build --release --features crest`.
-The library and its tests do not need libhighs. Output is the C++ app's,
-byte for byte, but for argv[0] in the usage line; the third-party notice
-still lists CLI11 (whose behaviour options_cli.rs reproduces) and the log
-line "Command line parsed using CLI11" is kept.
+`crest` (rust/src/bin/crest.rs) is the Rust binary, all Rust: **cargo
+alone builds it**, with no C/C++ compiler and no libhighs:
 
-What crest links (2026-10-09, after stage 4b). Counted by linking the
-app's main object (which, like crest, only calls the Rust app) with
-libhighs.a and libhighs_rs.a of a static -O0 HIGHS_RUST build with
--dead_strip, and listing the link map's C++ symbols of libhighs.a less
-std::, typeinfo and vtables (this count is lower than the 2760 of the
-stage 4 notes, which included standard-library instantiations named after
-HiGHS types): 875 functions at the start of this round of stage 4b, 773
-after. By kind:
+    cd rust && cargo build --release --bin crest   # -> target/release/crest
 
-| kept | what |
-|---:|---|
-| 132 | the `Highs` class: the API methods the app calls (passOptions, readModel, run, writeSolution, ...), HighsRunRust.cpp's topIn / topOut / topOp mirror sync and host ops, the few C++ step cases left (readers, writers, names), the IIS's incumbent ops |
-| 106 | the model, solution, basis and run data structs (HighsLp, HighsModel, HighsHessian, HighsSparseMatrix, HighsSolution, HighsBasis, HighsRunData, ...): the mirrors, their constructors and clears |
-| 98 | the third-party notice and the optional-extras loader (HighsExtras, HighsDynamicLibrary) |
-| 74 | the option and info records (names, descriptions, bounds; their tables for Rust) |
-| 34 | CLI11's static validators and version text (HighsAppExternalDeps.h) |
-| 27 | HighsTimer / HighsProfiling (shared with the MIP solver's clocks) |
-| 25 | the gzip input streams (zstr, strict_fstream) |
-| 18 | the presolve component mirror (PresolveComponent, the C++ postsolve stack's storage) |
-| 16 | the readers and writers glue: Filereader classes, HMpsFF / HMPSIO, the writers' C++ wrappers with the names |
-| 16 | the MIP solver's callback host (HighsMipHost.cpp) and the scheduler's C++ (HighsTask) |
-| 10 | HVector and sort utilities |
-| 217 | other glue: views and copies for Rust (rsLp, rsBasis, rsSolution, RsSlice, rsByteVecResize, ...), string constants, HighsTextTable, logging's vsnprintf, name lists, the app's entry |
+It links Rust's std and libc only (`otool -L`: libSystem; on Linux libc,
+libm, libgcc_s), and its one crate from crates.io is flate2 (with its
+default pure-Rust miniz_oxide backend) for gzip model files. Its main
+calls the crate's `app_main` (app.rs, shared with the C++ app) on a Rust
+`AppHost` (`app_create` of rust/src/lp_data/highs.rs, the module
+`lp_data::lp_handle::highs`): no C++ `Highs` is in its path. Output is the
+C++ app's, byte for byte, but for argv[0] in the usage line; the
+third-party notice is the C++ app's text (it lists CLI11, whose behaviour
+options_cli.rs reproduces, and zlib/zstr, whose detection crest
+reproduces with flate2; the Crestline extraction should list flate2 and
+miniz_oxide instead) and the log line "Command line parsed using CLI11"
+is kept. The git hash of the header and --version is `git describe
+--always` at build time (rust/build.rs; "n/a" outside a checkout).
 
-No simplex, IPX, PDLP, QP, presolve, MIP or IIS logic is C++ any more.
-What crest still needs from C++: (1) the `Highs` object as the app's
-handle and the API's data mirrors (the app drives `Highs` through
-HighsAppRust.cpp; driving the `LpHandle` directly from app.rs would drop
-the class, the mirrors and their sync, and most of the glue); (2) the
-option and info records' metadata (moving the table into opts.rs);
-(3) the readers' C++ (Filereader classes, HMpsFF / HMPSIO, the gzip
-streams: Rust flate) and the writers' C++ wrappers (names); (4) the
-third-party notice / extras loader and CLI11's static validators;
-(5) HighsTimer / HighsProfiling, the MIP callback host and the C++
-scheduler's initialization. highspy stays a C++ wrapper of `Highs`.
+Cargo features: `crest` (default) is the Rust Highs object, the model file
+reading (flate2) and the crest binary; the CMake HIGHS_RUST build builds
+the library with `--no-default-features` (its Highs object is the C++ one,
+unchanged), and `cmake --build <dir> --target crest` (opt-in, not ALL)
+runs the cargo build above into bin/crest (own target dir rust-crest/,
+the features `crest` and HIGHS_RUST_FEATURES). rust/build.rs links
+nothing.
 
-Comparisons: `rust/bench/cli_compare.sh build build-rust build-static`
-runs the C++ app, the HIGHS_RUST app and crest on 137 command lines
-(solution, basis, sparse and MIPLIB-style files to read are written first
-by the C++ app). Five use what the HIGHS_RUST build leaves out (--solver
-hipo, a HiPO options file, the dev.set of highs_debug_level = 1) and are
-marked `# dropped` in cli_cases.txt: they differ as expected and are
-counted apart.
+The Rust Highs object (highs.rs) is what the C++ `Highs` was for the
+app's steps, on its engine (`LpHandle` on a host that is this object):
+
+- The engine is the store of the model, option values, solution, basis,
+  info and model status (as in stage 4b) and now also of the model's names
+  (`LpHandle::names`: the names, their hashes, prefixes and suffixes, the
+  objective and origin names, the MPS cost row location), which the
+  interfaces keep through the name hooks of the handle's `IfaceHost`. No
+  mirrors, no sync: what the C++ topOut did for the C++ copies is
+  `take_changes` for the presolved model and the reduced LP with their
+  names, the IIS and the ranging.
+- The host functions (CHost): the log options are a HighsLogOptions head
+  (io/log.rs `LogOptionsHead`) on the engine's option fields with a C
+  `FILE*` log stream; the run clocks are the engine's `Timer`; no user
+  callbacks (crest has none). The top level's ops (top.rs H_*) are Rust:
+  HighsProfiling (lp_data/profiling.rs, per-thread clocks; the MIP's
+  timing report reads its presolve/solve/postsolve clocks; the sub-solver
+  report at log_dev_level > 0), the scheduler start-up
+  (initializeMultiThreading, `(available_parallelism + 1) / 2` threads by
+  default), the MIP callback host (the improving solution file, with the
+  semi-variable LP's binaries named `semi_binary_k`), analyseVectorValues
+  of the small matrix values, the names, the matrix images (.pbm), and the
+  file steps of run: readSolution, readBasis, writeModel, writeIisModel,
+  writeSolution (every style, the ranging of getRangingData with the
+  engine's FTRAN), writeBasis.
+- readModel, readBasis, writeLocalModel (model, presolved model, IIS
+  model) and writeBasis are drivers.rs on a run whose op makes the file
+  steps on this object and the rest on the engine (`file_op`). Model files
+  (io/model_file.rs): zstr's open (an error only if the file cannot be
+  opened: an empty file is read as empty) and detection on the first two
+  bytes (gzip 1f 8b or zlib 78 01/9c/da: inflated member after member;
+  anything else read as it is; corrupt data ends the program, as zstr's
+  uncaught exception did), then the Rust MPS and LP parsers with the
+  messages and model conversions of FilereaderMps.cpp / FilereaderLp.cpp.
+  The writers: io/model_write.rs and writers.rs with the glue of
+  HighsWritersRust.cpp, HMPSIO.cpp's writeModelAsMps and normaliseNames.
+- The IIS's incumbent ops (HighsIisRust.cpp's) are this object's: option
+  calls, bound, cost and integrality changes, adding and deleting columns
+  and rows (LpHandle `add_cols`, `delete_cols_interval`,
+  `change_cols_integrality_interval`), names, the elastic solution.
+- The option records' metadata (option_records.rs: names, types,
+  descriptions, bounds and defaults of the 162 records) are generated from
+  a C++ HighsOptions by rust/bench/gen_option_records.cpp (rerun it if
+  HighsOptions.h changes; a test checks them against `Opts`); the options
+  API (options.rs) works on tables built from them over an `Opts`.
+
+What is left C++, for libhighs only (highspy, the C++ API and the C++
+`highs` app of the HIGHS_RUST build): the `Highs` class with its data
+mirrors and their sync (HighsRunRust.cpp), the option and info records,
+the Filereader classes with zstr, the writers' C++ wrappers, the
+third-party notice and extras loader, CLI11's validators
+(HighsAppExternalDeps.h), HighsTimer / HighsProfiling, the MIP callback
+host for the user callbacks (HighsMipHost.cpp), the C++ scheduler entry
+points and the glue listed below (C++ still compiled). None of it is in
+crest's path.
+
+Comparisons: `rust/bench/cli_compare.sh build build-rust
+rust/target/release/crest` (the third argument a build with bin/crest or
+the binary itself; builds may be absolute paths) runs the C++ app, the
+HIGHS_RUST app and crest on 166 command lines (solution, basis, sparse
+and MIPLIB-style files to read, gzip and empty model files are made first;
+gzip, writer, solution-style, ranging, improving-solution, matrix-image,
+presolved-model and IIS cases). Six use what the HIGHS_RUST build leaves
+out (--solver hipo, a HiPO options file, the dev.set of
+highs_debug_level = 1, the fixed-format MPS reader) and are marked
+`# dropped` in cli_cases.txt: they differ as expected and are counted
+apart. `rust/bench/quick_check.sh build build-rust rust/target/release/crest`
+also compares crest's solves (the LPs with presolve on and off, the MIPs
+at 200 nodes, and every check/instances/*.lp and two .gz models with the
+whole log).
 
 ## Left out of the HIGHS_RUST build
 

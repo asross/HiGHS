@@ -5,7 +5,7 @@
 //! The `Highs` object and the loaded options are the host's (`AppHost`):
 //! the C++ ones for the C++ `highs` app under HIGHS_RUST (highs_app_create
 //! in lp_data/HighsAppRust.cpp), the Rust ones for `crest`
-//! (lp_handle/highs.rs `app_create`); each step on them is one `op`.
+//! (lp_data/highs.rs `app_create`); each step on them is one `op`.
 //! Output to stdout/stderr goes through C's stdio (`Print`), so it
 //! interleaves with the logging as before.
 
