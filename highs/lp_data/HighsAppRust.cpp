@@ -8,8 +8,8 @@
 /**@file lp_data/HighsAppRust.cpp
  * @brief The objects of the highs app, whose main and loadOptions are Rust
  * (rust/src/lp_data/app.rs): a Highs instance and the loaded options, and
- * one function per step on them. Used by app/RunHighs.cpp and by the Rust
- * `crest` binary, which links this library.
+ * one function per step on them. Used by app/RunHighs.cpp (the Rust
+ * `crest` binary has its Rust objects: rust/src/lp_data/highs.rs).
  */
 #include "lp_data/HighsRust.h"
 

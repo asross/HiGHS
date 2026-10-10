@@ -38,6 +38,10 @@ pub mod solve;
 pub mod solution;
 pub mod writers;
 pub mod user_scale;
+#[cfg(feature = "crest")]
+pub mod option_records;
+#[cfg(feature = "crest")]
+pub mod profiling;
 
 use crate::util::printf::{sprintf, Arg};
 

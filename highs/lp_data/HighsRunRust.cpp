@@ -888,10 +888,18 @@ struct HighsRunRust {
         h.logHeader();
         return 0;
       case 12:
-        if (h.options_.write_matrix_image)
+        // (of passModel's model: the engine's, which the copies take
+        // only after the call)
+        if (h.options_.write_matrix_image) {
+          h.lpFromRust();
           writeLpMatrixPicToFile(h.options_, "LpMatrix", h.model_r().lp_);
-        if (h.options_.write_hessian_image)
-          writeHessianPicToFile(h.options_, "Hessian", h.model_cache_.hessian_);
+        }
+        if (h.options_.write_hessian_image) {
+          HighsHessian hessian;
+          RsHessian v = rsHessian(hessian);
+          highs_rs_lph_top_hessian(h.ekk_instance_.p, &v);
+          writeHessianPicToFile(h.options_, "Hessian", hessian);
+        }
         return 0;
       case 13: {
         // Highs::run() around a run on the engine: the copies take the

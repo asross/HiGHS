@@ -17,8 +17,63 @@ pub struct File {
 extern "C" {
     #[cfg_attr(target_os = "macos", link_name = "__stdoutp")]
     static stdout: *mut File;
+    #[cfg_attr(target_os = "macos", link_name = "__stderrp")]
+    static stderr: *mut File;
     fn fwrite(p: *const c_void, size: usize, n: usize, f: *mut File) -> usize;
     fn fflush(f: *mut File) -> i32;
+    fn fopen(name: *const c_char, mode: *const c_char) -> *mut File;
+    fn fclose(f: *mut File) -> i32;
+}
+
+/// C's stdio for crest's Rust Highs object (whose output interleaves with
+/// the log sink's, as the C++'s FILE* writes did)
+pub mod cfile {
+    use super::File;
+
+    /// C's stdout
+    pub fn stdout() -> *mut File {
+        // SAFETY: C's stdout is open for the program's life
+        unsafe { super::stdout }
+    }
+    /// C's stderr
+    pub fn stderr() -> *mut File {
+        // SAFETY: as stdout
+        unsafe { super::stderr }
+    }
+    /// fopen(name, mode): null if it fails (or the name holds a NUL)
+    pub fn open(name: &[u8], mode: &str) -> *mut File {
+        let (Ok(n), Ok(m)) = (std::ffi::CString::new(name), std::ffi::CString::new(mode)) else {
+            return std::ptr::null_mut();
+        };
+        // SAFETY: two NUL-terminated strings
+        unsafe { super::fopen(n.as_ptr(), m.as_ptr()) }
+    }
+    /// fclose
+    ///
+    /// # Safety
+    /// `f` an open file, not used after
+    pub unsafe fn close(f: *mut File) {
+        super::fclose(f);
+    }
+    /// fwrite of `s` (nothing if `f` is null)
+    pub fn write(f: *mut File, s: &[u8]) {
+        if !f.is_null() {
+            // SAFETY: an open C file
+            unsafe { super::put(f, s) }
+        }
+    }
+    /// fflush(NULL): every C stream
+    pub fn flush_all() {
+        // SAFETY: fflush(NULL) flushes all C streams
+        unsafe { super::fflush(std::ptr::null_mut()) };
+    }
+    /// fflush
+    pub fn flush(f: *mut File) {
+        if !f.is_null() {
+            // SAFETY: an open C file
+            unsafe { super::fflush(f) };
+        }
+    }
 }
 
 type ActiveFn = unsafe extern "C" fn(*const c_void) -> bool;
@@ -55,15 +110,16 @@ unsafe fn highs_log_user_callback(opts: *const c_void, t: i32, msg: *const c_cha
 }
 
 /// The fields of HighsLogOptions before its std::function (offsets
-/// checked by static_assert in HighsIO.cpp)
+/// checked by static_assert in HighsIO.cpp); crest's Rust Highs object
+/// has only these
 #[repr(C)]
-struct LogOptionsHead {
-    log_stream: *mut File,
-    output_flag: *const bool,
-    log_to_console: *const bool,
-    log_dev_level: *const i32,
-    user_log_callback: Option<unsafe extern "C" fn(i32, *const c_char, *mut c_void)>,
-    user_log_callback_data: *mut c_void,
+pub struct LogOptionsHead {
+    pub log_stream: *mut File,
+    pub output_flag: *const bool,
+    pub log_to_console: *const bool,
+    pub log_dev_level: *const i32,
+    pub user_log_callback: Option<unsafe extern "C" fn(i32, *const c_char, *mut c_void)>,
+    pub user_log_callback_data: *mut c_void,
 }
 
 const WARNING: i32 = 4;

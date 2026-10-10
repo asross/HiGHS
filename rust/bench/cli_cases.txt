@@ -89,7 +89,7 @@ $I/afiro.mps --
 --write_basis_file b.bas --solution_file s.sol --ranging on --presolve off $I/adlittle.mps
 $I/egout.mps
 --presolve off $I/flugpl.mps
---time_limit 0.0001 $I/egout.mps
+--time_limit 1e-9 $I/egout.mps
 $I/qptestnw.lp
 --options_file dev.set $I/egout.mps # dropped: debugging
 --model_file $I/afiro.mps $I/adlittle.mps
@@ -135,3 +135,32 @@ $I/qptestnw.lp
 --options_file iis.set $I/klein1.mps
 --options_file iis2.set $I/avgas.mps
 --options_file iis.set $I/infeasible-mip0.mps
+$F/afiro.mps.gz
+$F/qptestnw.lp.gz
+--presolve off $F/afiro.mps.gz
+$F/bad.mps.gz
+$F/empty.mps
+--write_model_file m.lp $I/afiro.mps
+--write_model_file m.mps $I/qptestnw.lp
+--write_model_file m.lp $I/qptestnw.lp
+--write_model_file m.lp $I/egout.mps
+--write_model_file m.mps $I/semi-continuous.lp
+--options_file fixed.set --write_model_file m.mps $I/afiro.mps # dropped: fixed-format MPS reader
+--options_file style-1.set --solution_file s.sol $I/afiro.mps
+--options_file style2.set --solution_file s.sol $I/adlittle.mps
+--options_file style3.set --solution_file s.sol $I/adlittle.mps
+--options_file style3.set --solution_file s.sol $I/egout.mps
+--options_file style3.set --solution_file s.sol $I/qptestnw.lp
+--solution_file s.sol $I/qptestnw.lp
+--ranging on --solution_file s.sol $I/qptestnw.lp
+--ranging on --solution_file s.sol $I/egout.mps
+--ranging on --solution_file - $I/afiro.mps
+--write_basis_file - $I/afiro.mps
+--options_file improving.set $I/egout.mps
+--options_file improving2.set $I/bell5.mps
+--options_file improving.set $I/semi-continuous.lp
+--options_file image.set $I/afiro.mps
+--options_file presolved_lp.set $I/egout.mps
+--options_file presolved_lp.set $I/adlittle.mps
+--options_file presolved.set $I/qptestnw.lp
+--read_solution_file $F/egout.sol --solution_file s.sol $I/egout.mps

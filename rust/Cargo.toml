@@ -6,15 +6,19 @@ edition = "2021"
 [lib]
 crate-type = ["staticlib", "rlib"]
 
-# The crest command line (the highs app's). It links the C++ part of a
-# static HIGHS_RUST build of libhighs: HIGHS_LIB_DIR=<build>/lib cargo build
-# --release --features crest (see build.rs)
+# The crest command line (the highs app's), all Rust: cargo build --release
+# --bin crest (no C++ compiler, no libhighs)
 [[bin]]
 name = "crest"
 path = "src/bin/crest.rs"
 required-features = ["crest"]
 
+[dependencies]
+# gzip/zlib model files (zstr's role), pure Rust (miniz_oxide)
+flate2 = { version = "1", optional = true }
+
 [features]
+default = ["crest"]
 # Follow libstdc++ (gcc) instead of libc++ where the C++ standard library's
 # choices show in results: heap/partial_sort tie orders, std::tuple layout
 # in hashes, uniform_int_distribution
@@ -22,8 +26,10 @@ libstdcxx = []
 # Never fuse multiply-adds, like a C++ build without FMA instructions or
 # with -ffp-contract=off (default on x86_64)
 no_fma = []
-# Build the crest binary
-crest = []
+# crest's Rust Highs object, its model file reading (gzip) and the crest
+# binary; the CMake build of libhighs builds the library without it
+# (--no-default-features): there the Highs object is the C++ one
+crest = ["dep:flate2"]
 
 [profile.release]
 lto = true

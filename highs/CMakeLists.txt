@@ -655,7 +655,8 @@ if(HIGHS_RUST)
   file(GLOB_RECURSE highs_rust_sources CONFIGURE_DEPENDS ${HIGHS_RUST_DIR}/src/*.rs)
   add_custom_command(
     OUTPUT ${HIGHS_RUST_LIB}
-    COMMAND ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
+    COMMAND ${CARGO} build --release --lib --no-default-features
+            --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
             --target-dir ${CMAKE_BINARY_DIR}/rust ${highs_rust_target_args} ${highs_rust_feature_args}
     # So that cargo reads rust/.cargo/config.toml
     WORKING_DIRECTORY ${HIGHS_RUST_DIR}
@@ -666,19 +667,19 @@ if(HIGHS_RUST)
   add_dependencies(${highs_rust_target} highs_rs)
   target_link_libraries(${highs_rust_target} ${highs_rust_link} ${HIGHS_RUST_LIB})
 
-  # The Rust command line crest (rust/src/bin/crest.rs) links the C++ of
-  # the static library (rust/build.rs); own target dir, since the crest
-  # feature would rebuild libhighs_rs
-  if(TARGET highs AND NOT BUILD_SHARED_LIBS)
+  # The Rust command line crest (rust/src/bin/crest.rs): all Rust, built by
+  # cargo alone (the crest feature, whose flate2 crate cargo fetches; own
+  # target dir, since the features differ from the library's). Not built
+  # by default: cmake --build <dir> --target crest
+  if(TARGET highs)
     string(REPLACE "/rust/" "/rust-crest/" crest_out ${highs_rust_out})
-    add_custom_target(crest ALL
-      COMMAND ${CMAKE_COMMAND} -E env HIGHS_LIB_DIR=$<TARGET_FILE_DIR:highs>
-              ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
+    add_custom_target(crest
+      COMMAND ${CARGO} build --release --manifest-path ${HIGHS_RUST_DIR}/Cargo.toml
               --target-dir ${CMAKE_BINARY_DIR}/rust-crest ${highs_rust_target_args}
               --features "crest ${HIGHS_RUST_FEATURES}" --bin crest
       COMMAND ${CMAKE_COMMAND} -E copy ${crest_out}/crest ${CMAKE_BINARY_DIR}/bin/crest
       WORKING_DIRECTORY ${HIGHS_RUST_DIR}
-      DEPENDS highs
+      DEPENDS ${highs_rust_sources} ${HIGHS_RUST_DIR}/Cargo.toml
       COMMENT "Building crest")
   endif()
 endif()

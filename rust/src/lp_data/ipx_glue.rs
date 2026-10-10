@@ -261,10 +261,6 @@ pub struct CIpxHost {
 const _: () = assert!(std::mem::size_of::<CIpxOptions>() == 112);
 const _: () = assert!(std::mem::size_of::<CIpxHost>() == 64 + std::mem::size_of::<CLp>() + 112 + 48);
 
-extern "C" {
-    fn fflush(f: *mut c_void) -> i32;
-}
-
 /// reportIpxSolveStatus
 fn report_solve_status(log: &Log, solve_status: i32, error_flag: i32) -> Status {
     let e = LogType::Error;
@@ -331,8 +327,7 @@ fn status_error(log: &Log, error: bool, message: &str, value: i32) -> bool {
         } else {
             log_user!(log, LogType::Error, "%s: %s %d\n", "Ipx", message, value);
         }
-        // SAFETY: fflush(NULL) flushes all C streams
-        unsafe { fflush(std::ptr::null_mut()) };
+        crate::io::log::cfile::flush_all();
     }
     error
 }

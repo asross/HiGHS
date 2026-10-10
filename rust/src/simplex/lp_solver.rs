@@ -2277,6 +2277,25 @@ fn rm<T>(v: &mut Vec<T>) -> RsMut<T> {
     RsMut { ptr: v.as_mut_ptr(), len: v.len() }
 }
 
+impl LpSolver {
+    /// The slices the ranging reads
+    pub fn ranging_slices(&mut self) -> RangingSlices {
+        RangingSlices {
+            work_value: rm(&mut self.work_value),
+            work_dual: rm(&mut self.work_dual),
+            work_cost: rm(&mut self.work_cost),
+            work_lower: rm(&mut self.work_lower),
+            work_upper: rm(&mut self.work_upper),
+            base_value: rm(&mut self.base_value),
+            base_lower: rm(&mut self.base_lower),
+            base_upper: rm(&mut self.base_upper),
+            nonbasic_flag: rm(&mut self.basis.nonbasic_flag),
+            nonbasic_move: rm(&mut self.basis.nonbasic_move),
+            basic_index: rm(&mut self.basis.basic_index),
+        }
+    }
+}
+
 mod ffi {
     use super::*;
 

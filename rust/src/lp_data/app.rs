@@ -2,11 +2,12 @@
 //! loadOptions): parse the command line (options_cli.rs), load the options
 //! into a separate HighsOptions, open the log file, pass the options, read
 //! the model, presolve and write the presolved model or run, and close.
-//! The `Highs` object and the loaded options are C++ (`AppHost`, created by
-//! highs_app_create in lp_data/HighsAppRust.cpp); each step on them is one
-//! `op`. Output to stdout/stderr goes through C's stdio (`Print`), so it
-//! interleaves with the C++ logging as before. Shared by the C++ `highs`
-//! app (under HIGHS_RUST) and the Rust `crest` binary.
+//! The `Highs` object and the loaded options are the host's (`AppHost`):
+//! the C++ ones for the C++ `highs` app under HIGHS_RUST (highs_app_create
+//! in lp_data/HighsAppRust.cpp), the Rust ones for `crest`
+//! (lp_handle/highs.rs `app_create`); each step on them is one `op`.
+//! Output to stdout/stderr goes through C's stdio (`Print`), so it
+//! interleaves with the logging as before.
 
 use super::options_cli::{parse, CommandLine, Outcome};
 use super::{Log, LogType};

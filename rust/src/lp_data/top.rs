@@ -896,6 +896,17 @@ impl LpHandle {
         }
     }
 
+    /// Highs::passModel of a Rust model (crest's Highs object)
+    #[cfg(feature = "crest")]
+    pub(crate) fn top_pass_model(&mut self, lp: Lp, hessian: Hessian) -> Status {
+        self.top().user_hessian = Some(hessian);
+        self.user_model = Some(lp);
+        let s = self.with_run(|r| r.pass_model());
+        self.user_model = None;
+        self.top().user_hessian = None;
+        s
+    }
+
     /// Highs::run: the options' file steps (through the C++ object), the
     /// user scaling and optimizeModel
     pub(crate) fn top_run(&mut self) -> Status {
@@ -1301,7 +1312,7 @@ impl LpHandle {
 
     // ---- The KKT failures of the model (getKktFailures(options, model, ...))
 
-    fn kkt_failures(&mut self) {
+    pub(crate) fn kkt_failures(&mut self) {
         let o = self.opts.kkt(self.log());
         let hv = self.hessian_view();
         let is_qp = hv.dim != 0;

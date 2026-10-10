@@ -46,6 +46,10 @@ use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 #[path = "top.rs"]
 pub(crate) mod top;
 
+#[cfg(feature = "crest")]
+#[path = "highs.rs"]
+pub mod highs;
+
 // HighsBasisStatus
 const BASIC: u8 = 1;
 const NONBASIC: u8 = 4;
@@ -403,6 +407,48 @@ pub struct LpHandle {
     /// without a host that solves for it (the IIS's LP solves): its
     /// context and function (CHost::simplex_interrupt)
     pub(crate) simplex_callback: Option<(*mut c_void, unsafe extern "C" fn(*mut c_void, i32) -> bool)>,
+    /// The model's names, for crest's Rust Highs object (whose engine
+    /// holds them); None for the C++ Highs object's engine (the C++ copy
+    /// holds them) and the MIP's handles
+    pub names: Option<Box<Names>>,
+}
+
+/// HighsLp's members that the Rust `Lp` does not hold: the names (with
+/// their hashes, prefixes and suffixes), the objective and origin names
+/// and the MPS cost row location
+#[derive(Clone, Debug)]
+pub struct Names {
+    pub col: Vec<Vec<u8>>,
+    pub row: Vec<Vec<u8>>,
+    pub col_prefix: String,
+    pub row_prefix: String,
+    pub col_suffix: i32,
+    pub row_suffix: i32,
+    /// HighsNameHash::name2index (kHashIsDuplicate -1 for a duplicate)
+    pub col_hash: std::collections::HashMap<Vec<u8>, i32>,
+    pub row_hash: std::collections::HashMap<Vec<u8>, i32>,
+    pub objective_name: Vec<u8>,
+    pub origin_name: Vec<u8>,
+    pub cost_row_location: i32,
+}
+
+impl Default for Names {
+    /// HighsLp::clear's
+    fn default() -> Self {
+        Names {
+            col: Vec::new(),
+            row: Vec::new(),
+            col_prefix: String::new(),
+            row_prefix: String::new(),
+            col_suffix: 0,
+            row_suffix: 0,
+            col_hash: Default::default(),
+            row_hash: Default::default(),
+            objective_name: Vec::new(),
+            origin_name: Vec::new(),
+            cost_row_location: -1,
+        }
+    }
 }
 
 // SAFETY: a handle is used by one thread at a time (the race's IPX handle
@@ -462,6 +508,7 @@ impl LpHandle {
             model_matrix_back: false,
             top: None,
             simplex_callback: None,
+            names: None,
         });
         h.run_data.invalidate();
         let o = &h.opts;
@@ -2025,9 +2072,32 @@ impl IfaceHost for Iface {
     fn lps(&self) -> &mut LpSolver {
         &mut self.h().lps
     }
-    fn names_resize(&mut self, _cols: bool, _num: i32) {}
-    fn names_delete(&mut self, _cols: bool, _kept: &[i32], _new_num: i32) {}
-    fn names_hash_clear(&mut self, _cols: bool) {}
+    fn names_resize(&mut self, cols: bool, num: i32) {
+        if let Some(n) = self.h().names.as_mut() {
+            let v = if cols { &mut n.col } else { &mut n.row };
+            if !v.is_empty() {
+                v.resize(num.max(0) as usize, Vec::new());
+            }
+        }
+    }
+    fn names_delete(&mut self, cols: bool, kept: &[i32], new_num: i32) {
+        if let Some(n) = self.h().names.as_mut() {
+            let v = if cols { &mut n.col } else { &mut n.row };
+            if !v.is_empty() {
+                for (i, &k) in kept.iter().enumerate().take(new_num.max(0) as usize) {
+                    if k as usize != i {
+                        v[i] = v[k as usize].clone();
+                    }
+                }
+                v.truncate(new_num.max(0) as usize);
+            }
+        }
+    }
+    fn names_hash_clear(&mut self, cols: bool) {
+        if let Some(n) = self.h().names.as_mut() {
+            if cols { &mut n.col_hash } else { &mut n.row_hash }.clear();
+        }
+    }
     fn invalidate(&mut self, what: Invalidate) {
         let h = self.h();
         match what {
@@ -2059,8 +2129,19 @@ impl IfaceHost for Iface {
     fn ekk_clear_shell(&mut self) {
         self.h().clear_shell();
     }
-    fn hessian_complete(&mut self, _num_col: i32) {}
-    fn hessian_delete_cols(&mut self, _ic: &IndexCollection) {}
+    fn hessian_complete(&mut self, num_col: i32) {
+        // A Highs object's Hessian (the MIP's handles have none)
+        if let Some(t) = self.h().top.as_mut() {
+            if t.hessian.dim != 0 {
+                super::hessian::complete_hessian(num_col, &mut t.hessian);
+            }
+        }
+    }
+    fn hessian_delete_cols(&mut self, ic: &IndexCollection) {
+        if let Some(t) = self.h().top.as_mut() {
+            super::hessian::delete_cols(&mut t.hessian, ic);
+        }
+    }
 }
 
 // ---- formSimplexLpBasisAndFactor's host

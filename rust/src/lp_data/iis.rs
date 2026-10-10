@@ -180,7 +180,7 @@ pub struct IisHost {
 /// handle (0: the incumbent).
 #[repr(i32)]
 #[derive(Clone, Copy)]
-enum Op {
+pub(crate) enum Op {
     /// The incumbent's iis_ into p0 (IisState, views)
     LoadIis = 1,
     /// p0 (IisState) into the incumbent's iis_, with the kept IIS LP
