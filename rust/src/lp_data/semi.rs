@@ -288,56 +288,6 @@ pub unsafe fn unapply_mods(m: &CLpMods, col_lower: &mut [f64], col_upper: &mut [
 
 // The C++ entry points (HighsLpUtilsRust.cpp)
 
-/// # Safety
-/// The arrays valid; the buffers of `m` hold num_col entries
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_assess_semi_variables(
-    log: *const Log,
-    col_lower: RsMut<f64>,
-    col_upper: RsMut<f64>,
-    integrality: RsMut<u8>,
-    m: *mut CSemiMods,
-) -> i32 {
-    assess_semi_variables(&*log, col_lower.get_mut(), col_upper.get_mut(), integrality.get_mut(), &mut *m) as i32
-}
-
-/// # Safety
-/// The arrays valid; the buffers hold num_col entries
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_relax_semi_variables(
-    col_lower: RsMut<f64>,
-    integrality: RsMut<u8>,
-    index: RsMut<i32>,
-    value: RsMut<f64>,
-) -> usize {
-    relax_semi_variables(col_lower.get_mut(), integrality.get(), index.get_mut(), value.get_mut())
-}
-
-/// # Safety
-/// The arrays valid
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_active_modified_upper_bounds(
-    log: *const Log,
-    tightened_index: RsMut<i32>,
-    col_upper: RsMut<f64>,
-    col_value: RsMut<f64>,
-    pft: f64,
-) -> bool {
-    active_modified_upper_bounds(&*log, tightened_index.get(), col_upper.get(), col_value.get(), pft)
-}
-
-/// # Safety
-/// The arrays valid
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_unapply_mods(
-    m: *const CLpMods,
-    col_lower: RsMut<f64>,
-    col_upper: RsMut<f64>,
-    integrality: RsMut<u8>,
-) {
-    unapply_mods(&*m, col_lower.get_mut(), col_upper.get_mut(), integrality.get_mut());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

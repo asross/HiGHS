@@ -784,6 +784,7 @@ HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
 }
 #endif
 
+#ifndef HIGHS_RUST
 HighsStatus userScaleLp(HighsLp& lp, HighsUserScaleData& data,
                         const HighsLogOptions& log_options) {
   userScaleLp(lp, data, false);
@@ -792,6 +793,7 @@ HighsStatus userScaleLp(HighsLp& lp, HighsUserScaleData& data,
   userScaleLp(lp, data);
   return return_status;
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsLpUtilsRust.cpp, rust/src/lp_data/user_scale.rs)

@@ -1805,20 +1805,6 @@ pub unsafe extern "C" fn highs_rs_return_from_highs(c: *const CHighs, status: i3
     Run::new(&*c).return_from_highs(status_from_i64(status as i64)) as i32
 }
 
-/// # Safety
-/// `log` valid, `from` and `presolved` three values each
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_report_presolve_reductions(
-    log: *const Log,
-    on: bool,
-    presolve_status: i32,
-    from: *const i32,
-    presolved: *const i32,
-) {
-    let a = |p: *const i32| [*p, *p.add(1), *p.add(2)];
-    report_presolve_reductions(&*log, on, presolve_status, a(from), a(presolved));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

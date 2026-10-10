@@ -995,22 +995,6 @@ impl Run<'_> {
 
 // ------------------------------------------------------------ entry points
 
-/// Highs::getDualRayInterface (primal false) / getPrimalRayInterface;
-/// `value` holds num_row (num_col) entries, or is NULL
-///
-/// # Safety
-/// `c` is a valid CHighs
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_get_ray(c: *const CHighs, primal: bool, has_ray: *mut bool, value: *mut f64, len: usize) -> i32 {
-    let run = Run::new(&*c);
-    let value = if value.is_null() { None } else { Some(std::slice::from_raw_parts_mut(value, len)) };
-    if primal {
-        run.get_primal_ray(&mut *has_ray, value) as i32
-    } else {
-        run.get_dual_ray(&mut *has_ray, value) as i32
-    }
-}
-
 /// aFormatOk (hessian false) / qFormatOk of a matrix passed by a user
 ///
 /// # Safety

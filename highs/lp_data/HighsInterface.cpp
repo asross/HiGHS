@@ -473,7 +473,7 @@ HighsStatus Highs::addColsInterface(
       return HighsStatus::kError;
 
   HighsLp& lp = model_.lp_;
-  HighsBasis& basis = basis_r();
+  HighsBasis& basis = basis_w();
   HighsScale& scale = lp.scale_;
   bool& useful_basis = basis.useful;
   bool& lp_has_scaling = lp.scale_.has_scaling;
@@ -615,7 +615,7 @@ HighsStatus Highs::addRowsInterface(HighsInt ext_num_new_row,
       return HighsStatus::kError;
 
   HighsLp& lp = model_.lp_;
-  HighsBasis& basis = basis_r();
+  HighsBasis& basis = basis_w();
   HighsScale& scale = lp.scale_;
   bool& useful_basis = basis.useful;
 
@@ -783,7 +783,7 @@ static void deleteBasisRows(HighsBasis& basis,
 #ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs
 void Highs::deleteColsInterface(HighsIndexCollection& index_collection) {
   HighsLp& lp = model_.lp_;
-  HighsBasis& basis = basis_r();
+  HighsBasis& basis = basis_w();
   lp.ensureColwise();
 
   // Keep a copy of the original number of columns to check whether
@@ -799,13 +799,13 @@ void Highs::deleteColsInterface(HighsIndexCollection& index_collection) {
 
   // Nontrivial deletion so reset the model_status and update any
   // Highs basis
-  model_status_r() = HighsModelStatus::kNotset;
+  model_status_w() = HighsModelStatus::kNotset;
   if (basis_r().useful) {
     assert(basis_r().col_status.size() == static_cast<size_t>(original_num_col));
     // Have a full set of column basis status values, so maintain
     // them, and only invalidate the basis if a basic column has been
     // deleted
-    deleteBasisCols(basis_r(), index_collection, original_num_col);
+    deleteBasisCols(basis_w(), index_collection, original_num_col);
   } else {
     assert(!basis.valid);
   }
@@ -843,7 +843,7 @@ void Highs::deleteColsInterface(HighsIndexCollection& index_collection) {
 #ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs
 void Highs::deleteRowsInterface(HighsIndexCollection& index_collection) {
   HighsLp& lp = model_.lp_;
-  HighsBasis& basis = basis_r();
+  HighsBasis& basis = basis_w();
   lp.ensureColwise();
   // Keep a copy of the original number of rows to check whether
   // any rows have been removed, and if there is mask to be updated
@@ -857,13 +857,13 @@ void Highs::deleteRowsInterface(HighsIndexCollection& index_collection) {
 
   // Nontrivial deletion so reset the model_status and update any
   // Highs basis
-  model_status_r() = HighsModelStatus::kNotset;
+  model_status_w() = HighsModelStatus::kNotset;
   if (basis_r().useful) {
     assert(basis_r().row_status.size() == static_cast<size_t>(original_num_row));
     // Have a full set of row basis status values, so maintain them,
     // and only invalidate the basis if a nonbasic row has been
     // deleted
-    deleteBasisRows(basis_r(), index_collection, original_num_row);
+    deleteBasisRows(basis_w(), index_collection, original_num_row);
   } else {
     assert(!basis.valid);
   }
@@ -1201,8 +1201,8 @@ void Highs::changeCoefficientInterface(const HighsInt ext_row,
   if (basic_column) {
     // Basis is retained, but is has to be viewed as alien, since the
     // basis matrix has changed
-    this->basis_r().was_alien = true;
-    this->basis_r().alien = true;
+    this->basis_w().was_alien = true;
+    this->basis_w().alien = true;
   }
 
   // Determine any implications for simplex data
@@ -1215,7 +1215,7 @@ HighsStatus Highs::scaleColInterface(const HighsInt col,
                                      const double scale_value) {
   HighsStatus return_status = HighsStatus::kOk;
   HighsLp& lp = model_.lp_;
-  HighsBasis& basis = basis_r();
+  HighsBasis& basis = basis_w();
   HighsSimplexStatus& simplex_status = ekk_instance_.status_;
 
   // Ensure that the LP is column-wise
@@ -1268,7 +1268,7 @@ HighsStatus Highs::scaleRowInterface(const HighsInt row,
                                      const double scale_value) {
   HighsStatus return_status = HighsStatus::kOk;
   HighsLp& lp = model_.lp_;
-  HighsBasis& basis = basis_r();
+  HighsBasis& basis = basis_w();
   HighsSimplexStatus& simplex_status = ekk_instance_.status_;
 
   // Ensure that the LP is column-wise
@@ -1322,7 +1322,7 @@ HighsStatus Highs::scaleRowInterface(const HighsInt row,
 // Ported to Rust (rust/src/lp_data/edit.rs; the glue follows)
 void Highs::setNonbasicStatusInterface(
     const HighsIndexCollection& index_collection, const bool columns) {
-  HighsBasis& highs_basis = basis_r();
+  HighsBasis& highs_basis = basis_w();
   if (!highs_basis.valid) return;
   const bool has_simplex_basis = ekk_instance_.status_.has_basis;
   SimplexBasis& simplex_basis = ekk_instance_.basis_;
@@ -1464,7 +1464,7 @@ void Highs::setNonbasicStatusInterface(
 
 void Highs::appendNonbasicColsToBasisInterface(const HighsInt ext_num_new_col) {
   if (ext_num_new_col == 0) return;
-  HighsBasis& highs_basis = basis_r();
+  HighsBasis& highs_basis = basis_w();
   if (!highs_basis.useful) return;
   const bool has_simplex_basis = ekk_instance_.status_.has_basis;
   SimplexBasis& simplex_basis = ekk_instance_.basis_;
@@ -1544,7 +1544,7 @@ void Highs::appendNonbasicColsToBasisInterface(const HighsInt ext_num_new_col) {
 #ifndef HIGHS_RUST  // rust/src/lp_data/interface.rs
 void Highs::appendBasicRowsToBasisInterface(const HighsInt ext_num_new_row) {
   if (ext_num_new_row == 0) return;
-  HighsBasis& highs_basis = basis_r();
+  HighsBasis& highs_basis = basis_w();
   if (!highs_basis.useful) return;
   const bool has_simplex_basis = ekk_instance_.status_.has_basis;
 #ifndef HIGHS_RUST
@@ -1921,7 +1921,7 @@ HighsStatus Highs::getBasicVariablesInterface(HighsInt* basic_variables) {
                     only_from_known_basis),
         return_status, "formSimplexLpBasisAndFactor");
 #else
-    HighsLpSolverObject solver_object(lp, basis_r(), solution_r(), info_r(),
+    HighsLpSolverObject solver_object(lp, basis_w(), solution_w(), info_w(),
                                       ekk_instance_, callback_, options_,
                                       timer_);
     solver_object.setProfiling(this->profiling_);
@@ -2155,11 +2155,11 @@ HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
     // The relaxation for an infeasible MIP may be feasible - so no
     // ray is generated - so make sure (#2415) that the primal
     // solution status is reset
-    this->info_r().primal_solution_status = SolutionStatus::kSolutionStatusNone;
+    this->info_w().primal_solution_status = SolutionStatus::kSolutionStatusNone;
     // Modify the objective-related information
-    this->info_r().dual_solution_status = SolutionStatus::kSolutionStatusNone;
-    this->info_r().objective_function_value = 0;
-    this->info_r().invalidateDualKkt();
+    this->info_w().dual_solution_status = SolutionStatus::kSolutionStatusNone;
+    this->info_w().objective_function_value = 0;
+    this->info_w().invalidateDualKkt();
     if (has_dual_ray) {
       assert(this->info_r().num_primal_infeasibilities > 0);
       assert(this->model_status_r() == HighsModelStatus::kInfeasible);
@@ -2167,8 +2167,8 @@ HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
       // If someone has tried to get a dual ray for a feasible problem
       // - or if the relaxation is feasible - then any model and
       // primal KKT status of the original model has been lost
-      this->info_r().invalidatePrimalKkt();
-      this->model_status_r() = HighsModelStatus::kNotset;
+      this->info_w().invalidatePrimalKkt();
+      this->model_status_w() = HighsModelStatus::kNotset;
     }
   }
   return return_status;
@@ -2283,8 +2283,8 @@ HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
     if (is_mip) {
       // Unboundedness LP has been solved, but that will give dual
       // solution status kInfeasible which, for a MIP is not correct
-      this->info_r().dual_solution_status = SolutionStatus::kSolutionStatusNone;
-      this->info_r().invalidateDualKkt();
+      this->info_w().dual_solution_status = SolutionStatus::kSolutionStatusNone;
+      this->info_w().invalidateDualKkt();
     }
     // Restore the option values
     this->setOptionValue("presolve", presolve);
@@ -2306,7 +2306,7 @@ HighsStatus Highs::getRangingInterface() {
                         basis_r(), solution_r(), model_status_r(),
                         info_r().objective_function_value);
 #else
-  HighsLpSolverObject solver_object(model_.lp_, basis_r(), solution_r(), info_r(),
+  HighsLpSolverObject solver_object(model_.lp_, basis_w(), solution_w(), info_w(),
                                     ekk_instance_, callback_, options_, timer_);
   solver_object.setProfiling(this->profiling_);
   solver_object.model_status_ = model_status_r();
@@ -2351,7 +2351,7 @@ HighsStatus Highs::getIisInterfaceReturn(
 
   // If the IIS process has identified infeasibility, then set
   if (this->iis_.status_ >= kIisModelStatusTimeLimit)
-    this->model_status_r() = HighsModelStatus::kInfeasible;
+    this->model_status_w() = HighsModelStatus::kInfeasible;
 
   HighsLp& lp = this->model_.lp_;
   HighsLp& iis_lp = this->iis_.model_.lp_;
@@ -2663,7 +2663,7 @@ HighsStatus Highs::elasticityFilterReturn(
   // lack of dual values triggers an assert in
   // getKktFailures. Ultimately (#2081) the dual values will be
   // available but, for now, make the basis invalid.
-  basis_r().valid = false;
+  basis_w().valid = false;
 
   run_status =
       this->changeColsCost(0, original_num_col - 1, original_col_cost.data());
@@ -2692,17 +2692,17 @@ HighsStatus Highs::elasticityFilterReturn(
     // Solution is invalidated by deleting rows and columns, but
     // primal values are correct. Have to recompute row activities,
     // though
-    this->model_.lp_.a_matrix_.productQuad(this->solution_r().row_value,
+    this->model_.lp_.a_matrix_.productQuad(this->solution_w().row_value,
                                            this->solution_r().col_value);
-    this->solution_r().value_valid = true;
+    this->solution_w().value_valid = true;
     // Set the feasibility objective and any KKT failures
-    info_r().objective_function_value = objective_function_value;
-    getKktFailures(options_, model_, solution_r(), basis_r(), info_r());
-    info_r().valid = true;
+    info_w().objective_function_value = objective_function_value;
+    getKktFailures(options_, model_, solution_w(), basis_w(), info_w());
+    info_w().valid = true;
   }
 
   // Revert model status
-  this->model_status_r() = original_model_status;
+  this->model_status_w() = original_model_status;
 
   // Restore IIS
   this->iis_ = iis;
@@ -3406,7 +3406,7 @@ HighsStatus Highs::checkOptimality(const std::string& solver_type) {
                    solver_type.c_str(), int(info_r().num_semi_infeasibilities),
                    info_r().max_semi_infeasibility,
                    info_r().sum_semi_infeasibilities);
-      model_status_r() = HighsModelStatus::kSolveError;
+      model_status_w() = HighsModelStatus::kSolveError;
       highsLogUser(options_.log_options, HighsLogType::kError,
                    "Setting model status to %s\n",
                    modelStatusToString(model_status_r()).c_str());
@@ -3414,7 +3414,7 @@ HighsStatus Highs::checkOptimality(const std::string& solver_type) {
     }
     return HighsStatus::kOk;
   }
-  model_status_r() = HighsModelStatus::kSolveError;
+  model_status_w() = HighsModelStatus::kSolveError;
   std::stringstream ss;
   ss.str(std::string());
   ss << highsFormatToString(
@@ -3550,7 +3550,7 @@ HighsStatus Highs::optionChangeAction() {
 // Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/model.rs)
 void Highs::restoreInfCost(HighsStatus& return_status) {
   HighsLp& lp = this->model_.lp_;
-  HighsBasis& basis = this->basis_r();
+  HighsBasis& basis = this->basis_w();
   HighsLpMods& mods = lp.mods_;
   HighsInt num_inf_cost = mods.save_inf_cost_variable_index.size();
   if (num_inf_cost <= 0) return;
@@ -3570,7 +3570,7 @@ void Highs::restoreInfCost(HighsStatus& return_status) {
       }
     }
     assert(lp.col_cost_[iCol] == 0);
-    if (value) this->info_r().objective_function_value += value * cost;
+    if (value) this->info_w().objective_function_value += value * cost;
     lp.col_cost_[iCol] = cost;
     lp.col_lower_[iCol] = lower;
     lp.col_upper_[iCol] = upper;
@@ -3582,7 +3582,7 @@ void Highs::restoreInfCost(HighsStatus& return_status) {
   if (this->model_status_r() == HighsModelStatus::kInfeasible) {
     // Model is infeasible with the infinite cost variables fixed at
     // appropriate values, so model status cannot be determined
-    this->model_status_r() = HighsModelStatus::kUnknown;
+    this->model_status_w() = HighsModelStatus::kUnknown;
     setHighsModelStatusAndClearSolutionAndBasis(this->model_status_r());
     return_status = highsStatusFromHighsModelStatus(model_status_r());
   }
@@ -3590,6 +3590,7 @@ void Highs::restoreInfCost(HighsStatus& return_status) {
 
 #endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::userScale(HighsUserScaleData& data) {
   if (!options_.user_objective_scale && !options_.user_bound_scale)
     return HighsStatus::kOk;
@@ -3610,7 +3611,9 @@ HighsStatus Highs::userScale(HighsUserScaleData& data) {
   data.applied = true;
   return HighsStatus::kOk;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::userUnscale(HighsUserScaleData& data) {
   if (!data.applied) return HighsStatus::kOk;
   // Unscale the incumbent model and solution
@@ -3643,7 +3646,9 @@ HighsStatus Highs::userUnscale(HighsUserScaleData& data) {
   }
   return status;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsStatus Highs::userScaleModel(HighsUserScaleData& data) {
   // Consider applying user objective and bound scaling to the model
   // by first identifying whether it causes any errors due to creating
@@ -3657,6 +3662,7 @@ HighsStatus Highs::userScaleModel(HighsUserScaleData& data) {
   userScaleHessian(this->model_w().hessian_, data);
   return return_status;
 }
+#endif
 
 #ifndef HIGHS_RUST
 // Ported to Rust (HighsRunRust.cpp, rust/src/lp_data/user_scale.rs)
@@ -3675,18 +3681,18 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
         if (has_integrality &&
             lp.integrality_[iCol] != HighsVarType::kContinuous)
           continue;
-        this->solution_r().col_value[iCol] *= bound_scale_value;
+        this->solution_w().col_value[iCol] *= bound_scale_value;
       }
       for (HighsInt iRow = 0; iRow < lp.num_row_; iRow++)
-        this->solution_r().row_value[iRow] *= bound_scale_value;
+        this->solution_w().row_value[iRow] *= bound_scale_value;
     }
   }
   if (info_r().dual_solution_status != kSolutionStatusNone) {
     if (data.user_objective_scale) {
       for (HighsInt iCol = 0; iCol < lp.num_col_; iCol++)
-        this->solution_r().col_dual[iCol] *= objective_scale_value;
+        this->solution_w().col_dual[iCol] *= objective_scale_value;
       for (HighsInt iRow = 0; iRow < lp.num_row_; iRow++)
-        this->solution_r().row_dual[iRow] *= objective_scale_value;
+        this->solution_w().row_dual[iRow] *= objective_scale_value;
     }
   }
   if (!update_kkt) return return_status;
@@ -3695,8 +3701,8 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
       info_r().objective_function_value - model_.lp_.offset_;
   objective_function_value *= (bound_scale_value * objective_scale_value);
   objective_function_value += model_.lp_.offset_;
-  info_r().objective_function_value = objective_function_value;
-  getKktFailures(options_, model_, solution_r(), basis_r(), info_r());
+  info_w().objective_function_value = objective_function_value;
+  getKktFailures(options_, model_, solution_w(), basis_w(), info_w());
   return reportKktFailures(model_.lp_, options_, info_r(),
                            "After removing user scaling")
              ? HighsStatus::kWarning
@@ -4437,12 +4443,12 @@ HighsStatus Highs::returnFromLexicographicOptimization(
     this->deleteRows(original_lp_num_row, this->model_.lp_.num_row_ - 1);
     // Recover model_status_ and info_, and then account for lack of basis or
     // dual solution
-    this->model_status_r() = model_status;
-    this->info_r() = info;
-    info_r().objective_function_value = 0;
-    info_r().basis_validity = kBasisValidityInvalid;
-    info_r().invalidateDualKkt();
-    this->solution_r().value_valid = true;
+    this->model_status_w() = model_status;
+    this->info_w() = info;
+    info_w().objective_function_value = 0;
+    info_w().basis_validity = kBasisValidityInvalid;
+    info_w().invalidateDualKkt();
+    this->solution_w().value_valid = true;
     this->model_.lp_.col_cost_.assign(this->model_.lp_.num_col_, 0);
   }
   return return_status;
@@ -4719,6 +4725,7 @@ HighsStatus Highs::multiobjectiveSolve() {
 }
 #endif
 
+#ifndef HIGHS_RUST
 bool Highs::tryPdlpCleanup(HighsInt& pdlp_cleanup_iteration_limit,
                            const HighsInfo& presolved_lp_info) const {
   // Primal/dual infeasibilities/residuals can be magnified in
@@ -4786,6 +4793,7 @@ bool Highs::tryPdlpCleanup(HighsInt& pdlp_cleanup_iteration_limit,
   }
   return true;
 }
+#endif
 
 void HighsLinearObjective::clear() {
   this->weight = 0.0;

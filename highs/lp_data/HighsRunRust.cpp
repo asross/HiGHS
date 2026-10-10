@@ -250,45 +250,9 @@ struct RsRunData {
   HighsModelStatus* model_status;
 };
 
-// lp_run.rs: UnconTemplate
-struct RsUnconTemplate {
-  bool on;
-  double primal_feasibility_tolerance, dual_feasibility_tolerance;
-};
-
 void setOrigin(void* ctx, const uint8_t* p, size_t n) {
   static_cast<std::string*>(ctx)->assign(reinterpret_cast<const char*>(p), n);
 }
-
-// drivers.rs: BasisDebug
-struct RsBasisDebug {
-  HighsInt id, update_count;
-  RsRunStr origin;
-};
-
-// drivers.rs: PostsolveArgs
-struct RsPostsolveArgs {
-  int64_t col_value_size, col_dual_size, row_dual_size;
-  bool dual_valid;
-  int64_t basis_col_size, basis_row_size;
-  bool basis_valid;
-};
-
-// drivers.rs: MipResult
-struct RsMipResult {
-  HighsInt model_status;
-  double solution_objective;
-  int64_t node_count, total_lp_iterations;
-  double dual_bound, gap, primal_dual_integral, row_violation,
-      bound_violation, integrality_violation;
-};
-
-// drivers.rs: RayRecord
-struct RsRayRecord {
-  HighsInt index, sign;
-  int64_t value_size;
-  bool has_invert;
-};
 
 RsRunStr rsRunStr(const std::string& s) { return {s.data(), s.size()}; }
 
@@ -348,6 +312,10 @@ int highs_rs_lph_called_optimize_model(highs_rs::LpHandle* p,
 void highs_rs_lph_top_hessian(highs_rs::LpHandle* p, RsHessian* h);
 int highs_rs_lph_top_presolved_which(highs_rs::LpHandle* p);
 int highs_rs_lph_top_presolve(highs_rs::LpHandle* p, bool* interrupted);
+int highs_rs_lph_top_set_solution(highs_rs::LpHandle* p, const RsSolution* s);
+int highs_rs_lph_top_run(highs_rs::LpHandle* p, bool* interrupted);
+int highs_rs_lph_top_get_ray(highs_rs::LpHandle* p, bool primal, bool* has_ray,
+                             double* value, size_t len, bool* interrupted);
 int highs_rs_lph_top_postsolve(highs_rs::LpHandle* p, const RsSolution* s,
                                const RsBasisVec* b, const char* origin,
                                size_t origin_len, bool* interrupted);
@@ -652,11 +620,6 @@ struct HighsRunRust {
   // rethrown once Rust has returned; no step is made after it
   std::exception_ptr pending;
   // The state of the drivers (drivers.rs) between steps
-  std::vector<double> saved_cost;
-  HighsHessian saved_hessian;
-  std::string saved_presolve;
-  bool saved_solve_relaxation = false;
-  bool saved_allow_unbounded_or_infeasible = false;
   HighsModel* user_model = nullptr;
   HighsModel read_model;
   HighsBasis read_basis;
@@ -930,6 +893,47 @@ struct HighsRunRust {
         if (h.options_.write_hessian_image)
           writeHessianPicToFile(h.options_, "Hessian", h.model_cache_.hessian_);
         return 0;
+      case 13: {
+        // Highs::run() around a run on the engine: the copies take the
+        // engine's data, then the engine the copies' (the file steps and
+        // the user scaling change them)
+        topOut();
+        HighsStatus status;
+        try {
+          status = h.run();
+        } catch (const HighsTask::Interrupt&) {
+          return -1;
+        }
+        topIn();
+        return int64_t(status);
+      }
+      case 14: {
+        // A file step of Highs::run on this object, its copies current
+        topOut();
+        const HighsOptions& o = h.options_;
+        HighsStatus status = HighsStatus::kOk;
+        switch (arg) {
+          case 0:
+            status = h.readSolution(o.read_solution_file);
+            break;
+          case 1:
+            status = h.readBasis(o.read_basis_file);
+            break;
+          case 2:
+            status = h.writeModel(o.write_model_file);
+            break;
+          case 3:
+            status = h.writeIisModel(o.write_iis_model_file);
+            break;
+          case 4:
+            status = h.writeSolution(o.solution_file, o.write_solution_style);
+            break;
+          default:
+            status = h.writeBasis(o.write_basis_file);
+        }
+        topIn();
+        return int64_t(status);
+      }
       case 8: {
         static thread_local std::unique_ptr<RsNameList> col, row;
         col.reset(new RsNameList(h.lpCpp().col_names_));
@@ -940,8 +944,8 @@ struct HighsRunRust {
         return 0;
       }
     }
-    assert(false);
-    return 0;
+    fprintf(stderr, "HighsRunRust: no top op %d\n", code);
+    std::abort();
   }
 
   static int64_t op(void* ctx, int which, int64_t arg, void* p,
@@ -1026,23 +1030,21 @@ struct HighsRunRust {
     if (pending) std::rethrow_exception(pending);
   }
 
-  const HighsLp& lpOf(int64_t which) {
-    return which ? h.presolve_.getReducedProblem() : h.model_r().lp_;
-  }
 
   int64_t step(RunOp which, int64_t arg, void* p, const char* m, size_t len) {
     HighsOptions& options = h.options_;
     switch (which) {
       case RunOp::kFacts: {
+        // (of the model: forceHighsSolutionBasisSize)
         RsFacts& f = *static_cast<RsFacts*>(p);
-        const HighsLp& lp = lpOf(arg);
+        const HighsModel& model = h.model_r();
+        const HighsLp& lp = model.lp_;
         f.num_col = lp.num_col_;
         f.num_row = lp.num_row_;
         f.num_nz = lp.a_matrix_.numNz();
-        f.is_mip = arg ? lp.isMip() : h.model_r().isMip();
-        f.is_qp = arg ? false : h.model_r().isQp();
-        f.is_empty = arg ? lp.num_col_ == 0 && lp.num_row_ == 0
-                         : h.model_r().isEmpty();
+        f.is_mip = model.isMip();
+        f.is_qp = model.isQp();
+        f.is_empty = model.isEmpty();
         f.has_infinite_cost = lp.has_infinite_cost_;
         f.model_name = rsRunStr(lp.model_name_);
         return 0;
@@ -1081,126 +1083,6 @@ struct HighsRunRust {
 #define lpR (h.model_r().lp_)
 #define lpW (h.model_w().lp_)
     switch (which) {
-      case RunOp::kRayRecord: {
-        const HighsEngine& ekk = h.ekk_instance_;
-        RsRayRecord& r = *static_cast<RsRayRecord*>(p);
-        r.index = arg ? ekk.sh_.primal_ray_index : ekk.sh_.dual_ray_index;
-        r.sign = arg ? ekk.sh_.primal_ray_sign : ekk.sh_.dual_ray_sign;
-        r.value_size = ekk.rayValue(arg).size();
-        r.has_invert = ekk.status_.has_invert;
-        return 0;
-      }
-      case RunOp::kFeasibilityProblem: {
-        const bool is_qp = arg & 1;
-        if (arg < 2) {
-          saved_cost = lpR.col_cost_;
-          if (is_qp) saved_hessian = h.model_cache_.hessian_;
-          h.getOptionValue("presolve", saved_presolve);
-          h.getOptionValue("solve_relaxation", saved_solve_relaxation);
-          std::vector<double> zero_costs;
-          zero_costs.assign(lpR.num_col_, 0);
-          HighsEngine& ekk = h.ekk_instance_;
-          const HighsInt ray_index = ekk.sh_.primal_ray_index;
-          const HighsInt ray_sign = ekk.sh_.primal_ray_sign;
-          const std::vector<double> ray_value = ekk.rayValue(true);
-          HighsStatus status =
-              h.changeColsCost(0, lpR.num_col_ - 1, zero_costs.data());
-          assert(status == HighsStatus::kOk);
-          (void)status;
-          ekk.sh_.primal_ray_index = ray_index;
-          ekk.sh_.primal_ray_sign = ray_sign;
-          ekk.setRayValue(true, ray_value);
-          if (is_qp) {
-            HighsHessian zero_hessian;
-            h.passHessian(zero_hessian);
-          }
-          h.setOptionValue("presolve", kHighsOffString);
-          h.setOptionValue("solve_relaxation", true);
-        } else {
-          lpW.col_cost_ = saved_cost;
-          if (is_qp) h.model_cache_.hessian_ = saved_hessian;
-          h.setOptionValue("presolve", saved_presolve);
-          h.setOptionValue("solve_relaxation", saved_solve_relaxation);
-        }
-        return 0;
-      }
-      case RunOp::kUnboundednessProblem:
-        if (arg == 0) {
-          h.getOptionValue("presolve", saved_presolve);
-          h.getOptionValue("solve_relaxation", saved_solve_relaxation);
-          h.getOptionValue("allow_unbounded_or_infeasible",
-                           saved_allow_unbounded_or_infeasible);
-          h.setOptionValue("presolve", kHighsOffString);
-          h.setOptionValue("solve_relaxation", true);
-          h.setOptionValue("allow_unbounded_or_infeasible", false);
-        } else {
-          h.setOptionValue("presolve", saved_presolve);
-          h.setOptionValue("solve_relaxation", saved_solve_relaxation);
-          h.setOptionValue("allow_unbounded_or_infeasible",
-                           saved_allow_unbounded_or_infeasible);
-        }
-        return 0;
-      case RunOp::kHighsRun:
-        return st(h.run());
-      case RunOp::kCopyRay: {
-        double* value = static_cast<double*>(p);
-        const std::vector<double> ray = h.ekk_instance_.rayValue(arg);
-        const HighsInt n = arg ? lpR.num_col_ : lpR.num_row_;
-        for (HighsInt i = 0; i < n; i++) value[i] = ray[i];
-        return 0;
-      }
-      case RunOp::kComputeDualRay: {
-        double* dual_ray_value = static_cast<double*>(p);
-        const HighsInt num_row = lpR.num_row_;
-        std::vector<double> rhs;
-        HighsInt iRow = h.ekk_instance_.sh_.dual_ray_index;
-        rhs.assign(num_row, 0);
-        rhs[iRow] = h.ekk_instance_.sh_.dual_ray_sign;
-        HighsInt* dual_ray_num_nz = 0;
-        h.basisSolveInterface(rhs, dual_ray_value, dual_ray_num_nz, NULL, true);
-        h.ekk_instance_.setRayValue(
-            false,
-            std::vector<double>(dual_ray_value, dual_ray_value + num_row));
-        return 0;
-      }
-      case RunOp::kComputePrimalRay: {
-        double* primal_ray_value = static_cast<double*>(p);
-        const HighsInt num_row = lpR.num_row_;
-        const HighsInt num_col = lpR.num_col_;
-        HighsInt col = h.ekk_instance_.sh_.primal_ray_index;
-        HighsInt num_tot;
-        assert(highs_rs::highs_rs_lps_nonbasic(h.ekk_instance_.lps, 0,
-                                               &num_tot)[col] ==
-               kNonbasicFlagTrue);
-        (void)num_tot;
-        std::vector<double> rhs;
-        std::vector<double> column;
-        column.assign(num_row, 0);
-        rhs.assign(num_row, 0);
-        if (!lpR.a_matrix_.isColwise()) lpW.ensureColwise();
-        HighsInt primal_ray_sign = h.ekk_instance_.sh_.primal_ray_sign;
-        if (col < num_col) {
-          for (HighsInt iEl = lpR.a_matrix_.start_[col];
-               iEl < lpR.a_matrix_.start_[col + 1]; iEl++)
-            rhs[lpR.a_matrix_.index_[iEl]] =
-                primal_ray_sign * lpR.a_matrix_.value_[iEl];
-        } else {
-          rhs[col - num_col] = primal_ray_sign;
-        }
-        HighsInt* column_num_nz = 0;
-        h.basisSolveInterface(rhs, column.data(), column_num_nz, NULL, false);
-        for (HighsInt iCol = 0; iCol < num_col; iCol++)
-          primal_ray_value[iCol] = 0;
-        for (HighsInt iRow = 0; iRow < num_row; iRow++) {
-          HighsInt iCol = h.ekk_instance_.basicIndex()[iRow];
-          if (iCol < num_col) primal_ray_value[iCol] = column[iRow];
-        }
-        if (col < num_col) primal_ray_value[col] = -primal_ray_sign;
-        h.ekk_instance_.setRayValue(
-            true,
-            std::vector<double>(primal_ray_value, primal_ray_value + num_col));
-        return 0;
-      }
       case RunOp::kLogHeader:
         h.logHeader();
         return 0;
@@ -1318,8 +1200,9 @@ struct HighsRunRust {
     }
     (void)m;
     (void)len;
-    assert(false);
-    return 0;
+    // The other steps are the engine's (rust/src/lp_data/top.rs)
+    fprintf(stderr, "HighsRunRust: op %d is the engine's\n", int(which));
+    std::abort();
   }
 
 #undef lpR
@@ -1338,29 +1221,25 @@ static double rsTopClock(void* ctx, int which, int action) {
   return HighsRunRust::clock(&r, which, action);
 }
 
-extern "C" int highs_rs_get_ray(const RsHighs* h, bool primal, bool* has_ray,
-                                double* value, size_t len);
 
 HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
                                        double* dual_ray_value) {
-  assert(!model_r().lp_.is_moved_);
+  // The engine's (rust/src/lp_data/top.rs)
   HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_get_ray(
-      &v, false, &has_dual_ray, dual_ray_value, lpNumRow()));
-  r.rethrow();
-  return status;
+  return r.topCall([&](bool* interrupted) {
+    return highs_rs_lph_top_get_ray(ekk_instance_.p, false, &has_dual_ray,
+                                    dual_ray_value, lpNumRow(), interrupted);
+  });
 }
 
 HighsStatus Highs::getPrimalRayInterface(bool& has_primal_ray,
                                          double* primal_ray_value) {
-  assert(!model_r().lp_.is_moved_);
+  // The engine's (rust/src/lp_data/top.rs)
   HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_get_ray(
-      &v, true, &has_primal_ray, primal_ray_value, lpNumCol()));
-  r.rethrow();
-  return status;
+  return r.topCall([&](bool* interrupted) {
+    return highs_rs_lph_top_get_ray(ekk_instance_.p, true, &has_primal_ray,
+                                    primal_ray_value, lpNumCol(), interrupted);
+  });
 }
 
 HighsStatus Highs::presolve() {
@@ -1483,6 +1362,15 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
     return highs_rs_lph_top_postsolve(
         ekk_instance_.p, &s, &b, basis.debug_origin_name.data(),
         basis.debug_origin_name.size(), interrupted);
+  });
+}
+
+HighsStatus Highs::run() {
+  // The engine's (rust/src/lp_data/top.rs top_run): the file steps are
+  // this object's (topOp 14)
+  HighsRunRust r(*this);
+  return r.topCall([&](bool* interrupted) {
+    return highs_rs_lph_top_run(ekk_instance_.p, interrupted);
   });
 }
 
@@ -1688,45 +1576,12 @@ HighsStatus Highs::basisSolveInterface(const vector<double>& rhs,
 }
 
 HighsStatus Highs::setSolution(const HighsSolution& solution) {
-  HighsStatus return_status = HighsStatus::kOk;
-  const RsLog log = rsLog(options_.log_options);
-  const int parts = highs_rs_new_solution_parts(
-      &log, lpNumCol(), lpNumRow(),
-      solution.col_value.size(), solution.row_dual.size());
-  const bool new_primal_solution = parts & 1;
-  const bool new_dual_solution = parts & 2;
-  if (parts) {
-    invalidateSolverData();
-  } else {
-    return_status = HighsStatus::kError;
-  }
-  if (new_primal_solution) {
-    solution_w().col_value = solution.col_value;
-    if (lpNumRow() > 0) {
-      solution_w().row_value.resize(lpNumRow());
-      if (!model_r().lp_.a_matrix_.isColwise())
-        model_w().lp_.a_matrix_.ensureColwise();
-      return_status = interpretCallStatus(
-          options_.log_options, calculateRowValuesQuad(model_r().lp_, solution_w()),
-          return_status, "calculateRowValuesQuad");
-      if (return_status == HighsStatus::kError) return return_status;
-    }
-    solution_w().value_valid = true;
-  }
-  if (new_dual_solution) {
-    solution_w().row_dual = solution.row_dual;
-    if (lpNumCol() > 0) {
-      solution_w().col_dual.resize(lpNumCol());
-      if (!model_r().lp_.a_matrix_.isColwise())
-        model_w().lp_.a_matrix_.ensureColwise();
-      return_status = interpretCallStatus(
-          options_.log_options, calculateColDualsQuad(model_r().lp_, solution_w()),
-          return_status, "calculateColDuals");
-      if (return_status == HighsStatus::kError) return return_status;
-    }
-    solution_w().dual_valid = true;
-  }
-  return returnFromHighs(return_status);
+  // The engine's (rust/src/lp_data/top.rs)
+  HighsRunRust r(*this);
+  const RsSolution s = rsSolution(solution);
+  return r.topCall([&](bool*) {
+    return highs_rs_lph_top_set_solution(ekk_instance_.p, &s);
+  });
 }
 
 HighsStatus Highs::setSolution(const HighsInt num_entries,
@@ -1748,87 +1603,5 @@ HighsStatus Highs::setSolution(const HighsInt num_entries,
                              return_status, "setSolution");
 }
 
-extern "C" double highs_rs_user_scale_solution(
-    const HighsUserScaleData* d, RsMut<uint8_t> integrality, bool primal,
-    bool dual, RsMut<double> col_value, RsMut<double> row_value,
-    RsMut<double> col_dual, RsMut<double> row_dual, double objective,
-    double offset);
 
-HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
-                                     bool update_kkt) {
-  HighsStatus return_status = HighsStatus::kOk;
-  if (!data.user_objective_scale && !data.user_bound_scale)
-    return HighsStatus::kOk;
-  const HighsLp& lp = this->model_r().lp_;
-  const bool primal = info_r().primal_solution_status != kSolutionStatusNone;
-  const bool dual = info_r().dual_solution_status != kSolutionStatusNone;
-  auto part = [](std::vector<double>& v, const bool use, const HighsInt n) {
-    return use ? RsMut<double>{v.data(), size_t(n)} : RsMut<double>{nullptr, 0};
-  };
-  const double objective_function_value = highs_rs_user_scale_solution(
-      &data, rsMut(lp.integrality_), primal, dual,
-      part(solution_w().col_value, primal, lp.num_col_),
-      part(solution_w().row_value, primal, lp.num_row_),
-      part(solution_w().col_dual, dual, lp.num_col_),
-      part(solution_w().row_dual, dual, lp.num_row_),
-      info_r().objective_function_value, lp.offset_);
-  if (!update_kkt) return return_status;
-  info_w().objective_function_value = objective_function_value;
-  getKktFailures(options_, model_r(), solution_w(), basis_w(), info_w());
-  return reportKktFailures(model_r().lp_, options_, info_r(),
-                           "After removing user scaling")
-             ? HighsStatus::kWarning
-             : return_status;
-}
-
-// Infinite costs, basisForSolution and reportModelStats
-// (rust/src/lp_data/model.rs)
-struct RsInfCostMods {
-  RsMut<HighsInt> index;
-  RsMut<double> cost, lower, upper;
-  HighsInt num;
-};
-
-extern "C" {
-int highs_rs_handle_inf_cost(const RsLog* log, double inf_cost, bool minimize,
-                             bool is_mip, RsMut<uint8_t> integrality,
-                             RsMut<double> cost, RsMut<double> col_lower,
-                             RsMut<double> col_upper, RsInfCostMods* m);
-void highs_rs_restore_inf_cost(RsMut<HighsInt> index, RsMut<double> saved_cost,
-                               RsMut<double> saved_lower,
-                               RsMut<double> saved_upper,
-                               RsMut<double> col_value,
-                               RsMut<uint8_t> col_status, RsMut<double> cost,
-                               RsMut<double> col_lower,
-                               RsMut<double> col_upper, double* objective);
-HighsInt highs_rs_basis_for_solution(
-    const RsLog* log, double tol, RsMut<double> col_lower,
-    RsMut<double> col_upper, RsMut<double> col_value, RsMut<double> row_lower,
-    RsMut<double> row_upper, RsMut<double> row_value,
-    RsMut<uint8_t> col_status, RsMut<uint8_t> row_status);
-void highs_rs_report_model_stats(const RsLog* log, bool dev, const char* name,
-                                 size_t name_len, HighsInt num_col,
-                                 HighsInt num_row, HighsInt a_num_nz,
-                                 HighsInt hessian_dim, HighsInt q_num_nz,
-                                 RsMut<uint8_t> integrality,
-                                 RsMut<double> col_lower,
-                                 RsMut<double> col_upper);
-}
-
-static RsMut<uint8_t> rsBasisStatusOf(std::vector<HighsBasisStatus>& s) {
-  return {reinterpret_cast<uint8_t*>(s.data()), s.size()};
-}
-
-void Highs::reportModelStats() const {
-  const HighsLp& lp = this->model_r().lp_;
-  const HighsHessian& hessian = this->model_r().hessian_;
-  const HighsLogOptions& log_options = this->options_.log_options;
-  if (!*log_options.output_flag) return;
-  const RsLog log = rsLog(log_options);
-  highs_rs_report_model_stats(
-      &log, *log_options.log_dev_level != 0, lp.model_name_.data(),
-      lp.model_name_.size(), lp.num_col_, lp.num_row_, lp.a_matrix_.numNz(),
-      hessian.dim_, hessian.dim_ > 0 ? hessian.numNz() : 0,
-      rsMut(lp.integrality_), rsMut(lp.col_lower_), rsMut(lp.col_upper_));
-}
 #endif

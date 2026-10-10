@@ -50,6 +50,7 @@ void getKktFailures(const HighsOptions& options, const HighsModel& model,
                             primal_dual_errors);
 }
 
+#ifndef HIGHS_RUST
 void getLpKktFailures(const HighsOptions& options, const HighsLp& lp,
                       const HighsSolution& solution, const HighsBasis& basis,
                       HighsInfo& highs_info) {
@@ -69,6 +70,7 @@ void getLpKktFailures(const HighsOptions& options, const HighsLp& lp,
   getPrimalDualGlpsolErrors(options, lp, lp.col_cost_, solution,
                             primal_dual_errors);
 }
+#endif
 
 #ifndef HIGHS_RUST
 void getKktFailures(const HighsOptions& options, const bool is_qp,

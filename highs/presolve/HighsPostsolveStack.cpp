@@ -69,63 +69,6 @@ void HighsPostsolveStack::compressIndexMaps(
 }
 
 #ifdef HIGHS_RUST
-void HighsPostsolveStack::undoRust(const HighsOptions& options,
-                                   HighsSolution& solution, HighsBasis& basis,
-                                   size_t until, HighsInt report_col) const {
-  // The records as Rust reads them (rust/src/presolve/postsolve.rs)
-  static_assert(sizeof(HighsInt) == 4, "Rust postsolve needs 32-bit HighsInt");
-  static_assert(sizeof(RowType) == 4, "layout of the Rust records");
-  static_assert(sizeof(HighsBasisStatus) == 1, "layout of the Rust records");
-  static_assert(sizeof(Nonzero) == 16, "layout of the Rust records");
-  static_assert(sizeof(LinearTransform) == 24, "layout of the Rust records");
-  static_assert(sizeof(FreeColSubstitution) == 32, "layout of the Rust records");
-  static_assert(sizeof(DoubletonEquation) == 72, "layout of the Rust records");
-  static_assert(sizeof(EqualityRowAddition) == 16, "layout of the Rust records");
-  static_assert(sizeof(EqualityRowAdditions) == 4, "layout of the Rust records");
-  static_assert(sizeof(SingletonRow) == 24, "layout of the Rust records");
-  static_assert(sizeof(FixedCol) == 24, "layout of the Rust records");
-  static_assert(sizeof(RedundantRow) == 4, "layout of the Rust records");
-  static_assert(sizeof(ForcingRow) == 16, "layout of the Rust records");
-  static_assert(sizeof(ForcingColumn) == 24, "layout of the Rust records");
-  static_assert(sizeof(ForcingColumnRemovedRow) == 16,
-                "layout of the Rust records");
-  static_assert(sizeof(DuplicateRow) == 24, "layout of the Rust records");
-  static_assert(sizeof(SlackColSubstitution) == 16,
-                "layout of the Rust records");
-  static_assert(offsetof(DoubletonEquation, rowType) == 64,
-                "layout of the Rust records");
-  static_assert(sizeof(std::pair<ReductionType, size_t>) == 16,
-                "layout of the Rust records");
-
-  // expand the solution and basis to the original index space (Rust
-  // moves the entries)
-  const bool dual_valid = solution.dual_valid;
-  solution.col_value.resize(origNumCol);
-  solution.row_value.resize(origNumRow);
-  if (dual_valid) {
-    solution.col_dual.resize(origNumCol);
-    solution.row_dual.resize(origNumRow);
-  }
-  if (basis.valid) {
-    basis.col_status.resize(origNumCol);
-    basis.row_status.resize(origNumRow);
-  }
-  const PostsolveRsStack s = rustStack();
-  const PostsolveRsTolerances tol{options.primal_feasibility_tolerance,
-                                  options.dual_feasibility_tolerance,
-                                  options.mip_feasibility_tolerance};
-  const PostsolveRsSolution x{solution.col_value.data(),
-                              solution.col_dual.data(),
-                              basis.col_status.data(),
-                              size_t(origNumCol),
-                              solution.row_value.data(),
-                              solution.row_dual.data(),
-                              basis.row_status.data(),
-                              size_t(origNumRow),
-                              dual_valid,
-                              basis.valid};
-  highs_rs_postsolve_undo(&s, &tol, &x, until, report_col);
-}
 #endif
 
 #ifndef HIGHS_RUST

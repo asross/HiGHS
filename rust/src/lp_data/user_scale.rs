@@ -3,7 +3,7 @@
 //! HighsInterface.cpp: the scaling of a solution in userScaleSolution).
 //! The Hessian's scaling stays C++ (model/HighsHessianUtils.cpp).
 
-use super::ffi::{CLp, RsMut};
+use super::ffi::CLp;
 use super::{var_type, Log, LogType, Status, INF};
 use crate::log_user;
 
@@ -299,20 +299,6 @@ pub fn user_scale_solution(
 // The C++ entry points (HighsLpUtilsRust.cpp)
 
 /// # Safety
-/// `lp` and `d` valid
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_user_scale_lp(lp: *const CLp, d: *mut UserScaleData, apply: bool) {
-    user_scale_lp(&*lp, &mut *d, apply);
-}
-
-/// # Safety
-/// `log` and `d` valid
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_user_scale_status(log: *const Log, d: *const UserScaleData) -> i32 {
-    user_scale_status(&*log, &*d) as i32
-}
-
-/// # Safety
 /// `d` valid; which 0 the error, 1 the warning message, written through
 /// `set` to `ctx` if there is one
 #[no_mangle]
@@ -330,36 +316,6 @@ pub unsafe extern "C" fn highs_rs_user_scale_message(
         }
         None => false,
     }
-}
-
-/// # Safety
-/// The arrays valid
-#[no_mangle]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn highs_rs_user_scale_solution(
-    d: *const UserScaleData,
-    integrality: RsMut<u8>,
-    primal: bool,
-    dual: bool,
-    col_value: RsMut<f64>,
-    row_value: RsMut<f64>,
-    col_dual: RsMut<f64>,
-    row_dual: RsMut<f64>,
-    objective: f64,
-    offset: f64,
-) -> f64 {
-    user_scale_solution(
-        &*d,
-        integrality.get(),
-        primal,
-        dual,
-        col_value.get_mut(),
-        row_value.get_mut(),
-        col_dual.get_mut(),
-        row_dual.get_mut(),
-        objective,
-        offset,
-    )
 }
 
 #[cfg(test)]

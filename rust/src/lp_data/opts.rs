@@ -1,10 +1,10 @@
 //! The option values as a typed Rust copy ([`Opts`]): one field per
-//! HighsOptions record, named as the option, in the records' order. The
-//! C++ HighsOptions stays the public store (the API, highspy and the C API
-//! hand out references to it): a `Highs` object's values are copied in
-//! ([`Opts::sync`]) when a run builds what its solvers read, and the LP
-//! solver of the MIP's LP relaxation ([`super::lp_handle::LpHandle`]) owns
-//! its options only here. What the solvers read is built from an `Opts`:
+//! HighsOptions record, named as the option, in the records' order. A
+//! handle's [`super::lp_handle::LpHandle`] `Opts` is its option store: for
+//! a `Highs` object (its engine's handle) the API's option calls write
+//! here through the C++ records' value pointers ([`Opts::records_on`]),
+//! and the C++ HighsOptions the API hands out by reference is the mirror
+//! ([`Opts::to_cpp`]). What the solvers read is built from an `Opts`:
 //! the simplex's [`LpsOptions`], the KKT check's, assessLp's, IPX's, the
 //! LP presolve's and the run's option views.
 

@@ -204,7 +204,9 @@ enum Op {
     PropagateCallbacks,
     /// passModel(the LP p0 (LpArrays)) -> status
     PassModelArrays,
-    /// passModel(the kept IIS LP) -> status
+    /// passModel(the kept IIS LP) -> status (iis.rs: H::pass_lp; the
+    /// number is kept for the C++ enum)
+    #[allow(dead_code)]
     PassIisModel,
     /// changeColsCost(i, j, p0) -> status
     ChangeColsCost,

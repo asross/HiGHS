@@ -21,13 +21,16 @@ HighsStatus PresolveComponent::init(const HighsLp& lp, HighsTimer& timer,
   return HighsStatus::kOk;
 }
 
+#ifndef HIGHS_RUST
 void PresolveComponent::negateReducedLpColDuals() {
   for (HighsInt col = 0; col < data_.reduced_lp_.num_col_; col++)
     data_.recovered_solution_.col_dual[col] =
         -data_.recovered_solution_.col_dual[col];
   return;
 }
+#endif
 
+#ifndef HIGHS_RUST
 HighsPresolveStatus PresolveComponent::run() {
   presolve::HPresolve presolve;
   if (!presolve.okSetInput(data_.reduced_lp_, *options_,
@@ -41,5 +44,6 @@ HighsPresolveStatus PresolveComponent::run() {
   presolve_status_ = presolve.getPresolveStatus();
   return presolve_status_;
 }
+#endif
 
 void PresolveComponent::clear() { data_.clear(); }

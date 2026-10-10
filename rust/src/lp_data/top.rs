@@ -62,6 +62,15 @@ const H_LOG_HEADER: i32 = 11;
 /// The matrix and Hessian images of the C++ copy (write_matrix_image,
 /// write_hessian_image)
 const H_MATRIX_IMAGES: i32 = 12;
+/// Highs::run() of the C++ object (its file steps and user scaling around
+/// a run on this engine), its copies taken in and out -> status; -1 if a
+/// cancelled task interrupted it
+const H_RUN: i32 = 13;
+/// A file step of Highs::run on the C++ object (its names and readers),
+/// its copies taken in and out -> status: arg 0 readSolution, 1
+/// readBasis, 2 writeModel, 3 writeIisModel, 4 writeSolution, 5
+/// writeBasis (of the options' files)
+const H_FILE: i32 = 14;
 
 // What changed for the C++ copies (the flags of highs_rs_lph_top_export)
 /// The LP data: the C++ copy takes them (lpFromRust)
@@ -164,6 +173,10 @@ pub(crate) struct Top {
     /// passModel / passHessian
     user_solution: Option<super::super::lp_run::Solution>,
     user_hessian: Option<Hessian>,
+    /// What the rays' feasibility and unboundedness problems change, kept
+    /// to be restored: the costs, the Hessian, the presolve,
+    /// solve_relaxation and allow_unbounded_or_infeasible options
+    ray_saved: Option<(Vec<f64>, Hessian, Vec<u8>, bool, bool)>,
 }
 
 impl Top {
@@ -185,6 +198,7 @@ impl Top {
             presolved_which: 0,
             user_solution: None,
             user_hessian: None,
+            ray_saved: None,
         }
     }
 }
@@ -699,6 +713,74 @@ impl LpHandle {
             t.changed |= X_HESSIAN;
             return Some(0);
         }
+        // getDualRay / getPrimalRay
+        if is!(RayRecord) {
+            let primal = arg != 0;
+            let sh = &self.lps.sh;
+            let r = super::super::drivers::RayRecord {
+                index: if primal { sh.primal_ray_index } else { sh.dual_ray_index },
+                sign: if primal { sh.primal_ray_sign } else { sh.dual_ray_sign },
+                value_size: if primal { self.lps.primal_ray_value.len() } else { self.lps.dual_ray_value.len() } as i64,
+                has_invert: sh.status.has_invert,
+            };
+            // SAFETY: the run's RayRecord
+            unsafe { (p as *mut super::super::drivers::RayRecord).write(r) };
+            return Some(0);
+        }
+        if is!(FeasibilityProblem) {
+            self.feasibility_problem(arg);
+            return Some(0);
+        }
+        if is!(UnboundednessProblem) {
+            let o = &mut self.opts;
+            if arg == 0 {
+                let saved = (Vec::new(), Hessian::default(), o.presolve.clone(), o.solve_relaxation, o.allow_unbounded_or_infeasible);
+                o.set("presolve", OptValue::Str(b"off"));
+                o.solve_relaxation = true;
+                o.allow_unbounded_or_infeasible = false;
+                self.top().ray_saved = Some(saved);
+            } else {
+                let (_, _, presolve, relaxation, allow) = self.top().ray_saved.take().expect("the saved options");
+                let o = &mut self.opts;
+                o.set("presolve", OptValue::Str(&presolve));
+                o.solve_relaxation = relaxation;
+                o.allow_unbounded_or_infeasible = allow;
+            }
+            return Some(0);
+        }
+        if is!(HighsRun) {
+            let s = self.host_top(H_RUN, 0, std::ptr::null_mut());
+            if s == -1 {
+                self.task_interrupted = true;
+                return Some(i64::MIN);
+            }
+            return Some(s);
+        }
+        if is!(CopyRay) {
+            let primal = arg != 0;
+            let (v, n) = if primal {
+                (&self.lps.primal_ray_value, self.model.num_col as usize)
+            } else {
+                (&self.lps.dual_ray_value, self.model.num_row as usize)
+            };
+            // SAFETY: the run's array of n values
+            unsafe { std::slice::from_raw_parts_mut(p as *mut f64, n) }.copy_from_slice(&v[..n]);
+            return Some(0);
+        }
+        if is!(ComputeDualRay) {
+            let nr = self.model.num_row as usize;
+            let mut rhs = vec![0.0; nr];
+            rhs[self.lps.sh.dual_ray_index as usize] = self.lps.sh.dual_ray_sign as f64;
+            // SAFETY: the run's array of num_row values
+            let out = unsafe { std::slice::from_raw_parts_mut(p as *mut f64, nr) };
+            self.basis_solve(&rhs, out, true);
+            self.lps.dual_ray_value = out.to_vec();
+            return Some(0);
+        }
+        if is!(ComputePrimalRay) {
+            self.compute_primal_ray(p as *mut f64);
+            return Some(0);
+        }
         if is!(TakeHessian) {
             let t = self.top();
             t.hessian = t.user_hessian.take().expect("passHessian's Hessian");
@@ -706,6 +788,284 @@ impl LpHandle {
             return Some(0);
         }
         None
+    }
+
+    /// basisSolveInterface (without indices) of the model's basis: B^-1
+    /// rhs, or B^-T rhs if `transpose`
+    fn basis_solve(&mut self, rhs: &[f64], out: &mut [f64], transpose: bool) {
+        let nr = self.model.num_row as usize;
+        if nr == 0 {
+            return;
+        }
+        debug_assert!(self.lps.sh.status.has_invert);
+        self.set_nla_model();
+        let mut v = crate::hvector::OwnedHVec::new(nr as i32);
+        v.clear();
+        let mut count = 0usize;
+        for (i, &x) in rhs.iter().enumerate().take(nr) {
+            if x != 0.0 {
+                v.index[count] = i as i32;
+                v.array[i] = x;
+                count += 1;
+            }
+        }
+        v.count = count as i32;
+        let mut c = crate::ffi::CHVec::of(&mut v);
+        let env = self.env();
+        let env = self.lps.env_of(&env);
+        self.lps.nla_solve(&env, &mut c, 1.0, transpose);
+        c.store_into(&mut v);
+        super::super::query::extract_solve(v.count, &v.index, &v.array, &mut out[..nr], &mut []);
+    }
+
+    /// The primal ray from the unbounded column's FTRAN (ComputePrimalRay)
+    fn compute_primal_ray(&mut self, value: *mut f64) {
+        let (nr, nc) = (self.model.num_row as usize, self.model.num_col as usize);
+        let col = self.lps.sh.primal_ray_index as usize;
+        let sign = self.lps.sh.primal_ray_sign;
+        if !self.model.is_colwise() {
+            self.model.a.ensure_colwise();
+            self.top().changed |= X_MODEL;
+        }
+        let mut rhs = vec![0.0; nr];
+        let mut column = vec![0.0; nr];
+        if col < nc {
+            let a = &self.model.a;
+            for el in a.start[col] as usize..a.start[col + 1] as usize {
+                rhs[a.index[el] as usize] = sign as f64 * a.value[el];
+            }
+        } else {
+            rhs[col - nc] = sign as f64;
+        }
+        self.basis_solve(&rhs, &mut column, false);
+        // SAFETY: the run's array of num_col values
+        let ray = unsafe { std::slice::from_raw_parts_mut(value, nc) };
+        ray.fill(0.0);
+        let basic = self.basic_index();
+        for r in 0..nr {
+            let c = basic[r] as usize;
+            if c < nc {
+                ray[c] = column[r];
+            }
+        }
+        if col < nc {
+            ray[col] = -sign as f64;
+        }
+        self.lps.primal_ray_value = ray.to_vec();
+    }
+
+    /// The feasibility problem of getDualRay: set up (arg 0, 1 for a QP:
+    /// zero costs, keeping the primal ray record, a zero Hessian, no
+    /// presolve, the relaxation) or undone (2, 3)
+    fn feasibility_problem(&mut self, arg: i64) {
+        let is_qp = arg & 1 != 0;
+        if arg < 2 {
+            let hessian = if is_qp { self.top().hessian.clone() } else { Hessian::default() };
+            let o = &self.opts;
+            let saved = (self.model.col_cost.clone(), hessian, o.presolve.clone(), o.solve_relaxation, o.allow_unbounded_or_infeasible);
+            self.top().ray_saved = Some(saved);
+            let n = self.model.num_col;
+            let zero = vec![0.0; n as usize];
+            let (index, sign, value) =
+                (self.lps.sh.primal_ray_index, self.lps.sh.primal_ray_sign, self.lps.primal_ray_value.clone());
+            let s = self.change_col_costs_interval(0, n - 1, &zero);
+            debug_assert!(s == Status::Ok);
+            self.top().changed |= X_MODEL;
+            self.lps.sh.primal_ray_index = index;
+            self.lps.sh.primal_ray_sign = sign;
+            self.lps.primal_ray_value = value;
+            if is_qp {
+                let mut zero_hessian = Hessian::default();
+                zero_hessian.clear();
+                self.top().user_hessian = Some(zero_hessian);
+                self.with_run(|r| r.pass_hessian());
+            }
+            self.opts.set("presolve", OptValue::Str(b"off"));
+            self.opts.solve_relaxation = true;
+        } else {
+            let (cost, hessian, presolve, relaxation, _) = self.top().ray_saved.take().expect("the saved costs");
+            self.model.g.col_cost = cost;
+            let t = self.top();
+            t.changed |= X_MODEL;
+            if is_qp {
+                t.hessian = hessian;
+                t.changed |= X_HESSIAN;
+            }
+            self.opts.set("presolve", OptValue::Str(&presolve));
+            self.opts.solve_relaxation = relaxation;
+        }
+    }
+
+    /// Highs::run: the options' file steps (through the C++ object), the
+    /// user scaling and optimizeModel
+    pub(crate) fn top_run(&mut self) -> Status {
+        let mut status = Status::Ok;
+        if !self.opts.read_solution_file.is_empty() {
+            status = status_of(self.host_top(H_FILE, 0, std::ptr::null_mut()));
+        }
+        if !self.opts.read_basis_file.is_empty() {
+            status = status_of(self.host_top(H_FILE, 1, std::ptr::null_mut()));
+        }
+        if !self.opts.write_model_file.is_empty() {
+            status = status_of(self.host_top(H_FILE, 2, std::ptr::null_mut()));
+        }
+        if status != Status::Ok {
+            return status;
+        }
+        self.report_model_stats();
+        let o = &self.opts;
+        let mut d = super::super::user_scale::UserScaleData {
+            user_objective_scale: o.user_objective_scale,
+            user_bound_scale: o.user_bound_scale,
+            infinite_cost: o.infinite_cost,
+            infinite_bound: o.infinite_bound,
+            small_matrix_value: o.small_matrix_value,
+            large_matrix_value: o.large_matrix_value,
+            num_infinite_costs: 0,
+            num_infinite_hessian_values: 0,
+            num_infinite_col_bounds: 0,
+            num_infinite_row_bounds: 0,
+            num_small_matrix_values: 0,
+            num_large_matrix_values: 0,
+            suggested_user_objective_scale: 0,
+            suggested_user_bound_scale: 0,
+            applied: false,
+        };
+        // userScale
+        if o.user_objective_scale != 0 || o.user_bound_scale != 0 {
+            if self.user_scale_model(&mut d) == Status::Error {
+                return Status::Error;
+            }
+            self.user_scale_solution(&d, false);
+            d.applied = true;
+        }
+        if self.opts.output_flag {
+            // assessExcessiveObjectiveBoundScaling (only reported)
+            let log = self.log();
+            let h = &self.top.as_ref().expect("top").hessian;
+            let nnz = if h.dim > 0 { h.num_nz() as usize } else { 0 };
+            let hv = h.value[..nnz.min(h.value.len())].to_vec();
+            let mut u = super::super::solve::UserScale {
+                user_objective_scale: d.user_objective_scale,
+                user_bound_scale: d.user_bound_scale,
+                suggested_user_objective_scale: d.suggested_user_objective_scale,
+                suggested_user_bound_scale: d.suggested_user_bound_scale,
+            };
+            let v = self.model.view();
+            super::super::solve::assess_excessive_objective_bound_scaling(&log, &v, &hv, &mut u);
+        }
+        status = self.optimize_model_steps(false);
+        if status == Status::Error {
+            return status;
+        }
+        self.run_data.valid = true;
+        // userUnscale
+        if d.applied {
+            d.user_objective_scale = -d.user_objective_scale;
+            d.user_bound_scale = -d.user_bound_scale;
+            let unscale_status = self.user_scale_model(&mut d);
+            let log = self.log();
+            if unscale_status == Status::Error {
+                log.user(LogType::Error, "Unexpected error removing user scaling from the incumbent model\n");
+            }
+            let unscale_status = self.user_scale_solution(&d, true);
+            crate::log_user!(
+                log,
+                LogType::Info,
+                "After solving the user-scaled model, the unscaled solution has objective value %.12g\n",
+                self.lps.run.info.objective_function_value
+            );
+            if self.lps.run.model_status == super::super::run::MS_OPTIMAL && unscale_status != Status::Ok {
+                log.user(
+                    LogType::Warning,
+                    "User scaled problem solved to optimality, but unscaled solution does not satisfy feasibility and optimality tolerances\n",
+                );
+                // userUnscale returns a warning, which run drops (it
+                // returns only an error of it)
+            }
+        }
+        if !self.opts.write_iis_model_file.is_empty() {
+            status = status_of(self.host_top(H_FILE, 3, std::ptr::null_mut()));
+        }
+        if !self.opts.solution_file.is_empty() {
+            status = status_of(self.host_top(H_FILE, 4, std::ptr::null_mut()));
+        }
+        if !self.opts.write_basis_file.is_empty() {
+            status = status_of(self.host_top(H_FILE, 5, std::ptr::null_mut()));
+        }
+        status
+    }
+
+    /// userScaleModel: the scaling assessed, then applied to the model and
+    /// Hessian
+    fn user_scale_model(&mut self, d: &mut super::super::user_scale::UserScaleData) -> Status {
+        use super::super::user_scale::{user_scale_lp, user_scale_status};
+        let mut status = Status::Ok;
+        for apply in [false, true] {
+            let v = self.model.view();
+            user_scale_lp(&v, d, apply);
+            let h = &mut self.top.as_mut().expect("top").hessian;
+            hessian::user_scale_hessian(h.dim, &h.start, &mut h.value, d, apply);
+            if !apply {
+                let log = self.log();
+                status = user_scale_status(&log, d);
+                if status == Status::Error {
+                    return Status::Error;
+                }
+            }
+        }
+        self.top().changed |= X_MODEL | X_HESSIAN;
+        status
+    }
+
+    /// userScaleSolution (with the KKT failures if `update_kkt`)
+    fn user_scale_solution(&mut self, d: &super::super::user_scale::UserScaleData, update_kkt: bool) -> Status {
+        if d.user_objective_scale == 0 && d.user_bound_scale == 0 {
+            return Status::Ok;
+        }
+        let (nc, nr) = (self.model.num_col as usize, self.model.num_row as usize);
+        let r = &mut self.lps.run;
+        let primal = r.info.primal_solution_status != SOLUTION_STATUS_NONE;
+        let dual = r.info.dual_solution_status != SOLUTION_STATUS_NONE;
+        let s = &mut r.solution;
+        let part = |v: &mut Vec<f64>, used: bool, n: usize| -> *mut [f64] {
+            if used {
+                &mut v[..n] as *mut [f64]
+            } else {
+                &mut [] as *mut [f64]
+            }
+        };
+        let (cv, rv, cd, rd) =
+            (part(&mut s.col_value, primal, nc), part(&mut s.row_value, primal, nr), part(&mut s.col_dual, dual, nc), part(&mut s.row_dual, dual, nr));
+        // SAFETY: four distinct vectors of the solution
+        let objective = unsafe {
+            super::super::user_scale::user_scale_solution(
+                d,
+                &self.model.integrality,
+                primal,
+                dual,
+                &mut *cv,
+                &mut *rv,
+                &mut *cd,
+                &mut *rd,
+                r.info.objective_function_value,
+                self.model.offset,
+            )
+        };
+        if !update_kkt {
+            return Status::Ok;
+        }
+        self.lps.run.info.objective_function_value = objective;
+        self.kkt_failures();
+        let o = self.opts.kkt(self.log());
+        let v = self.model.view();
+        // SAFETY: the model's view lives for the call
+        let lp = unsafe { LpRef::new(&v) };
+        if super::super::solution::report_kkt_failures(&lp, &o, &self.lps.run.info, "After removing user scaling") {
+            Status::Warning
+        } else {
+            Status::Ok
+        }
     }
 
     /// Runs `f` on a run of this handle in the LP mode of lp_run.rs (the
@@ -1644,5 +2004,105 @@ pub unsafe extern "C" fn highs_rs_lph_top_pass_model(
     let s = h.with_run(|r| if which == 0 { r.pass_model() } else { r.pass_hessian() });
     h.user_model = None;
     h.top().user_hessian = None;
+    s as i32
+}
+
+/// Highs::setSolution(solution) on the engine: the primal values (and the
+/// row values from them) and the row duals (and the column duals) of the
+/// sizes of the model
+///
+/// # Safety
+/// `p` a Highs object's engine, its data imported; the views valid
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_lph_top_set_solution(p: *mut LpHandle, s: *const super::super::solution::CSolution) -> i32 {
+    let h = &mut *p;
+    let s = &*s;
+    let log = h.log();
+    let (nc, nr) = (h.model.num_col, h.model.num_row);
+    let parts = super::super::query::new_solution_parts(&log, nc, nr, s.col_value.len, s.row_dual.len);
+    let mut return_status = Status::Ok;
+    if parts != 0 {
+        h.invalidate_solver_data();
+    } else {
+        return_status = Status::Error;
+    }
+    if parts & 1 != 0 {
+        h.lps.run.solution.col_value = s.col_value.get().to_vec();
+        if nr > 0 {
+            h.lps.run.solution.row_value.resize(nr as usize, 0.0);
+            if !h.model.is_colwise() {
+                h.model.a.ensure_colwise();
+                h.top().changed |= X_MODEL;
+            }
+            // calculateRowValuesQuad: the solution of the model's size
+            if h.lps.run.solution.col_value.len() != nc as usize {
+                return Status::Error as i32;
+            }
+            let a = &h.model.a;
+            let sol = &mut h.lps.run.solution;
+            super::super::edit::calculate_row_values_quad(&a.start, &a.index, &a.value, &sol.col_value, &mut sol.row_value);
+        }
+        h.lps.run.solution.value_valid = true;
+    }
+    if parts & 2 != 0 {
+        h.lps.run.solution.row_dual = s.row_dual.get().to_vec();
+        if nc > 0 {
+            h.lps.run.solution.col_dual.resize(nc as usize, 0.0);
+            if !h.model.is_colwise() {
+                h.model.a.ensure_colwise();
+                h.top().changed |= X_MODEL;
+            }
+            // calculateColDualsQuad: the duals of the model's size
+            if h.lps.run.solution.row_dual.len() != nr as usize {
+                return Status::Error as i32;
+            }
+            let m = &h.model;
+            let sol = &mut h.lps.run.solution;
+            super::super::edit::calculate_col_duals_quad(
+                &m.a.start,
+                &m.a.index,
+                &m.a.value,
+                &m.col_cost,
+                &sol.row_dual,
+                &mut sol.col_dual,
+            );
+        }
+        h.lps.run.solution.dual_valid = true;
+    }
+    h.with_run(|r| r.return_from_highs(return_status)) as i32
+}
+
+/// Highs::getDualRayInterface / getPrimalRayInterface on the engine
+///
+/// # Safety
+/// `p` a Highs object's engine, its data imported; `value` null or `len`
+/// writable values
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_lph_top_get_ray(
+    p: *mut LpHandle,
+    primal: bool,
+    has_ray: *mut bool,
+    value: *mut f64,
+    len: usize,
+    interrupted: *mut bool,
+) -> i32 {
+    let h = &mut *p;
+    h.task_interrupted = false;
+    let v = if value.is_null() { None } else { Some(std::slice::from_raw_parts_mut(value, len)) };
+    let s = h.with_run(|r| if primal { r.get_primal_ray(&mut *has_ray, v) } else { r.get_dual_ray(&mut *has_ray, v) });
+    *interrupted = h.task_interrupted;
+    s as i32
+}
+
+/// Highs::run on the engine
+///
+/// # Safety
+/// `p` a Highs object's engine, its data imported
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_lph_top_run(p: *mut LpHandle, interrupted: *mut bool) -> i32 {
+    let h = &mut *p;
+    h.task_interrupted = false;
+    let s = h.top_run();
+    *interrupted = h.task_interrupted;
     s as i32
 }
