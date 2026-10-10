@@ -10,6 +10,28 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-10, crest built by cargo alone (all Rust)
+
+`perf.py build/bin/highs rust/target/release/crest --reps 3` (the
+pure C++ app against `cargo build --release --bin crest`: no C++ in it,
+its Highs object Rust, gzip through flate2/miniz_oxide; machine shared,
+other users' load). Every case same path:
+
+| Group | Geomean crest / C++ |
+|---|---|
+| MIP | 0.846 |
+| LP dual simplex | 0.725 |
+| LP primal simplex | 0.918 |
+| IPM (IPX) | 0.924 |
+| PDLP | 0.940 |
+| Read model (time_limit 0) | 0.383 |
+| **All** | **0.761** |
+
+Within the noise of stage 4b's HIGHS_RUST numbers (0.793), slightly
+ahead: one LTO unit with no C++ calls and no mirror syncs. Reading
+co-100.mps.gz and cygnet.mps.gz takes 0.33 and 0.36 of the C++'s cycles
+(miniz_oxide's inflate against zlib through zstr is no slower).
+
 ## 2026-10-09, stage 4b: the engine the store of the Highs object
 
 `perf.py <an earlier rust-port HIGHS_RUST highs> <this build's highs>
