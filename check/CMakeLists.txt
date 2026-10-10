@@ -101,6 +101,9 @@ if ((NOT FAST_BUILD OR ALL_TESTS) AND NOT (BUILD_EXTRA_UNIT_ONLY))
       # The task scheduler is Rust's and its C++ templates are not built
       # (rust/src/parallel's tests: Fibonacci, task groups, nested cancel)
       list(REMOVE_ITEM TEST_SOURCES TestHighsParallel.cpp)
+      # The MIP's C++ is not built: HighsGFkSolve is rust/src/mip/cuts/gfk.rs
+      # (tested in rust/src/mip/cuts/tests.rs)
+      list(REMOVE_ITEM TEST_SOURCES TestHighsGFkSolve.cpp)
   endif()
 
   set(OPT_LEVEL_CHANGED OFF)
