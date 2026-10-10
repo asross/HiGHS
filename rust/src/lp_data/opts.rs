@@ -1,10 +1,10 @@
 //! The option values as a typed Rust copy ([`Opts`]): one field per
-//! HighsOptions record, named as the option, in the records' order. The
-//! C++ HighsOptions stays the public store (the API, highspy and the C API
-//! hand out references to it): a `Highs` object's values are copied in
-//! ([`Opts::sync`]) when a run builds what its solvers read, and the LP
-//! solver of the MIP's LP relaxation ([`super::lp_handle::LpHandle`]) owns
-//! its options only here. What the solvers read is built from an `Opts`:
+//! HighsOptions record, named as the option, in the records' order. A
+//! handle's [`super::lp_handle::LpHandle`] `Opts` is its option store: for
+//! a `Highs` object (its engine's handle) the API's option calls write
+//! here through the C++ records' value pointers ([`Opts::records_on`]),
+//! and the C++ HighsOptions the API hands out by reference is the mirror
+//! ([`Opts::to_cpp`]). What the solvers read is built from an `Opts`:
 //! the simplex's [`LpsOptions`], the KKT check's, assessLp's, IPX's, the
 //! LP presolve's and the run's option views.
 
@@ -111,6 +111,25 @@ macro_rules! opt_assign {
     ($kind:ident, $f:expr, $o:expr) => { $f = $o };
 }
 
+/// The field's address (a string's Vec<u8>) and its string value
+macro_rules! opt_ptr {
+    (string, $f:expr) => { (&mut $f as *mut Vec<u8> as *mut std::ffi::c_void, Some(RsStr::of(&$f))) };
+    ($kind:ident, $f:expr) => { (&mut $f as *mut _ as *mut std::ffi::c_void, None) };
+}
+
+/// The field into the C++ record's value (a string through `set_string`
+/// if it differs)
+macro_rules! opt_put {
+    (bool, $f:expr, $r:expr, $ss:expr) => { *($r.value as *mut bool) = $f };
+    (int, $f:expr, $r:expr, $ss:expr) => { *($r.value as *mut i32) = $f };
+    (double, $f:expr, $r:expr, $ss:expr) => { *($r.value as *mut f64) = $f };
+    (string, $f:expr, $r:expr, $ss:expr) => {
+        if $f.as_slice() != $r.str_value.get() {
+            ($ss)($r.value, $f.as_ptr(), $f.len());
+        }
+    };
+}
+
 macro_rules! opt_get {
     (bool, $f:expr) => { OptValue::Bool($f) };
     (int, $f:expr) => { OptValue::Int($f) };
@@ -174,6 +193,35 @@ macro_rules! options {
                 false
             }
 
+            /// Field `i`'s address and, for a string, its value
+            fn field_ptr(&mut self, i: usize) -> (*mut std::ffi::c_void, Option<RsStr>) {
+                let mut k = 0usize;
+                $(
+                    if k == i {
+                        return opt_ptr!($kind, self.$name);
+                    }
+                    k += 1;
+                )*
+                let _ = k;
+                (std::ptr::null_mut(), None)
+            }
+
+            /// Field `i` into the C++ record `r`
+            ///
+            /// # Safety
+            /// The record's value pointer and strings are valid
+            unsafe fn put(&self, i: usize, r: &COptionRecord, set_string: super::options::SetStringFn) {
+                let mut k = 0usize;
+                $(
+                    if k == i {
+                        opt_put!($kind, self.$name, r, set_string);
+                        return;
+                    }
+                    k += 1;
+                )*
+                let _ = k;
+            }
+
             /// Every value from `o` (passOptions; restoring saved options)
             pub fn assign(&mut self, o: &Opts) {
                 $(opt_assign!($kind, self.$name, o.$name);)*
@@ -228,6 +276,49 @@ impl Opts {
                 self.take(i, r);
             } else if let Some(j) = Self::index(name) {
                 self.take(j, r);
+            }
+        }
+    }
+
+    /// The C++ records `cpp` (HighsOptions::records' views) with their
+    /// values these fields: the table on which the options API works on
+    /// this store (strings through [`set_string`])
+    ///
+    /// # Safety
+    /// The records' strings are valid; the table is valid while these
+    /// options are not moved
+    pub unsafe fn records_on(&mut self, cpp: &[COptionRecord]) -> Vec<COptionRecord> {
+        cpp.iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let name = r.name.get();
+                let j = if NAMES.get(i).is_some_and(|n| n.as_bytes() == name) {
+                    i
+                } else {
+                    Self::index(name).expect("an option of the C++ records")
+                };
+                let (value, s) = self.field_ptr(j);
+                let mut v = std::ptr::read(r);
+                v.value = value;
+                if let Some(s) = s {
+                    v.str_value = s;
+                }
+                v
+            })
+            .collect()
+    }
+
+    /// The fields into the C++ records `cpp` (the mirror of this store)
+    ///
+    /// # Safety
+    /// As sync; `set_string` sets a record's std::string
+    pub unsafe fn to_cpp(&self, cpp: &[COptionRecord], set_string: super::options::SetStringFn) {
+        for (i, r) in cpp.iter().enumerate() {
+            let name = r.name.get();
+            if NAMES.get(i).is_some_and(|n| n.as_bytes() == name) {
+                self.put(i, r, set_string);
+            } else if let Some(j) = Self::index(name) {
+                self.put(j, r, set_string);
             }
         }
     }
@@ -644,6 +735,18 @@ pub unsafe extern "C" fn highs_rs_opts_default_diff(recs: *const COptionRecord, 
         eprintln!("option default differs: {}", name);
     }
     d.len() as i32
+}
+
+/// The string setter of a table made by [`Opts::records_on`]
+///
+/// # Safety
+/// `field` a Vec<u8> of an Opts, the bytes valid
+pub unsafe extern "C" fn set_string(field: *mut std::ffi::c_void, p: *const u8, n: usize) {
+    let v = &mut *(field as *mut Vec<u8>);
+    v.clear();
+    if n > 0 {
+        v.extend_from_slice(std::slice::from_raw_parts(p, n));
+    }
 }
 
 #[cfg(test)]

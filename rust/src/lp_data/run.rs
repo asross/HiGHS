@@ -1799,52 +1799,10 @@ pub fn infeasible_bounds_ok(
 // The C++ entry points (highs/lp_data/HighsRunRust.cpp)
 
 /// # Safety
-/// `c` must be a valid CHighs
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_called_optimize_model(c: *const CHighs) -> i32 {
-    Run::new(&*c).called_optimize_model() as i32
-}
-
-/// # Safety
-/// As highs_rs_called_optimize_model
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_return_from_optimize_model(c: *const CHighs, status: i32, undo_mods: bool) -> i32 {
-    Run::new(&*c).return_from_optimize_model(status_from_i64(status as i64), undo_mods) as i32
-}
-
-/// # Safety
 /// As highs_rs_called_optimize_model
 #[no_mangle]
 pub unsafe extern "C" fn highs_rs_return_from_highs(c: *const CHighs, status: i32) -> i32 {
     Run::new(&*c).return_from_highs(status_from_i64(status as i64)) as i32
-}
-
-/// # Safety
-/// As highs_rs_called_optimize_model
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_run_presolve(c: *const CHighs, force_lp_presolve: bool, force_presolve: bool) -> i32 {
-    Run::new(&*c).run_presolve(force_lp_presolve, force_presolve)
-}
-
-/// # Safety
-/// As highs_rs_called_optimize_model
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_run_postsolve(c: *const CHighs) -> i32 {
-    Run::new(&*c).run_postsolve()
-}
-
-/// # Safety
-/// `log` valid, `from` and `presolved` three values each
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_report_presolve_reductions(
-    log: *const Log,
-    on: bool,
-    presolve_status: i32,
-    from: *const i32,
-    presolved: *const i32,
-) {
-    let a = |p: *const i32| [*p, *p.add(1), *p.add(2)];
-    report_presolve_reductions(&*log, on, presolve_status, a(from), a(presolved));
 }
 
 #[cfg(test)]

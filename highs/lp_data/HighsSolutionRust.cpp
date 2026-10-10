@@ -59,7 +59,6 @@ void highs_rs_get_complementarity_violations(const RsLp* lp,
 double highs_rs_compute_dual_objective_value(RsMut<double> gradient,
                                              const RsLp* lp,
                                              const RsSolution* sol);
-double highs_rs_compute_objective_value(const RsLp* lp, const RsSolution* sol);
 double highs_rs_lp_objective_value(const RsLp* lp, RsMut<double> x);
 void highs_rs_lp_kkt_check(int* model_status, HighsInfoStruct* info,
                            const RsLp* lp, const RsSolution* sol,
@@ -128,12 +127,6 @@ bool computeDualObjectiveValue(const double* gradient, const HighsLp& lp,
   return true;
 }
 
-double computeObjectiveValue(const HighsLp& lp, const HighsSolution& solution) {
-  const RsLp v = rsLp(lp);
-  const RsSolution s = rsSolution(solution);
-  return highs_rs_compute_objective_value(&v, &s);
-}
-
 double HighsLp::objectiveValue(const std::vector<double>& solution) const {
   assert((int)solution.size() >= this->num_col_);
   const RsLp v = rsLp(*this);
@@ -165,8 +158,6 @@ bool reportKktFailures(const HighsLp& lp, const HighsOptions& options,
 // The basis functions (rust/src/lp_data/basis.rs)
 
 extern "C" {
-void highs_rs_refine_basis(RsMut<double> lower, RsMut<double> upper,
-                           RsMut<double> value, RsMut<uint8_t> status);
 bool highs_rs_basis_consistent(RsMut<uint8_t> col_status,
                                RsMut<uint8_t> row_status);
 }
@@ -177,21 +168,6 @@ static RsMut<uint8_t> rsStatus(const std::vector<HighsBasisStatus>& s) {
 }
 
 static const RsMut<double> kRsNoValues = {nullptr, 0};
-
-void refineBasis(const HighsLp& lp, const HighsSolution& solution,
-                 HighsBasis& basis) {
-  assert(basis.useful);
-  assert(isBasisRightSize(lp, basis));
-  const bool have_highs_solution = solution.value_valid;
-  highs_rs_refine_basis(
-      rsMut(lp.col_lower_), rsMut(lp.col_upper_),
-      have_highs_solution ? rsMut(solution.col_value) : kRsNoValues,
-      rsStatus(basis.col_status));
-  highs_rs_refine_basis(
-      rsMut(lp.row_lower_), rsMut(lp.row_upper_),
-      have_highs_solution ? rsMut(solution.row_value) : kRsNoValues,
-      rsStatus(basis.row_status));
-}
 
 bool isBasisConsistent(const HighsLp& lp, const HighsBasis& basis) {
   if (!isBasisRightSize(lp, basis)) return false;

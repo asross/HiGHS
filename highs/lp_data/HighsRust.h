@@ -212,7 +212,6 @@ void rsOptionsTemplate(const HighsOptions& options, int which, void* out);
 // The options whose values differ from the Rust defaults (0 if none)
 HighsInt rsOptionsDefaultsDiffer(const HighsOptions& options);
 // The PDLP template of the LP run on Rust data (lp_run.rs)
-void rsPdlpTemplate(const HighsOptions& options, void* out);
 
 RsMatVec rsMatVec(HighsSparseMatrix& a);
 void rsMatVecBack(const RsMatVec& v, HighsSparseMatrix& a);

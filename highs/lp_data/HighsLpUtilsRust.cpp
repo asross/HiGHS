@@ -181,12 +181,6 @@ bool lpDimensionsOk(const std::string& message, const HighsLp& lp,
   return highs_rs_lp_dimensions_ok(&log, message.data(), message.size(), &v);
 }
 
-HighsStatus cleanBounds(const HighsOptions& options, HighsLp& lp) {
-  RsLp v = rsLp(lp);
-  const RsLpOptions o = rsLpOptions(options);
-  return HighsStatus(highs_rs_clean_bounds(&v, &o));
-}
-
 
 void HighsLp::applyScale() {
   RsLp v = rsLp(*this);
@@ -215,27 +209,6 @@ HighsStatus assessMatrix(
       large_matrix_value, sum_duplicates));
 }
 
-extern "C" void highs_rs_report_presolve_reductions(const RsLog* log, bool on,
-                                                    int presolve_status,
-                                                    const HighsInt* from,
-                                                    const HighsInt* presolved);
-
-void reportPresolveReductions(const HighsLogOptions& log_options,
-                              HighsPresolveStatus presolve_status,
-                              const HighsLp& lp, const HighsLp& presolved_lp) {
-  const RsLog log = rsLog(log_options);
-  const HighsInt from[3] = {lp.num_col_, lp.num_row_, lp.a_matrix_.numNz()};
-  HighsInt to[3] = {0, 0, 0};
-  if (presolve_status == HighsPresolveStatus::kReduced ||
-      presolve_status == HighsPresolveStatus::kTimeout) {
-    to[0] = presolved_lp.num_col_;
-    to[1] = presolved_lp.num_row_;
-    to[2] = presolved_lp.a_matrix_.numNz();
-  }
-  highs_rs_report_presolve_reductions(&log, *log_options.output_flag,
-                                      int(presolve_status), from, to);
-}
-
 // Model modification internals (rust/src/lp_data/edit.rs)
 extern "C" {
 double highs_rs_get_coefficient(RsMut<HighsInt> start, RsMut<HighsInt> index,
@@ -246,31 +219,6 @@ void highs_rs_calculate_row_values_quad(RsMut<HighsInt> start,
                                         RsMut<double> value,
                                         RsMut<double> col_value,
                                         RsMut<double> row_value);
-void highs_rs_calculate_col_duals_quad(RsMut<HighsInt> start,
-                                       RsMut<HighsInt> index,
-                                       RsMut<double> value, RsMut<double> cost,
-                                       RsMut<double> row_dual,
-                                       RsMut<double> col_dual);
-}
-
-
-
-
-
-
-
-HighsStatus calculateColDualsQuad(const HighsLp& lp, HighsSolution& solution) {
-  const bool correct_size = int(solution.row_dual.size()) == lp.num_row_;
-  const bool is_colwise = lp.a_matrix_.isColwise();
-  const bool data_error = !correct_size || !is_colwise;
-  assert(!data_error);
-  if (data_error) return HighsStatus::kError;
-  solution.col_dual.resize(lp.num_col_);
-  const HighsSparseMatrix& a = lp.a_matrix_;
-  highs_rs_calculate_col_duals_quad(
-      rsMut(a.start_), rsMut(a.index_), rsMut(a.value_), rsMut(lp.col_cost_),
-      rsMut(solution.row_dual), rsMut(solution.col_dual));
-  return HighsStatus::kOk;
 }
 
 void highsRsCalculateRowValuesQuad(const HighsLp& lp,
@@ -288,23 +236,9 @@ static_assert(offsetof(HighsUserScaleData, applied) == 72,
               "HighsUserScaleData layout");
 
 extern "C" {
-void highs_rs_user_scale_lp(const RsLp* lp, HighsUserScaleData* d,
-                            bool apply);
-int highs_rs_user_scale_status(const RsLog* log, const HighsUserScaleData* d);
 bool highs_rs_user_scale_message(const HighsUserScaleData* d, int which,
                                  void* ctx,
                                  void (*set)(void*, const char*, size_t));
-}
-
-void userScaleLp(HighsLp& lp, HighsUserScaleData& data, const bool apply) {
-  const RsLp v = rsLp(lp);
-  highs_rs_user_scale_lp(&v, &data, apply);
-}
-
-HighsStatus userScaleStatus(const HighsLogOptions& log_options,
-                            const HighsUserScaleData& data) {
-  const RsLog log = rsLog(log_options);
-  return HighsStatus(highs_rs_user_scale_status(&log, &data));
 }
 
 static void setUserScaleMessage(void* ctx, const char* p, size_t n) {
@@ -317,143 +251,6 @@ bool HighsUserScaleData::scaleError(std::string& message) const {
 
 bool HighsUserScaleData::scaleWarning(std::string& message) const {
   return highs_rs_user_scale_message(this, 1, &message, setUserScaleMessage);
-}
-
-// Semi-variables and the unapplying of model modifications
-// (rust/src/lp_data/semi.rs)
-struct RsSemiMods {
-  RsMut<HighsInt> inconsistent_index;
-  RsMut<double> inconsistent_lower, inconsistent_upper;
-  RsMut<uint8_t> inconsistent_type;
-  RsMut<HighsInt> non_semi_index, tightened_index;
-  RsMut<double> tightened_value;
-  HighsInt num_inconsistent, num_non_semi, num_tightened;
-  bool made_mods;
-};
-struct RsLpMods {
-  RsMut<HighsInt> non_semi_index, inconsistent_index;
-  RsMut<double> inconsistent_lower, inconsistent_upper;
-  RsMut<uint8_t> inconsistent_type;
-  RsMut<HighsInt> relaxed_index;
-  RsMut<double> relaxed_value;
-  RsMut<HighsInt> tightened_index;
-  RsMut<double> tightened_value;
-};
-
-extern "C" {
-int highs_rs_assess_semi_variables(const RsLog* log, RsMut<double> col_lower,
-                                   RsMut<double> col_upper,
-                                   RsMut<uint8_t> integrality, RsSemiMods* m);
-size_t highs_rs_relax_semi_variables(RsMut<double> col_lower,
-                                     RsMut<uint8_t> integrality,
-                                     RsMut<HighsInt> index,
-                                     RsMut<double> value);
-bool highs_rs_active_modified_upper_bounds(const RsLog* log,
-                                           RsMut<HighsInt> tightened_index,
-                                           RsMut<double> col_upper,
-                                           RsMut<double> col_value,
-                                           double pft);
-void highs_rs_unapply_mods(const RsLpMods* m, RsMut<double> col_lower,
-                           RsMut<double> col_upper,
-                           RsMut<uint8_t> integrality);
-}
-
-// Appends the first n entries of `from` to `to`, or clears `to` if n < 0
-template <typename T>
-static void appendMods(std::vector<T>& to, const std::vector<T>& from,
-                       const HighsInt n) {
-  if (n < 0) {
-    to.clear();
-  } else {
-    to.insert(to.end(), from.begin(), from.begin() + n);
-  }
-}
-
-HighsStatus assessSemiVariables(HighsLp& lp, const HighsOptions& options,
-                                bool& made_semi_variable_mods) {
-  made_semi_variable_mods = false;
-  if (!lp.integrality_.size()) return HighsStatus::kOk;
-  assert((HighsInt)lp.integrality_.size() == lp.num_col_);
-  assert(int(lp.mods_.save_inconsistent_semi_variable_index.size()) == 0);
-  const size_t n = lp.num_col_;
-  std::vector<HighsInt> inconsistent_index(n), non_semi_index(n),
-      tightened_index(n);
-  std::vector<double> inconsistent_lower(n), inconsistent_upper(n),
-      tightened_value(n);
-  std::vector<HighsVarType> inconsistent_type(n);
-  RsSemiMods m;
-  m.inconsistent_index = rsMut(inconsistent_index);
-  m.inconsistent_lower = rsMut(inconsistent_lower);
-  m.inconsistent_upper = rsMut(inconsistent_upper);
-  m.inconsistent_type = rsMut(inconsistent_type);
-  m.non_semi_index = rsMut(non_semi_index);
-  m.tightened_index = rsMut(tightened_index);
-  m.tightened_value = rsMut(tightened_value);
-  const RsLog log = rsLog(options.log_options);
-  const HighsStatus return_status = HighsStatus(highs_rs_assess_semi_variables(
-      &log, rsMut(lp.col_lower_), rsMut(lp.col_upper_), rsMut(lp.integrality_),
-      &m));
-  HighsLpMods& mods = lp.mods_;
-  appendMods(mods.save_non_semi_variable_index, non_semi_index, m.num_non_semi);
-  appendMods(mods.save_inconsistent_semi_variable_index, inconsistent_index,
-             m.num_inconsistent);
-  appendMods(mods.save_inconsistent_semi_variable_lower_bound_value,
-             inconsistent_lower, m.num_inconsistent);
-  appendMods(mods.save_inconsistent_semi_variable_upper_bound_value,
-             inconsistent_upper, m.num_inconsistent);
-  appendMods(mods.save_inconsistent_semi_variable_type, inconsistent_type,
-             m.num_inconsistent);
-  appendMods(mods.save_tightened_semi_variable_upper_bound_index,
-             tightened_index, m.num_tightened);
-  appendMods(mods.save_tightened_semi_variable_upper_bound_value,
-             tightened_value, m.num_tightened);
-  made_semi_variable_mods = m.made_mods;
-  return return_status;
-}
-
-void relaxSemiVariables(HighsLp& lp, bool& made_semi_variable_mods) {
-  made_semi_variable_mods = false;
-  if (!lp.integrality_.size()) return;
-  assert((HighsInt)lp.integrality_.size() == lp.num_col_);
-  std::vector<HighsInt>& index =
-      lp.mods_.save_relaxed_semi_variable_lower_bound_index;
-  std::vector<double>& value =
-      lp.mods_.save_relaxed_semi_variable_lower_bound_value;
-  assert(index.size() == 0);
-  std::vector<HighsInt> new_index(lp.num_col_);
-  std::vector<double> new_value(lp.num_col_);
-  const HighsInt num_relaxed = highs_rs_relax_semi_variables(
-      rsMut(lp.col_lower_), rsMut(lp.integrality_), rsMut(new_index),
-      rsMut(new_value));
-  appendMods(index, new_index, num_relaxed);
-  appendMods(value, new_value, num_relaxed);
-  made_semi_variable_mods = index.size() > 0;
-}
-
-bool activeModifiedUpperBounds(const HighsOptions& options, const HighsLp& lp,
-                               const std::vector<double>& col_value) {
-  const RsLog log = rsLog(options.log_options);
-  return highs_rs_active_modified_upper_bounds(
-      &log, rsMut(lp.mods_.save_tightened_semi_variable_upper_bound_index),
-      rsMut(lp.col_upper_), rsMut(col_value),
-      options.primal_feasibility_tolerance);
-}
-
-void HighsLp::unapplyMods() {
-  const HighsLpMods& mods = this->mods_;
-  const RsLpMods m = {
-      rsMut(mods.save_non_semi_variable_index),
-      rsMut(mods.save_inconsistent_semi_variable_index),
-      rsMut(mods.save_inconsistent_semi_variable_lower_bound_value),
-      rsMut(mods.save_inconsistent_semi_variable_upper_bound_value),
-      rsMut(mods.save_inconsistent_semi_variable_type),
-      rsMut(mods.save_relaxed_semi_variable_lower_bound_index),
-      rsMut(mods.save_relaxed_semi_variable_lower_bound_value),
-      rsMut(mods.save_tightened_semi_variable_upper_bound_index),
-      rsMut(mods.save_tightened_semi_variable_upper_bound_value)};
-  highs_rs_unapply_mods(&m, rsMut(this->col_lower_), rsMut(this->col_upper_),
-                        rsMut(this->integrality_));
-  this->mods_.clear();
 }
 
 // getSubVectors and getSubVectorsTranspose (rust/src/lp_data/edit.rs)

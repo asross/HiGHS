@@ -704,20 +704,6 @@ pub unsafe extern "C" fn highs_rs_calculate_row_values_quad(
     calculate_row_values_quad(start.get(), index.get(), value.get(), col_value.get(), row_value.get_mut());
 }
 
-/// # Safety
-/// The arrays valid; out sized by C++
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_calculate_col_duals_quad(
-    start: RsMut<i32>,
-    index: RsMut<i32>,
-    value: RsMut<f64>,
-    cost: RsMut<f64>,
-    row_dual: RsMut<f64>,
-    col_dual: RsMut<f64>,
-) {
-    calculate_col_duals_quad(start.get(), index.get(), value.get(), cost.get(), row_dual.get(), col_dual.get_mut());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

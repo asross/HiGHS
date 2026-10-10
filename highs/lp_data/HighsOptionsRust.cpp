@@ -254,6 +254,29 @@ int highs_rs_write_info(void* file,
                         size_t n, int file_type);
 }
 
+extern "C" int highs_rs_lph_options(
+    highs_rs::LpHandle* p, int which, const RsOptionHost* host,
+    const RsOptionRecord* recs, size_t n, const RsOptionRecord* from,
+    const char* name, size_t name_len, int kind, bool b, HighsInt i, double d,
+    const char* value, size_t value_len);
+
+int rsHighsOptions(highs_rs::LpHandle* p, const int which,
+                   const HighsLogOptions& report_log_options,
+                   HighsOptions& options, const std::string& name,
+                   const int kind, const bool b, const HighsInt i,
+                   const double d, const std::string* s,
+                   const HighsOptions* from) {
+  OptionCtx ctx{&options.log_options, &options.records};
+  const RsOptionHost host = rsOptionHost(report_log_options, &ctx);
+  const std::vector<RsOptionRecord> recs = rsOptionRecords(options.records);
+  std::vector<RsOptionRecord> from_recs;
+  if (from) from_recs = rsOptionRecords(from->records);
+  return highs_rs_lph_options(p, which, &host, recs.data(), recs.size(),
+                              from ? from_recs.data() : nullptr, name.data(),
+                              name.size(), kind, b, i, d,
+                              s ? s->data() : nullptr, s ? s->size() : 0);
+}
+
 // HighsOptions.cpp
 
 static bool valueOk(const HighsLogOptions& report_log_options, int which,

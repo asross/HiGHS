@@ -169,6 +169,10 @@ struct LphHost {
   double (*timer_read)(void* ctx);
   bool (*simplex_interrupt)(void* ctx, HighsInt iteration_count);
   HighsInt (*ipm_interrupt)(void* ctx, HighsInt ipm_iteration_count);
+  // The top level's host functions (lp_data/top.rs CTop): the steps on
+  // C++ objects of a Highs object's runs and its HighsTimer clocks
+  int64_t (*top_op)(void* ctx, int code, int64_t arg, void* p);
+  double (*clock)(void* ctx, int which, int action);
 };
 
 // lp_handle.rs: FormBasis, the views of a basis that
@@ -313,6 +317,17 @@ void rsSimplexProfiling(void* profiling, int code, HighsInt simplex_strategy,
                         int64_t arg);
 // The option values of a handle from a HighsOptions (HighsOptionsRust.cpp)
 void rsSyncOptions(highs_rs::LpHandle* h, const HighsOptions& options);
+// The options API of a Highs object on its engine's option values, the
+// store (rust/src/lp_data/options.rs highs_rs_lph_options: which 0 set by
+// name, 1 pass `from`, 2 reset, 3 load the file `s`, 4 only the mirror, 5
+// the number of values that differ); `options` (the C++ records) then
+// takes the engine's values
+int rsHighsOptions(highs_rs::LpHandle* p, const int which,
+                   const HighsLogOptions& report_log_options,
+                   HighsOptions& options, const std::string& name,
+                   const int kind, const bool b, const HighsInt i,
+                   const double d, const std::string* s,
+                   const HighsOptions* from);
 // formSimplexLpBasisAndFactor of `basis` for a Highs object's model on
 // its engine (HighsRunRust.cpp)
 HighsStatus rsFormBasis(Highs& h, HighsBasis& basis,

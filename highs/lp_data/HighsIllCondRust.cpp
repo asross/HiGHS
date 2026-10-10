@@ -64,8 +64,8 @@ HighsStatus Highs::computeIllConditioning(
   };
   h.log = rsLog(options_.log_options);
   h.lp = rsLp(incumbent_lp);
-  h.col_status = illCondStatus(basis_.col_status);
-  h.row_status = illCondStatus(basis_.row_status);
+  h.col_status = illCondStatus(basis_r().col_status);
+  h.row_status = illCondStatus(basis_r().row_status);
   h.col_names = {const_cast<const char**>(col_names.data()), col_names.size()};
   h.row_names = {const_cast<const char**>(row_names.data()), row_names.size()};
   h.constraint = constraint;

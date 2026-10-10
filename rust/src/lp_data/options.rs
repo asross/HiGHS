@@ -1552,6 +1552,79 @@ pub unsafe extern "C" fn highs_rs_get_option_type(
     }
 }
 
+/// The options API of a Highs object on its engine's options (the
+/// store, `crate::lp_data::opts::Opts`): `which` 0 setLocalOptionValue by
+/// name (`kind` and the values as highs_rs_set_option), 1
+/// passLocalOptions from `from`, 2 resetLocalOptions, 3
+/// loadOptionsFromFile (the file name in `value`); the C++ HighsOptions
+/// (`recs`) then takes the engine's values
+///
+/// # Safety
+/// `p` a handle; the tables valid (`from` with `n` records if which 1)
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn highs_rs_lph_options(
+    p: *mut crate::lp_data::lp_handle::LpHandle,
+    which: i32,
+    host: *const COptionHost,
+    recs: *const COptionRecord,
+    n: usize,
+    from: *const COptionRecord,
+    name: *const u8,
+    name_len: usize,
+    kind: i32,
+    bool_value: bool,
+    int_value: i32,
+    double_value: f64,
+    value: *const u8,
+    value_len: usize,
+) -> i32 {
+    let h = &mut *p;
+    let host = &*host;
+    let cpp = table(recs, n);
+    let rs = h.opts.records_on(cpp);
+    let rhost = COptionHost {
+        log: host.log,
+        ctx: host.ctx,
+        set_string: Some(crate::lp_data::opts::set_string),
+        open_log_file: host.open_log_file,
+        write: host.write,
+    };
+    let status = match which {
+        0 => {
+            let name = bytes(name, name_len);
+            match kind {
+                BOOL => set_bool(&rhost.log, name, &rs, bool_value),
+                INT => set_int(&rhost.log, name, &rs, int_value),
+                DOUBLE => set_double(&rhost.log, name, &rs, double_value),
+                _ => set_from_string(&rhost, name, &rs, bytes(value, value_len)),
+            }
+        }
+        1 => pass_options(&rhost, table(from, n), &rs),
+        2 => {
+            reset(&rhost, &rs);
+            OK
+        }
+        3 => load_options_from_file(&rhost, &rs, bytes(value, value_len)),
+        // 4: only the mirror
+        4 => OK,
+        // 5: the number of values the C++ records do not hold
+        _ => {
+            drop(rs);
+            let d = h.opts.diff(cpp);
+            for name in &d {
+                eprintln!("HIGHS_RS_CHECK_SYNC: option {} differs from the engine's", name);
+            }
+            return d.len() as i32;
+        }
+    };
+    drop(rs);
+    if let Some(ss) = host.set_string {
+        h.opts.to_cpp(cpp, ss);
+    }
+    status
+}
+
 /// # Safety
 /// As highs_rs_option_index
 #[no_mangle]

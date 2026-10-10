@@ -112,6 +112,8 @@ enum class IisOp {
   kElasticSolution,
   kSetModelStatus,
   kObjectiveValue,
+  kEngine,
+  kCallbacksToPropagate,
 };
 
 template <typename T>
@@ -137,8 +139,6 @@ int highs_rs_elasticity_filter(const RsIisHost* host,
 // The steps of the IIS on Highs objects (a friend)
 struct HighsIisRust {
   Highs& h;
-  // The Highs objects of the IIS search (handles 1, 2, ...)
-  std::vector<std::unique_ptr<Highs>> locals;
   // The IIS LP (HighsIis::model_), kept aside until the end of the call
   HighsModel model;
   // The options saved by kSaveOptions
@@ -147,7 +147,6 @@ struct HighsIisRust {
   // step is made after it
   std::exception_ptr pending;
 
-  Highs& at(HighsInt k) { return k ? *locals[k - 1] : h; }
 
   static double op(void* ctx, int which, const RsIisArgs* a) {
     HighsIisRust& r = *static_cast<HighsIisRust*>(ctx);
@@ -177,7 +176,7 @@ struct HighsIisRust {
   }
 
   static RsMut<double> colValue(void* ctx) {
-    return rsMut(static_cast<HighsIisRust*>(ctx)->h.solution_.col_value);
+    return rsMut(static_cast<HighsIisRust*>(ctx)->h.solution_r().col_value);
   }
 
   RsIisHost host() {
@@ -218,7 +217,9 @@ struct HighsIisRust {
   static double st(HighsStatus s) { return int(s); }
 
   double step(IisOp which, const RsIisArgs& a) {
-    Highs& x = at(a.h);
+    // The incumbent's steps (the IIS search's LP solvers are Rust's
+    // LpHandles: iis.rs)
+    Highs& x = h;
     HighsOptions& options = h.options_;
     const double* d0 = static_cast<const double*>(a.p[0]);
     const double* d1 = static_cast<const double*>(a.p[1]);
@@ -262,20 +263,6 @@ struct HighsIisRust {
       case IisOp::kSetIisLp:
         buildLp(*static_cast<const RsIisLp*>(a.p[0]), model.lp_);
         return 0;
-      case IisOp::kNewHighs:
-        locals.push_back(std::unique_ptr<Highs>(new Highs()));
-        return double(locals.size());
-      case IisOp::kDeleteHighs:
-        locals[a.h - 1].reset();
-        return 0;
-      case IisOp::kPassOptions: {
-        if (!a.i) return st(x.passOptions(options));
-        HighsOptions opts = options;
-        opts.time_limit = kHighsInf;
-        opts.simplex_iteration_limit = kHighsIInf;
-        opts.objective_bound = kHighsInf;
-        return st(x.passOptions(opts));
-      }
       case IisOp::kSetOptionBool:
         return st(x.setOptionValue(str(a.s), bool(a.i)));
       case IisOp::kSetOptionInt:
@@ -285,26 +272,10 @@ struct HighsIisRust {
       case IisOp::kSetOptionString:
         return st(x.setOptionValue(
             str(a.s), str(*static_cast<const RsIisStr*>(a.p[0]))));
-      case IisOp::kPropagateCallbacks: {
-        const HighsCallback& callback = h.callback_;
-        if (options.log_options.user_log_callback ||
-            callback.active[kCallbackLogging] ||
-            callback.active[kCallbackSimplexInterrupt]) {
-          x.setCallback(callback.user_callback, callback.user_callback_data);
-          if (callback.active[kCallbackLogging])
-            x.startCallback(kCallbackLogging);
-          if (callback.active[kCallbackSimplexInterrupt])
-            x.startCallback(kCallbackSimplexInterrupt);
-        }
-        return 0;
-      }
-      case IisOp::kPassModelArrays: {
-        HighsLp lp;
-        buildLp(*static_cast<const RsIisLp*>(a.p[0]), lp);
-        return st(x.passModel(lp));
-      }
-      case IisOp::kPassIisModel:
-        return st(x.passModel(model.lp_));
+      case IisOp::kChangeColBounds:
+        return st(x.changeColBounds(a.i, a.x, a.y));
+      case IisOp::kChangeRowBounds:
+        return st(x.changeRowBounds(a.i, a.x, a.y));
       case IisOp::kChangeColsCost:
         return st(x.changeColsCost(a.i, a.j, d0));
       case IisOp::kOptimizeModel:
@@ -315,12 +286,6 @@ struct HighsIisRust {
         return x.getInfo().simplex_iteration_count;
       case IisOp::kModelStatus:
         return int(x.getModelStatus());
-      case IisOp::kChangeColBounds:
-        return st(x.changeColBounds(a.i, a.x, a.y));
-      case IisOp::kChangeRowBounds:
-        return st(x.changeRowBounds(a.i, a.x, a.y));
-      case IisOp::kWriteModel:
-        return st(x.writeModel(""));
       case IisOp::kZeroAllClocks:
         h.zeroAllClocks();
         return 0;
@@ -335,6 +300,7 @@ struct HighsIisRust {
         return 0;
       case IisOp::kRestoreOptions:
         h.options_ = *saved_options;
+        h.options_cpp_newer_ = true;
         return 0;
       case IisOp::kEnsureColwise:
         if (!h.model_r().lp_.a_matrix_.isColwise())
@@ -355,6 +321,7 @@ struct HighsIisRust {
         }
       case IisOp::kSetOutputFlag:
         options.output_flag = a.i != 0;
+        h.options_cpp_newer_ = true;
         return 0;
       case IisOp::kInvalidateSolverData:
         h.invalidateSolverData();
@@ -385,30 +352,48 @@ struct HighsIisRust {
       case IisOp::kDeleteCols:
         return st(h.deleteCols(a.i, a.j));
       case IisOp::kBasisInvalid:
-        h.basis_.valid = false;
+        h.basis_w().valid = false;
         return 0;
       case IisOp::kElasticSolution:
         // Deleting rows and columns invalidates the solution, but the
         // primal values are right: recompute the row activities
-        h.model_r().lp_.a_matrix_.productQuad(h.solution_.row_value,
-                                           h.solution_.col_value);
-        h.solution_.value_valid = true;
-        h.info_.objective_function_value = a.x;
-        getKktFailures(options, h.model_r(), h.solution_, h.basis_, h.info_);
-        h.info_.valid = true;
+        h.model_r().lp_.a_matrix_.productQuad(h.solution_w().row_value,
+                                           h.solution_r().col_value);
+        h.solution_w().value_valid = true;
+        h.info_w().objective_function_value = a.x;
+        getKktFailures(options, h.model_r(), h.solution_w(), h.basis_w(), h.info_w());
+        h.info_w().valid = true;
         return 0;
       case IisOp::kSetModelStatus:
-        h.model_status_ = HighsModelStatus(a.i);
+        h.model_status_w() = HighsModelStatus(a.i);
         return 0;
       case IisOp::kObjectiveValue:
-        return h.info_.objective_function_value;
+        return h.info_r().objective_function_value;
+      case IisOp::kEngine:
+        h.optionsToRust();
+        *static_cast<highs_rs::LpHandle**>(const_cast<void*>(a.p[0])) =
+            h.ekk_instance_.p;
+        return 0;
+      case IisOp::kCallbacksToPropagate: {
+        const HighsCallback& callback = h.callback_;
+        return options.log_options.user_log_callback ||
+                       callback.active[kCallbackLogging] ||
+                       callback.active[kCallbackSimplexInterrupt]
+                   ? 1
+                   : 0;
+      }
+      default:
+        // The IIS search's LP solvers' steps are Rust's (iis.rs)
+        fprintf(stderr, "HighsIisRust: op %d is not the incumbent's\n",
+                int(which));
+        std::abort();
     }
     return 0;
   }
 };
 
 HighsStatus Highs::getIisInterface() {
-  HighsIisRust r{*this, {}, {}, {}, {}};
+  HighsIisRust r{*this, {}, {}, {}};
   const RsIisHost host = r.host();
   const int status = highs_rs_get_iis(&host);
   r.rethrow();
@@ -420,7 +405,7 @@ HighsStatus Highs::elasticityFilter(
     const double global_rhs_penalty, const double* local_lower_penalty,
     const double* local_upper_penalty, const double* local_rhs_penalty,
     const bool get_iis) {
-  HighsIisRust r{*this, {}, {}, {}, {}};
+  HighsIisRust r{*this, {}, {}, {}};
   const RsIisHost host = r.host();
   const int status = highs_rs_elasticity_filter(
       &host, global_lower_penalty, global_upper_penalty, global_rhs_penalty,

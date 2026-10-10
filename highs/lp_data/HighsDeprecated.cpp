@@ -108,12 +108,18 @@ const HighsOptions& Highs::getHighsOptions() const {
 HighsStatus Highs::setHighsLogfile(FILE* logfile) {
   deprecationMessage("setHighsLogfile", "None");
   options_.output_flag = false;
+#ifdef HIGHS_RUST
+  options_cpp_newer_ = true;
+#endif
   return HighsStatus::kOk;
 }
 
 HighsStatus Highs::setHighsOutput(FILE* output) {
   deprecationMessage("setHighsOutput", "None");
   options_.output_flag = false;
+#ifdef HIGHS_RUST
+  options_cpp_newer_ = true;
+#endif
   return HighsStatus::kOk;
 }
 
@@ -167,7 +173,7 @@ HighsStatus Highs::writeSolution(const std::string& filename,
     style = kSolutionStyleRaw;
   }
   writeSolutionFile(file, options_,
-		    model_r(), basis_, solution_, info_, model_status_,
+		    model_r(), basis_r(), solution_r(), info_r(), model_status_r(),
                     style);
   if (file != stdout) fclose(file);
   return HighsStatus::kOk;
@@ -177,5 +183,5 @@ HighsStatus Highs::writeSolution(const std::string& filename,
 const HighsModelStatus& Highs::getModelStatus(const bool) const {
   deprecationMessage("getModelStatus(const bool scaled_model)",
                      "getModelStatus()");
-  return model_status_;
+  return model_status_r();
 }

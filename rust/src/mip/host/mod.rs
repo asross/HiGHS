@@ -15,15 +15,14 @@
 //! The only C++ left of a MIP solve is the Highs object's: its
 //! HighsProfiling, the user callback (HighsCallback), the improving
 //! solution file and the log options, reached through [`HighsFns`]
-//! (HighsRunRust.cpp, registered once), and the entry
-//! (Highs::callSolveMip, Highs::runPresolve) that passes the model and
-//! options and takes the result ([`entry`]).
+//! (HighsMipHost.cpp, registered once). A Highs object's MIP solve and
+//! presolve are its engine's (lp_data/top.rs: the solver built from the
+//! engine's model and option values).
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub mod dom;
-pub mod entry;
 pub mod fns;
 pub mod lp;
 pub mod pools;

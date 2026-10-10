@@ -16,6 +16,8 @@
 //! and dual ray options are left out.
 
 use super::ffi::{CLp, RsMut};
+use super::lp_handle::LpHandle;
+use super::opts::OptValue;
 use super::options::RsStr;
 use super::run::{MS_INFEASIBLE, MS_INTERRUPT, MS_ITERATION_LIMIT, MS_NOTSET, MS_OBJECTIVE_BOUND, MS_OPTIMAL,
                  MS_TIME_LIMIT, MS_UNBOUNDED, MS_UNBOUNDED_OR_INFEASIBLE};
@@ -202,7 +204,9 @@ enum Op {
     PropagateCallbacks,
     /// passModel(the LP p0 (LpArrays)) -> status
     PassModelArrays,
-    /// passModel(the kept IIS LP) -> status
+    /// passModel(the kept IIS LP) -> status (iis.rs: H::pass_lp; the
+    /// number is kept for the C++ enum)
+    #[allow(dead_code)]
     PassIisModel,
     /// changeColsCost(i, j, p0) -> status
     ChangeColsCost,
@@ -255,16 +259,126 @@ enum Op {
     SetModelStatus,
     /// info_.objective_function_value
     ObjectiveValue,
+    /// The incumbent's engine (an LpHandle, its option values current)
+    /// into p0 (a *mut *mut LpHandle)
+    Engine,
+    /// Whether the incumbent's logging or simplex interrupt callbacks are
+    /// to be propagated (a user log callback, or those callbacks active)
+    CallbacksToPropagate,
 }
 
 struct H<'a> {
     host: &'a IisHost,
+    /// The LP solvers of the IIS search (handles 1, 2, ...): LpHandles
+    /// with the incumbent's option values and its simplex interrupt
+    /// callback
+    locals: std::cell::RefCell<Vec<Option<Box<LpHandle>>>>,
 }
 
 impl H<'_> {
+    fn new(host: &IisHost) -> H<'_> {
+        H { host, locals: std::cell::RefCell::new(Vec::new()) }
+    }
     fn call(&self, op: Op, a: Args) -> f64 {
+        if a.h >= 1 || matches!(op, Op::NewHighs) {
+            if let Some(r) = self.local(op, &a) {
+                return r;
+            }
+        }
         // SAFETY: the host's op takes its ctx and the arguments it lists
         unsafe { (self.host.op)(self.host.ctx, op as i32, &a) }
+    }
+    /// The incumbent's engine
+    fn engine(&self) -> &'static LpHandle {
+        let mut p: *mut LpHandle = std::ptr::null_mut();
+        let mut a = args(0);
+        a.p[0] = &mut p as *mut *mut LpHandle as *const c_void;
+        // SAFETY: the op writes the pointer
+        unsafe { (self.host.op)(self.host.ctx, Op::Engine as i32, &a) };
+        // SAFETY: the incumbent's engine outlives the IIS call
+        unsafe { &*p }
+    }
+    /// The op of the IIS search's LP solver `a.h` (None: the incumbent's)
+    fn local(&self, op: Op, a: &Args) -> Option<f64> {
+        let mut locals = self.locals.borrow_mut();
+        if let Op::NewHighs = op {
+            locals.push(Some(LpHandle::new()));
+            return Some(locals.len() as f64);
+        }
+        let k = a.h as usize - 1;
+        let x = locals[k].as_mut().expect("a live LP solver of the IIS");
+        let st = |s: Status| s as i32 as f64;
+        // SAFETY: the option name and string value live for the call
+        let name = || unsafe { std::str::from_utf8(a.s.get()).unwrap_or("") };
+        let r = match op {
+            Op::DeleteHighs => {
+                locals[k] = None;
+                0.0
+            }
+            Op::PassOptions => {
+                x.opts.assign(&self.engine().opts);
+                if a.i != 0 {
+                    x.opts.time_limit = INF;
+                    x.opts.simplex_iteration_limit = IINF;
+                    x.opts.objective_bound = INF;
+                }
+                0.0
+            }
+            Op::SetOptionBool => st(set_ok(x.set_option(name(), OptValue::Bool(a.i != 0)))),
+            Op::SetOptionInt => st(set_ok(x.set_option(name(), OptValue::Int(a.i)))),
+            Op::SetOptionDouble => st(set_ok(x.set_option(name(), OptValue::Double(a.x)))),
+            Op::SetOptionString => {
+                // SAFETY: p0 is the value's RsStr
+                let v = unsafe { (*(a.p[0] as *const RsStr)).get() };
+                st(set_ok(x.set_option(name(), OptValue::Str(v))))
+            }
+            Op::PropagateCallbacks => {
+                drop(locals);
+                let propagate = self.call(Op::CallbacksToPropagate, args(0)) != 0.0;
+                let cb = if propagate { self.engine().host_simplex_callback() } else { None };
+                self.locals.borrow_mut()[k].as_mut().expect("a live LP solver").simplex_callback = cb;
+                return Some(0.0);
+            }
+            Op::PassModelArrays => {
+                // SAFETY: p0 is an LpArrays of the caller's vectors
+                let lp = unsafe { lp_of(&*(a.p[0] as *const LpArrays), b"") };
+                st(x.pass_model(lp))
+            }
+            Op::ChangeColsCost => {
+                let n = (a.j - a.i + 1).max(0) as usize;
+                // SAFETY: p0 holds the interval's costs
+                let cost = unsafe { std::slice::from_raw_parts(a.p[0] as *const f64, n) };
+                st(x.change_col_costs_interval(a.i, a.j, cost))
+            }
+            Op::OptimizeModel => st(x.optimize_lp()),
+            Op::RunTime => x.run_time(),
+            Op::SimplexIterations => x.info().simplex_iteration_count as f64,
+            Op::ModelStatus => x.model_status() as f64,
+            Op::ChangeColBounds => st(x.change_col_bounds_set(&[a.i], &[a.x], &[a.y])),
+            Op::ChangeRowBounds => st(x.change_row_bounds_set(&[a.i], &[a.x], &[a.y])),
+            // writeModel("") of a silent solver writes nothing
+            Op::WriteModel => {
+                debug_assert!(!x.opts.output_flag);
+                0.0
+            }
+            _ => return None,
+        };
+        Some(r)
+    }
+    /// passModel of an LP of the IIS (the IIS LP: its model name the
+    /// incumbent's + "_IIS")
+    fn pass_lp(&self, k: i32, a: &LpArrays) -> Status {
+        let name = if a.model_name != 0 {
+            let mut n = self.name(true, usize::MAX).into_bytes();
+            n.extend_from_slice(b"_IIS");
+            n
+        } else {
+            Vec::new()
+        };
+        let mut locals = self.locals.borrow_mut();
+        let x = locals[k as usize - 1].as_mut().expect("a live LP solver of the IIS");
+        // SAFETY: the arrays are the caller's vectors
+        x.pass_model(unsafe { lp_of(a, &name) })
     }
     fn on(&self, op: Op, h: i32) -> f64 {
         self.call(op, args(h))
@@ -342,6 +456,39 @@ impl H<'_> {
     fn iterations(&self, h: i32) -> i32 {
         self.on(Op::SimplexIterations, h) as i32
     }
+}
+
+/// setOptionValue's status of Opts::set
+fn set_ok(ok: bool) -> Status {
+    if ok {
+        Status::Ok
+    } else {
+        Status::Error
+    }
+}
+
+/// The LP of an LpArrays (as HighsIisRust.cpp's buildLp, without names)
+///
+/// # Safety
+/// The arrays valid
+unsafe fn lp_of(a: &LpArrays, model_name: &[u8]) -> super::lp::Lp {
+    let mut lp = super::lp::Lp::default();
+    let g = &mut lp.g;
+    g.num_col = a.num_col;
+    g.num_row = a.num_row;
+    g.col_cost = a.col_cost.get().to_vec();
+    g.col_lower = a.col_lower.get().to_vec();
+    g.col_upper = a.col_upper.get().to_vec();
+    g.row_lower = a.row_lower.get().to_vec();
+    g.row_upper = a.row_upper.get().to_vec();
+    g.a.format = a.format;
+    g.a.num_col = a.num_col;
+    g.a.num_row = a.num_row;
+    g.a.start = a.start.get().to_vec();
+    g.a.index = a.index.get().to_vec();
+    g.a.value = a.value.get().to_vec();
+    lp.model_name = model_name.to_vec();
+    lp
 }
 
 fn args(h: i32) -> Args {
@@ -961,7 +1108,7 @@ impl Iis {
         let k = h.on(Op::NewHighs, 0) as i32;
         h.call(Op::PassOptions, Args { i: 1, ..args(k) });
         h.set_bool(k, b"output_flag", false);
-        h.on(Op::PassIisModel, k);
+        h.pass_lp(k, &il.arrays(1));
         h.on(Op::WriteModel, k);
         let status = h.status(Op::OptimizeModel, args(k));
         let result = (|| {
@@ -1693,7 +1840,7 @@ fn elastic_return(h: &H, status: Status, o: &ElasticOriginal) -> Status {
 /// `host` must be valid, its functions callable with its ctx
 #[no_mangle]
 pub unsafe extern "C" fn highs_rs_get_iis(host: *const IisHost) -> i32 {
-    let h = H { host: &*host };
+    let h = H::new(&*host);
     let mut iis = Iis::load(&h);
     let status = get_iis(&h, &mut iis);
     iis.store(&h);
@@ -1712,7 +1859,7 @@ pub unsafe extern "C" fn highs_rs_elasticity_filter(host: *const IisHost, global
                                                     local_lower_penalty: *const f64,
                                                     local_upper_penalty: *const f64,
                                                     local_rhs_penalty: *const f64, get_iis: bool) -> i32 {
-    let h = H { host: &*host };
+    let h = H::new(&*host);
     let lp = h.lp();
     let slice = |p: *const f64, n: usize| {
         if p.is_null() { None } else { Some(std::slice::from_raw_parts(p, n)) }

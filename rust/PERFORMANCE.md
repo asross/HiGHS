@@ -10,6 +10,30 @@ M1 MacBook (shared, so ±2% is noise). "Same path" compares iteration and node
 counts, objective and status: the port is bit-identical, so they must match.
 Both builds: Release, clang (thin LTO) for C++, rustc 1.98 (LTO) for Rust.
 
+## 2026-10-09, stage 4b: the engine the store of the Highs object
+
+`perf.py <an earlier rust-port HIGHS_RUST highs> <this build's highs>
+--reps 1`: Highs::run, the drivers, presolve, postsolve, setSolution,
+the rays and the IIS's LP solves run on the engine (`LpHandle`), whose
+model, solution, basis, info, options and presolve data are the store,
+the C++ members mirrors synced around each call. All 32 cases same path;
+geomean 1.000 (MIP 0.992, LP dual 0.994, LP primal 1.004, IPM 0.990,
+PDLP 1.021, read model 1.018): no measurable change (the sync copies
+what changed only, O(model) at most once per API call).
+
+Against the pure C++ build (`--reps 3`, quiet machine), every case same
+path:
+
+| Group | Geomean Rust / C++ |
+|---|---|
+| MIP | 0.835 |
+| LP dual simplex | 0.739 |
+| LP primal simplex | 0.949 |
+| IPM (IPX) | 0.930 |
+| PDLP | 0.961 |
+| Read model (time_limit 0) | 0.327 |
+| **All** | **0.793** |
+
 ## 2026-10-09, the MIP's objects in Rust (no C++ MIP shells, Rust tasks)
 
 `perf.py <rust-port HIGHS_RUST highs (9d5590f4f4)> <this build's highs>

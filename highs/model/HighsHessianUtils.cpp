@@ -671,9 +671,5 @@ void reportHessian(const HighsLogOptions& log_options, const HighsInt dim,
   highs_rs_report_hessian(&log, dim, num_nz, start, index, value);
 }
 
-void userScaleHessian(HighsHessian& hessian, HighsUserScaleData& data,
-                      const bool apply) {
-  highs_rs_user_scale_hessian(rsHessianView(hessian), &data, apply);
-}
 #endif
 
