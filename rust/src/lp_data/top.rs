@@ -1337,17 +1337,21 @@ pub struct CTopData {
     pub profiling: *mut c_void,
 }
 
-/// The Highs object's data into its engine before a call
+/// The Highs object's data into its engine before a call: the solution,
+/// basis, info and model status if `run` (the mirror is newer), the
+/// scalars and the Hessian
 ///
 /// # Safety
 /// `p` a Highs object's engine, `d` valid views
 #[no_mangle]
-pub unsafe extern "C" fn highs_rs_lph_top_import(p: *mut LpHandle, d: *const CTopData) {
+pub unsafe extern "C" fn highs_rs_lph_top_import(p: *mut LpHandle, d: *const CTopData, run: bool) {
     let h = &mut *p;
     let d = &*d;
-    let presolve = std::mem::take(&mut h.lps.run.presolve);
-    h.lps.run.import(&d.run);
-    h.lps.run.presolve = presolve;
+    if run {
+        let presolve = std::mem::take(&mut h.lps.run.presolve);
+        h.lps.run.import(&d.run);
+        h.lps.run.presolve = presolve;
+    }
     h.run_data = std::ptr::read(d.run_data);
     h.presolve_status = *d.presolve_status;
     h.called_return = *d.called_return;
@@ -1356,6 +1360,55 @@ pub unsafe extern "C" fn highs_rs_lph_top_import(p: *mut LpHandle, d: *const CTo
     let t = h.top();
     t.hessian = hs;
     t.changed = 0;
+}
+
+/// Whether the engine's solution, basis, info and model status are the
+/// mirror's (HIGHS_RS_CHECK_SYNC: a mirror that is not newer must be);
+/// the parts that differ are printed
+///
+/// # Safety
+/// As highs_rs_lph_top_import
+#[no_mangle]
+pub unsafe extern "C" fn highs_rs_lph_top_run_matches(p: *mut LpHandle, d: *const CTopData) -> bool {
+    let r = &(*p).lps.run;
+    let d = &(*d).run;
+    let same = |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+    let s = &r.solution;
+    let cb = &*d.basis;
+    let b = &r.basis.b;
+    let mut diff = Vec::new();
+    if s.value_valid != *d.value_valid || s.dual_valid != *d.dual_valid {
+        diff.push("solution validity");
+    }
+    if !same(&s.col_value, d.col_value.as_slice())
+        || !same(&s.col_dual, d.col_dual.as_slice())
+        || !same(&s.row_value, d.row_value.as_slice())
+        || !same(&s.row_dual, d.row_dual.as_slice())
+    {
+        diff.push("solution");
+    }
+    if b.valid != cb.valid
+        || b.alien != cb.alien
+        || b.useful != cb.useful
+        || b.was_alien != cb.was_alien
+        || b.debug_id != cb.debug_id
+        || b.debug_update_count != cb.debug_update_count
+        || b.col_status.as_slice() != cb.col_status.as_slice()
+        || b.row_status.as_slice() != cb.row_status.as_slice()
+        || r.basis.origin.as_bytes() != d.origin.get()
+    {
+        diff.push("basis");
+    }
+    if !r.info.equal(&*d.info) {
+        diff.push("info");
+    }
+    if r.model_status != *d.model_status {
+        diff.push("model status");
+    }
+    if !diff.is_empty() {
+        eprintln!("HIGHS_RS_CHECK_SYNC: the engine's {} differ from the mirror's", diff.join(", "));
+    }
+    diff.is_empty()
 }
 
 /// The X_* flags of what changed in a call besides the solution, basis,

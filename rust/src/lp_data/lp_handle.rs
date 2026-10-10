@@ -399,6 +399,10 @@ pub struct LpHandle {
     pub model_matrix_back: bool,
     /// A Highs object's top level (top.rs)
     pub(crate) top: Option<Box<top::Top>>,
+    /// The simplex interrupt callback of a C++ Highs object, for a handle
+    /// without a host that solves for it (the IIS's LP solves): its
+    /// context and function (CHost::simplex_interrupt)
+    pub(crate) simplex_callback: Option<(*mut c_void, unsafe extern "C" fn(*mut c_void, i32) -> bool)>,
 }
 
 // SAFETY: a handle is used by one thread at a time (the race's IPX handle
@@ -457,6 +461,7 @@ impl LpHandle {
             host: None,
             model_matrix_back: false,
             top: None,
+            simplex_callback: None,
         });
         h.run_data.invalidate();
         let o = &h.opts;
@@ -700,10 +705,12 @@ impl LpHandle {
         let none = RsMut { ptr: std::ptr::null_mut(), len: 0 };
         let nla = self.lps.sh.nla_lp_set && self.shell.nla_model;
         let has_scale = nla && self.shell.nla_model_scale;
-        let interrupt_callback = match &self.host {
+        let interrupt_callback = match (&self.host, self.simplex_callback) {
             // SAFETY: the Highs object's callback
-            Some(c) => unsafe { (c.simplex_interrupt)(c.ctx, -1) },
-            None => self.interrupt.is_some_and(|i| i.simplex),
+            (Some(c), _) => unsafe { (c.simplex_interrupt)(c.ctx, -1) },
+            // SAFETY: as above
+            (None, Some((ctx, f))) => unsafe { f(ctx, -1) },
+            (None, None) => self.interrupt.is_some_and(|i| i.simplex),
         };
         let m = &mut self.model;
         let mut env = LpsEnv {
@@ -1115,6 +1122,57 @@ impl LpHandle {
             mask: &[],
         };
         self.change_col_bounds_ic(&ic, l2, u2)
+    }
+
+    /// Highs::changeRowsBounds(num, set, lower, upper) (changeRowBounds
+    /// for one row)
+    pub fn change_row_bounds_set(&mut self, set: &[i32], lower: &[f64], upper: &[f64]) -> Status {
+        if set.is_empty() {
+            return Status::Ok;
+        }
+        let mut local_set = set.to_vec();
+        let (l1, u1) = interface::sort_set_bounds(&mut local_set, lower, upper);
+        let (l2, u2) = interface::sort_set_bounds(&mut local_set, &l1, &u1);
+        let ic = IndexCollection {
+            dimension: self.model.num_row,
+            is_interval: false,
+            from: -1,
+            to: -2,
+            is_set: true,
+            set_num_entries: local_set.len() as i32,
+            set: &local_set,
+            is_mask: false,
+            mask: &[],
+        };
+        self.clear_derived_model_properties();
+        let num = interface_data_size(&ic);
+        let call = if num <= 0 {
+            Status::Ok
+        } else {
+            self.iface(|lp, b, h, o| interface::change_bounds_iface(lp, b, h, o, &ic, false, l2, u2))
+        };
+        self.edit_return(call, "changeRowBounds")
+    }
+
+    /// Highs::changeColsCost(from, to, cost)
+    pub fn change_col_costs_interval(&mut self, from: i32, to: i32, cost: &[f64]) -> Status {
+        if from < 0 || to >= self.model.num_col {
+            return Status::Error;
+        }
+        self.clear_derived_model_properties();
+        let ic = IndexCollection::interval(self.model.num_col, from, to);
+        let n = (to - from + 1).max(0) as usize;
+        let call = if interface_data_size(&ic) <= 0 {
+            Status::Ok
+        } else {
+            self.iface(|lp, _b, h, o| interface::change_costs_iface(lp, h, o, &ic, &cost[..n]))
+        };
+        self.edit_return(call, "changeCosts")
+    }
+
+    /// The simplex interrupt callback of a C++ Highs object's engine
+    pub(crate) fn host_simplex_callback(&self) -> Option<(*mut c_void, unsafe extern "C" fn(*mut c_void, i32) -> bool)> {
+        self.host.as_ref().map(|c| (c.ctx, c.simplex_interrupt))
     }
 
     /// Highs::changeColsCost(mask, cost)
@@ -2158,6 +2216,10 @@ extern "C" fn host_interrupt(ctx: *mut c_void) -> bool {
     if let Some(c) = &h.host {
         // SAFETY: the Highs object's callback
         return unsafe { (c.simplex_interrupt)(c.ctx, h.lps.sh.iteration_count) };
+    }
+    if let Some((ctx, f)) = h.simplex_callback {
+        // SAFETY: as above
+        return unsafe { f(ctx, h.lps.sh.iteration_count) };
     }
     let Some(i) = h.interrupt.filter(|i| i.simplex) else { return false };
     // SAFETY: the flag outlives the solve

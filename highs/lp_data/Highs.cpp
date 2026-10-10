@@ -99,14 +99,14 @@ HighsStatus Highs::releaseMemory() {
   //    instance holds zero allocated heap memory for solver state —
   //    equivalent to a freshly constructed Highs.
   saved_objective_and_solution_.shrink_to_fit();
-  solution_.clear();
-  solution_.col_value.shrink_to_fit();
-  solution_.col_dual.shrink_to_fit();
-  solution_.row_value.shrink_to_fit();
-  solution_.row_dual.shrink_to_fit();
-  basis_.clear();
-  basis_.col_status.shrink_to_fit();
-  basis_.row_status.shrink_to_fit();
+  solution_w().clear();
+  solution_w().col_value.shrink_to_fit();
+  solution_w().col_dual.shrink_to_fit();
+  solution_w().row_value.shrink_to_fit();
+  solution_w().row_dual.shrink_to_fit();
+  basis_w().clear();
+  basis_w().col_status.shrink_to_fit();
+  basis_w().row_status.shrink_to_fit();
   ranging_.clear();
   ranging_.col_cost_up.value_.shrink_to_fit();
   ranging_.col_cost_up.objective_.shrink_to_fit();
@@ -443,8 +443,8 @@ HighsStatus Highs::writeRunData(const std::string& filename) const {
 
 HighsStatus Highs::getInfoValue(const std::string& info,
                                 HighsInt& value) const {
-  InfoStatus status = getLocalInfoValue(options_.log_options, info, info_.valid,
-                                        info_.records, value);
+  InfoStatus status = getLocalInfoValue(options_.log_options, info, info_r().valid,
+                                        info_r().records, value);
   if (status == InfoStatus::kOk) {
     return HighsStatus::kOk;
   } else if (status == InfoStatus::kUnavailable) {
@@ -456,8 +456,8 @@ HighsStatus Highs::getInfoValue(const std::string& info,
 
 #ifndef HIGHSINT64
 HighsStatus Highs::getInfoValue(const std::string& info, int64_t& value) const {
-  InfoStatus status = getLocalInfoValue(options_.log_options, info, info_.valid,
-                                        info_.records, value);
+  InfoStatus status = getLocalInfoValue(options_.log_options, info, info_r().valid,
+                                        info_r().records, value);
   if (status == InfoStatus::kOk) {
     return HighsStatus::kOk;
   } else if (status == InfoStatus::kUnavailable) {
@@ -470,15 +470,15 @@ HighsStatus Highs::getInfoValue(const std::string& info, int64_t& value) const {
 
 HighsStatus Highs::getInfoType(const std::string& info,
                                HighsInfoType& type) const {
-  if (getLocalInfoType(options_.log_options, info, info_.records, type) ==
+  if (getLocalInfoType(options_.log_options, info, info_r().records, type) ==
       InfoStatus::kOk)
     return HighsStatus::kOk;
   return HighsStatus::kError;
 }
 
 HighsStatus Highs::getInfoValue(const std::string& info, double& value) const {
-  InfoStatus status = getLocalInfoValue(options_.log_options, info, info_.valid,
-                                        info_.records, value);
+  InfoStatus status = getLocalInfoValue(options_.log_options, info, info_r().valid,
+                                        info_r().records, value);
   if (status == InfoStatus::kOk) {
     return HighsStatus::kOk;
   } else if (status == InfoStatus::kUnavailable) {
@@ -503,7 +503,7 @@ HighsStatus Highs::writeInfo(const std::string& filename) const {
                  "Writing the info values to %s\n", filename.c_str());
   return_status = interpretCallStatus(
       options_.log_options,
-      writeInfoToFile(file, info_.valid, info_.records, file_type),
+      writeInfoToFile(file, info_r().valid, info_r().records, file_type),
       return_status, "writeInfoToFile");
   if (file != stdout) fclose(file);
   return return_status;
@@ -958,7 +958,7 @@ HighsStatus Highs::readBasis(const std::string& filename) {
   this->logHeader();
   HighsStatus return_status = HighsStatus::kOk;
   // Try to read basis file into read_basis
-  HighsBasis read_basis = basis_;
+  HighsBasis read_basis = basis_r();
   return_status = interpretCallStatus(
       options_.log_options,
       readBasisFile(options_.log_options, model_.lp_, read_basis, filename),
@@ -971,9 +971,9 @@ HighsStatus Highs::readBasis(const std::string& filename) {
     return HighsStatus::kError;
   }
   // Update the HiGHS basis and invalidate any simplex basis for the model
-  basis_ = read_basis;
-  basis_.valid = true;
-  basis_.useful = true;
+  basis_r() = read_basis;
+  basis_r().valid = true;
+  basis_r().useful = true;
   // Follow implications of a new HiGHS basis
   newHighsBasis();
   // Can't use returnFromHighs since...
@@ -1084,7 +1084,7 @@ HighsStatus Highs::writeBasis(const std::string& filename) {
 
   // Report to user that basis is being written
   if (filename != "") {
-    if (!basis_.valid) {
+    if (!basis_r().valid) {
       highsLogUser(options_.log_options, HighsLogType::kWarning,
                    "No basis to write: generated null basis file %s\n",
                    filename.c_str());
@@ -1094,7 +1094,7 @@ HighsStatus Highs::writeBasis(const std::string& filename) {
                    "Writing the basis to %s\n", filename.c_str());
     }
   }
-  writeBasisFile(file, options_, model_.lp_, basis_);
+  writeBasisFile(file, options_, model_.lp_, basis_r());
   if (file != stdout) fclose(file);
   return return_status;
 }
@@ -1388,7 +1388,7 @@ HighsStatus Highs::calledOptimizeModel() {
   // Ensure that all vectors in the model have exactly the right size
   exactResizeModel();
 
-  if (model_.isMip() && solution_.value_valid) {
+  if (model_.isMip() && solution_r().value_valid) {
     // Determine whether the current (partial) solution of a MIP is
     // feasible and, if not, try to complete the assignment with
     // integer values (if necessary) and continuous values (if
@@ -1404,7 +1404,7 @@ HighsStatus Highs::calledOptimizeModel() {
   HighsStatus return_status = HighsStatus::kOk;
   HighsStatus call_status;
   // Initialise the HiGHS model status
-  model_status_ = HighsModelStatus::kNotset;
+  model_status_r() = HighsModelStatus::kNotset;
   // Clear the run info and data
   invalidateInfo();
   invalidateRunData();
@@ -1559,19 +1559,19 @@ HighsStatus Highs::calledOptimizeModel() {
       return returnFromOptimizeModel(icrash_status, undo_mods);
 
     // for now set the solution_.col_value
-    solution_.col_value = icrash_info_.x_values;
+    solution_r().col_value = icrash_info_.x_values;
     // Better not to use Highs::crossover
     const bool use_highs_crossover = false;
     if (use_highs_crossover) {
-      crossover(solution_);
+      crossover(solution_r());
       // loops:
       called_return_from_optimize_model = true;
 
       options_.icrash = false;  // to avoid loop
     } else {
       HighsStatus crossover_status =
-          callCrossover(options_, model_.lp_, basis_, solution_, model_status_,
-                        info_, callback_);
+          callCrossover(options_, model_.lp_, basis_r(), solution_r(), model_status_r(),
+                        info_r(), callback_);
       // callCrossover can return HighsStatus::kWarning due to
       // imprecise dual values. Ignore this since primal simplex will
       // be called to clean up duals
@@ -1579,7 +1579,7 @@ HighsStatus Highs::calledOptimizeModel() {
                    "Crossover following iCrash has return status of %s, and "
                    "problem status is %s\n",
                    highsStatusToString(crossover_status).c_str(),
-                   modelStatusToString(model_status_).c_str());
+                   modelStatusToString(model_status_r()).c_str());
       if (crossover_status == HighsStatus::kError)
         return returnFromOptimizeModel(crossover_status, undo_mods);
       assert(options_.simplex_strategy == kSimplexStrategyPrimal);
@@ -1598,7 +1598,7 @@ HighsStatus Highs::calledOptimizeModel() {
                                      options_.solver == kHighsChooseString;
 
   if (solver_will_use_basis) {
-    if (!basis_.valid && solution_.value_valid) {
+    if (!basis_r().valid && solution_r().value_valid) {
       // There is no valid basis, but there is a valid solution, so use
       // it to construct a basis
       return_status =
@@ -1606,14 +1606,14 @@ HighsStatus Highs::calledOptimizeModel() {
                               return_status, "basisForSolution");
       if (return_status == HighsStatus::kError)
         return returnFromOptimizeModel(return_status, undo_mods);
-      assert(basis_.valid);
+      assert(basis_r().valid);
     }
   } else {
     // The basis won't be used, so clear it to ensure that, after any
     // presolve the solver choice won't be over-ruled by choosing
     // simplex due to the existence of a basis - which mustn't be used
     // after a strict reduction due to presolve!
-    basis_.clear();
+    basis_r().clear();
   }
 
   // lambda for Lp solving
@@ -1636,14 +1636,14 @@ HighsStatus Highs::calledOptimizeModel() {
 
   const bool unconstrained_lp = incumbent_lp.a_matrix_.numNz() == 0;
   assert(incumbent_lp.num_row_ || unconstrained_lp);
-  const bool has_basis = basis_.useful;
+  const bool has_basis = basis_r().useful;
   if (has_basis) {
-    assert(basis_.col_status.size() ==
+    assert(basis_r().col_status.size() ==
            static_cast<size_t>(incumbent_lp.num_col_));
-    assert(basis_.row_status.size() ==
+    assert(basis_r().row_status.size() ==
            static_cast<size_t>(incumbent_lp.num_row_));
   }
-  if (basis_.valid) assert(basis_.useful);
+  if (basis_r().valid) assert(basis_r().useful);
 
   const bool without_presolve = options_.presolve == kHighsOffString;
   if ((unconstrained_lp || has_basis || without_presolve) &&
@@ -1673,7 +1673,7 @@ HighsStatus Highs::calledOptimizeModel() {
     ekk_instance_.lp_name_ = lp_solve;
     // If there is a valid HiGHS basis, refine any status values that
     // are simply HighsBasisStatus::kNonbasic
-    if (basis_.useful) refineBasis(incumbent_lp, solution_, basis_);
+    if (basis_r().useful) refineBasis(incumbent_lp, solution_r(), basis_r());
     solveLp(incumbent_lp, lp_solve, this_solve_original_lp_time);
     return_status = interpretCallStatus(options_.log_options, call_status,
                                         return_status, "callSolveLp");
@@ -1803,38 +1803,38 @@ HighsStatus Highs::calledOptimizeModel() {
                                             return_status, "callSolveLp");
         if (return_status == HighsStatus::kError)
           return returnFromOptimizeModel(return_status, undo_mods);
-        presolved_lp_pdlp_iteration_count = info_.pdlp_iteration_count;
-        have_optimal_solution = model_status_ == HighsModelStatus::kOptimal;
+        presolved_lp_pdlp_iteration_count = info_r().pdlp_iteration_count;
+        have_optimal_solution = model_status_r() == HighsModelStatus::kOptimal;
         no_incumbent_lp_solution_or_basis =
-            model_status_ == HighsModelStatus::kInfeasible ||
-            model_status_ == HighsModelStatus::kUnbounded ||
-            model_status_ == HighsModelStatus::kUnboundedOrInfeasible ||
-            model_status_ == HighsModelStatus::kTimeLimit ||
-            model_status_ == HighsModelStatus::kIterationLimit ||
-            model_status_ == HighsModelStatus::kInterrupt;
+            model_status_r() == HighsModelStatus::kInfeasible ||
+            model_status_r() == HighsModelStatus::kUnbounded ||
+            model_status_r() == HighsModelStatus::kUnboundedOrInfeasible ||
+            model_status_r() == HighsModelStatus::kTimeLimit ||
+            model_status_r() == HighsModelStatus::kIterationLimit ||
+            model_status_r() == HighsModelStatus::kInterrupt;
         if (no_incumbent_lp_solution_or_basis) {
           // Postsolve won't be performed, so clear the HEkk data
           // corresponding to the (strictly reduced) presolved LP here
           ekk_instance_.clear();
-          setHighsModelStatusAndClearSolutionAndBasis(model_status_);
+          setHighsModelStatusAndClearSolutionAndBasis(model_status_r());
         }
         break;
       }
       case HighsPresolveStatus::kReducedToEmpty: {
         // Create a trivial optimal solution for postsolve to use
-        solution_.clear();
-        basis_.clear();
-        basis_.debug_origin_name = "Presolve to empty";
-        basis_.valid = true;
-        basis_.alien = false;
-        basis_.useful = true;
-        basis_.was_alien = false;
-        solution_.value_valid = true;
-        solution_.dual_valid = true;
+        solution_r().clear();
+        basis_r().clear();
+        basis_r().debug_origin_name = "Presolve to empty";
+        basis_r().valid = true;
+        basis_r().alien = false;
+        basis_r().useful = true;
+        basis_r().was_alien = false;
+        solution_r().value_valid = true;
+        solution_r().dual_valid = true;
         have_optimal_solution = true;
         // Optimality will not be spotted if there's no basis
         // postsolve
-        model_status_ = HighsModelStatus::kOptimal;
+        model_status_r() = HighsModelStatus::kOptimal;
         this->run_data_.solve_time = 0;
         break;
       }
@@ -1843,7 +1843,7 @@ HighsStatus Highs::calledOptimizeModel() {
             HighsModelStatus::kInfeasible);
         highsLogUser(log_options, HighsLogType::kInfo,
                      "Problem status detected on presolve: %s\n",
-                     modelStatusToString(model_status_).c_str());
+                     modelStatusToString(model_status_r()).c_str());
         return returnFromOptimizeModel(return_status, undo_mods);
       }
       case HighsPresolveStatus::kUnboundedOrInfeasible: {
@@ -1871,9 +1871,9 @@ HighsStatus Highs::calledOptimizeModel() {
         options_ = save_options;
         if (return_status == HighsStatus::kError)
           return returnFromOptimizeModel(return_status, undo_mods);
-        info_.valid = true;
-        assert(model_status_ == HighsModelStatus::kInfeasible ||
-               model_status_ == HighsModelStatus::kUnbounded);
+        info_r().valid = true;
+        assert(model_status_r() == HighsModelStatus::kInfeasible ||
+               model_status_r() == HighsModelStatus::kUnbounded);
         return returnFromOptimizeModel(return_status, undo_mods);
       }
       case HighsPresolveStatus::kTimeout: {
@@ -1918,19 +1918,19 @@ HighsStatus Highs::calledOptimizeModel() {
     const bool have_optimal_reduced_solution =
         model_presolve_status_ == HighsPresolveStatus::kReducedToEmpty ||
         (model_presolve_status_ == HighsPresolveStatus::kReduced &&
-         model_status_ == HighsModelStatus::kOptimal);
+         model_status_r() == HighsModelStatus::kOptimal);
     const bool have_unknown_reduced_solution =
         model_presolve_status_ == HighsPresolveStatus::kReduced &&
-        model_status_ == HighsModelStatus::kUnknown;
+        model_status_r() == HighsModelStatus::kUnknown;
     // Take a copy of the HighsInfo and HighsModelStatus for the
     // presolved LP to determine whether a PDLP clean-up should be
     // carried out
-    const HighsInfo presolved_lp_info = this->info_;
-    const HighsModelStatus presolved_lp_model_status = this->model_status_;
+    const HighsInfo presolved_lp_info = this->info_r();
+    const HighsModelStatus presolved_lp_model_status = this->model_status_r();
     if (have_optimal_reduced_solution || have_unknown_reduced_solution) {
       // ToDo Put this in a separate method
-      assert(model_status_ == HighsModelStatus::kOptimal ||
-             model_status_ == HighsModelStatus::kUnknown ||
+      assert(model_status_r() == HighsModelStatus::kOptimal ||
+             model_status_r() == HighsModelStatus::kUnknown ||
              model_presolve_status_ == HighsPresolveStatus::kReducedToEmpty);
       assert(model_presolve_status_ == HighsPresolveStatus::kReduced ||
              model_presolve_status_ == HighsPresolveStatus::kReducedToEmpty);
@@ -1948,8 +1948,8 @@ HighsStatus Highs::calledOptimizeModel() {
       //
       // If there is no basis, then a KKT check is carried out, and
       // used to determine whether a PDLP clean-up should be done
-      presolve_.data_.recovered_solution_ = solution_;
-      presolve_.data_.recovered_basis_ = basis_;
+      presolve_.data_.recovered_solution_ = solution_r();
+      presolve_.data_.recovered_basis_ = basis_r();
 
       if (model_presolve_status_ == HighsPresolveStatus::kReduced)
         this->callLpKktCheck(presolve_.getReducedProblem(), "Before postsolve");
@@ -1969,27 +1969,27 @@ HighsStatus Highs::calledOptimizeModel() {
           highsLogUser(log_options, HighsLogType::kInfo,
                        "Performed postsolve\n");
         // Set solution and its status
-        solution_.clear();
-        solution_ = presolve_.data_.recovered_solution_;
-        solution_.value_valid = true;
-        if (!basis_.valid) {
+        solution_r().clear();
+        solution_r() = presolve_.data_.recovered_solution_;
+        solution_r().value_valid = true;
+        if (!basis_r().valid) {
           // Have a primal-dual solution, but no basis, since PDLP or
           // IPX without crossover were used. In the case of IPX, this
           // was because either run_crossover was "off" or "choose"
           // and IPX determined optimality
-          solution_.dual_valid = true;
+          solution_r().dual_valid = true;
           this->invalidateBasis();
         } else {
           //
           // Hot-start the simplex solver for the incumbent LP
           //
-          solution_.dual_valid = true;
+          solution_r().dual_valid = true;
           // Set basis and its status
-          basis_.valid = true;
-          basis_.useful = true;
-          basis_.col_status = presolve_.data_.recovered_basis_.col_status;
-          basis_.row_status = presolve_.data_.recovered_basis_.row_status;
-          basis_.debug_origin_name += ": after postsolve";
+          basis_r().valid = true;
+          basis_r().useful = true;
+          basis_r().col_status = presolve_.data_.recovered_basis_.col_status;
+          basis_r().row_status = presolve_.data_.recovered_basis_.row_status;
+          basis_r().debug_origin_name += ": after postsolve";
           // Basic primal activities are wrong after postsolve, so
           // possibly skip KKT check
           const bool perform_kkt_check = true;
@@ -2001,8 +2001,8 @@ HighsStatus Highs::calledOptimizeModel() {
             if (force_debug)
               options_.highs_debug_level = kHighsDebugLevelCostly;
             if (debugHighsSolution("After returning from postsolve", options_,
-                                   model_, solution_,
-                                   basis_) == HighsDebugStatus::kLogicalError)
+                                   model_, solution_r(),
+                                   basis_r()) == HighsDebugStatus::kLogicalError)
               return returnFromOptimizeModel(HighsStatus::kError, undo_mods);
             options_.highs_debug_level = save_highs_debug_level;
           }
@@ -2022,19 +2022,19 @@ HighsStatus Highs::calledOptimizeModel() {
             options_.factor_pivot_threshold = factor_pivot_threshold;
           // The basis returned from postsolve is just basic/nonbasic
           // and EKK expects a refined basis, so set it up now
-          refineBasis(incumbent_lp, solution_, basis_);
+          refineBasis(incumbent_lp, solution_r(), basis_r());
           // Scrap the EKK data from solving the presolved LP
           ekk_instance_.invalidate();
           ekk_instance_.lp_name_ = "Postsolve LP";
           // Set up the iteration count and timing records so that
           // adding the corresponding values after callSolveLp gives
           // difference
-          postsolve_iteration_count = -info_.simplex_iteration_count;
+          postsolve_iteration_count = -info_r().simplex_iteration_count;
           solveLp(incumbent_lp,
                   "Solving the original LP from the solution after postsolve",
                   this_solve_original_lp_time);
           // Determine the iteration count
-          postsolve_iteration_count += info_.simplex_iteration_count;
+          postsolve_iteration_count += info_r().simplex_iteration_count;
           //
           return_status = HighsStatus::kOk;
           return_status = interpretCallStatus(options_.log_options, call_status,
@@ -2105,7 +2105,7 @@ HighsStatus Highs::calledOptimizeModel() {
         // Update the number of PDLP, iterations, since the
         // iteration count is reset to zero if PDLP is used to
         // clean up after postsolve
-        info_.pdlp_iteration_count += presolved_lp_pdlp_iteration_count;
+        info_r().pdlp_iteration_count += presolved_lp_pdlp_iteration_count;
       }
     }
   }
@@ -2116,7 +2116,7 @@ HighsStatus Highs::calledOptimizeModel() {
   // HiGHS info is valid
   if (!no_incumbent_lp_solution_or_basis) {
     this->callLpKktCheck(this->model_.lp_);
-    info_.valid = true;
+    info_r().valid = true;
   }
 
   double lp_solve_final_time = timer_.read();
@@ -2184,7 +2184,7 @@ HighsStatus Highs::calledOptimizeModel() {
   }
   // Assess success according to the model status, regardless of
   // whether anything worse has happened earlier
-  return_status = highsStatusFromHighsModelStatus(model_status_);
+  return_status = highsStatusFromHighsModelStatus(model_status_r());
   return returnFromOptimizeModel(return_status, undo_mods);
 }
 
@@ -2229,7 +2229,7 @@ HighsStatus Highs::getFixedLp(HighsLp& lp) const {
                  "Incumbent model is not a MIP, so cannot form fixed LP\n");
     return HighsStatus::kError;
   }
-  if (!this->solution_.value_valid) {
+  if (!this->solution_r().value_valid) {
     highsLogUser(options_.log_options, HighsLogType::kError,
                  "Incumbent model does not have a valid solution, so cannot "
                  "form fixed LP\n");
@@ -2241,7 +2241,7 @@ HighsStatus Highs::getFixedLp(HighsLp& lp) const {
   HighsInt num_non_conts_fractional = 0;
   double max_fractional = 0;
   for (HighsInt iCol = 0; iCol < lpNumCol(); iCol++) {
-    double value = this->solution_.col_value[iCol];
+    double value = this->solution_r().col_value[iCol];
     // Fix integer and semi-integer variables at their
     // value. Semi-continuous variables are fixed at zero if they are
     // closer to zero than their lower bound
@@ -2344,7 +2344,7 @@ HighsStatus Highs::getIllConditioning(HighsIllConditioning& ill_conditioning,
                                       const bool constraint,
                                       const HighsInt method,
                                       const double ill_conditioning_bound) {
-  if (!basis_.valid) {
+  if (!basis_r().valid) {
     highsLogUser(options_.log_options, HighsLogType::kError,
                  "Cannot get ill-conditioning without a valid basis\n");
     return HighsStatus::kError;
@@ -2374,7 +2374,7 @@ HighsStatus Highs::getIis(HighsIis& iis) {
 HighsStatus Highs::getDualObjectiveValue(
     double& dual_objective_function_value) const {
   bool have_dual_objective_value = computeDualObjectiveValue(
-      model_r(), solution_, dual_objective_function_value);
+      model_r(), solution_r(), dual_objective_function_value);
   return have_dual_objective_value ? HighsStatus::kOk : HighsStatus::kError;
 }
 
@@ -2653,32 +2653,32 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
   }
 
   if (new_primal_solution) {
-    solution_.col_value = solution.col_value;
+    solution_r().col_value = solution.col_value;
     if (model_.lp_.num_row_ > 0) {
       // Worth computing the row values
-      solution_.row_value.resize(model_.lp_.num_row_);
+      solution_r().row_value.resize(model_.lp_.num_row_);
       // Matrix must be column-wise
       model_.lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
-          options_.log_options, calculateRowValuesQuad(model_.lp_, solution_),
+          options_.log_options, calculateRowValuesQuad(model_.lp_, solution_r()),
           return_status, "calculateRowValuesQuad");
       if (return_status == HighsStatus::kError) return return_status;
     }
-    solution_.value_valid = true;
+    solution_r().value_valid = true;
   }
   if (new_dual_solution) {
-    solution_.row_dual = solution.row_dual;
+    solution_r().row_dual = solution.row_dual;
     if (model_.lp_.num_col_ > 0) {
       // Worth computing the column duals
-      solution_.col_dual.resize(model_.lp_.num_col_);
+      solution_r().col_dual.resize(model_.lp_.num_col_);
       // Matrix must be column-wise
       model_.lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
-          options_.log_options, calculateColDualsQuad(model_.lp_, solution_),
+          options_.log_options, calculateColDualsQuad(model_.lp_, solution_r()),
           return_status, "calculateColDuals");
       if (return_status == HighsStatus::kError) return return_status;
     }
-    solution_.dual_valid = true;
+    solution_r().dual_valid = true;
   }
   return returnFromHighs(return_status);
 }
@@ -2881,11 +2881,11 @@ HighsStatus Highs::setBasis(const HighsBasis& basis,
       // Special case where there are no rows, so no singularity
       // issues. All columns with basic status must be set nonbasic
       for (HighsInt iCol = 0; iCol < model_.lp_.num_col_; iCol++)
-        basis_.col_status[iCol] =
+        basis_r().col_status[iCol] =
             basis.col_status[iCol] == HighsBasisStatus::kBasic
                 ? HighsBasisStatus::kNonbasic
                 : basis.col_status[iCol];
-      basis_.alien = false;
+      basis_r().alien = false;
     } else {
       // Check whether a new basis can be defined
       if (!isBasisRightSize(model_.lp_, basis)) {
@@ -2894,7 +2894,7 @@ HighsStatus Highs::setBasis(const HighsBasis& basis,
             "setBasis: User basis is rejected due to mismatch between "
             "size of column and row status vectors (%d, %d) and number "
             "of columns and rows in the model (%d, %d)\n",
-            int(basis_.col_status.size()), int(basis_.row_status.size()),
+            int(basis_r().col_status.size()), int(basis_r().row_status.size()),
             int(model_.lp_.num_col_), int(model_.lp_.num_row_));
         return HighsStatus::kError;
       }
@@ -2907,15 +2907,15 @@ HighsStatus Highs::setBasis(const HighsBasis& basis,
       const bool already_profiling = this->profiling_;
       if (!already_profiling)
         this->initializeSingleThreadedProfiling(&profiling);
-      HighsLpSolverObject solver_object(model_.lp_, modifiable_basis, solution_,
-                                        info_, ekk_instance_, callback_,
+      HighsLpSolverObject solver_object(model_.lp_, modifiable_basis, solution_r(),
+                                        info_r(), ekk_instance_, callback_,
                                         options_, timer_);
       solver_object.setProfiling(this->profiling_);
       HighsStatus return_status = formSimplexLpBasisAndFactor(solver_object);
       if (!already_profiling) this->clearProfiling();
       if (return_status != HighsStatus::kOk) return HighsStatus::kError;
       // Update the HiGHS basis
-      basis_ = std::move(modifiable_basis);
+      basis_r() = std::move(modifiable_basis);
     }
   } else {
     // Check the user-supplied basis
@@ -2925,20 +2925,20 @@ HighsStatus Highs::setBasis(const HighsBasis& basis,
       return HighsStatus::kError;
     }
     // Update the HiGHS basis
-    basis_ = basis;
+    basis_r() = basis;
   }
-  basis_.valid = true;
-  basis_.useful = true;
-  if (origin != "") basis_.debug_origin_name = origin;
-  assert(basis_.debug_origin_name != "");
-  assert(!basis_.alien);
-  if (basis_.was_alien) {
+  basis_r().valid = true;
+  basis_r().useful = true;
+  if (origin != "") basis_r().debug_origin_name = origin;
+  assert(basis_r().debug_origin_name != "");
+  assert(!basis_r().alien);
+  if (basis_r().was_alien) {
     highsLogDev(
         options_.log_options, HighsLogType::kInfo,
         "Highs::setBasis Was alien = %-5s; Id = %9d; UpdateCount = %4d; Origin "
         "(%s)\n",
-        highsBoolToString(basis_.was_alien).c_str(), (int)basis_.debug_id,
-        (int)basis_.debug_update_count, basis_.debug_origin_name.c_str());
+        highsBoolToString(basis_r().was_alien).c_str(), (int)basis_r().debug_id,
+        (int)basis_r().debug_update_count, basis_r().debug_origin_name.c_str());
   }
 
   // Follow implications of a new HiGHS basis
@@ -2982,9 +2982,9 @@ HighsStatus Highs::getIterate() {
   if (call_status != HighsStatus::kOk) return call_status;
   // Get the corresponding HiGHS basis
 #ifdef HIGHS_RUST
-  basis_ = ekk_instance_.getHighsBasis(model_r().lp_);
+  basis_w() = ekk_instance_.getHighsBasis(model_r().lp_);
 #else
-  basis_ = ekk_instance_.getHighsBasis(model_w().lp_);
+  basis_r() = ekk_instance_.getHighsBasis(model_w().lp_);
 #endif
   // Clear everything else
   invalidateModelStatusSolutionAndInfo();
@@ -3068,7 +3068,7 @@ HighsStatus Highs::changeObjectiveSense(const ObjSense sense) {
 
 HighsStatus Highs::changeObjectiveOffset(const double offset) {
   // Update the objective value
-  info_.objective_function_value += (offset - model_r().lp_.offset_);
+  info_w().objective_function_value += (offset - model_r().lp_.offset_);
   lpSetScalars(model_r().lp_.sense_, offset);
   presolved_model_.lp_.offset_ += offset;
   return returnFromHighs(HighsStatus::kOk);
@@ -3813,13 +3813,13 @@ HighsStatus Highs::writeSolution(const std::string& filename,
   if (filename != "")
     highsLogUser(options_.log_options, HighsLogType::kInfo,
                  "Writing the solution to %s\n", filename.c_str());
-  writeSolutionFile(file, options_, model_r(), basis_, solution_, info_,
-                    model_status_, style);
+  writeSolutionFile(file, options_, model_r(), basis_r(), solution_r(), info_r(),
+                    model_status_r(), style);
   if (style == kSolutionStyleSparse)
     return returnFromWriteSolution(file, return_status);
   if (style == kSolutionStyleRaw) {
     fprintf(file, "\n# Basis\n");
-    writeBasisFile(file, options_, model_r().lp_, basis_);
+    writeBasisFile(file, options_, model_r().lp_, basis_r());
   }
   if (options_.ranging == kHighsOnString) {
     if (model_r().isMip() || model_r().isQp()) {
@@ -3834,21 +3834,21 @@ HighsStatus Highs::writeSolution(const std::string& filename,
     if (return_status == HighsStatus::kError)
       return returnFromWriteSolution(file, return_status);
     fprintf(file, "\n# Ranging\n");
-    writeRangingFile(file, model_r().lp_, info_.objective_function_value, basis_,
-                     solution_, ranging_, style);
+    writeRangingFile(file, model_r().lp_, info_r().objective_function_value, basis_r(),
+                     solution_r(), ranging_, style);
   }
   return returnFromWriteSolution(file, return_status);
 }
 
 HighsStatus Highs::readSolution(const std::string& filename,
                                 const HighsInt style) {
-  return readSolutionFile(filename, options_, lpCpp(), basis_, solution_,
+  return readSolutionFile(filename, options_, lpCpp(), basis_w(), solution_w(),
                           style);
 }
 
 HighsStatus Highs::assessPrimalSolution(bool& valid, bool& integral,
                                         bool& feasible) const {
-  return assessLpPrimalSolution("", options_, model_r().lp_, solution_, valid,
+  return assessLpPrimalSolution("", options_, model_r().lp_, solution_r(), valid,
                                 integral, feasible);
 }
 
@@ -3965,7 +3965,7 @@ HighsPresolveStatus Highs::runPresolve(const bool force_lp_presolve,
     //
     // Presolved model is extracted now since it's part of solver,
     // which is lost on return
-    HighsMipSolver solver(callback_, options_, original_lp, solution_);
+    HighsMipSolver solver(callback_, options_, original_lp, solution_r());
     solver.setProfiling(this->profiling_);
     // Start the MIP solver's timer so that timeout in presolve can be
     // identified
@@ -4115,27 +4115,27 @@ void Highs::invalidateModelStatusAndInfo() {
 }
 
 void Highs::invalidateModelStatus() {
-  model_status_ = HighsModelStatus::kNotset;
+  model_status_w() = HighsModelStatus::kNotset;
 }
 
 void Highs::invalidateSolution() {
-  info_.primal_solution_status = kSolutionStatusNone;
-  info_.dual_solution_status = kSolutionStatusNone;
-  info_.num_primal_infeasibilities = kHighsIllegalInfeasibilityCount;
-  info_.max_primal_infeasibility = kHighsIllegalInfeasibilityMeasure;
-  info_.sum_primal_infeasibilities = kHighsIllegalInfeasibilityMeasure;
-  info_.num_dual_infeasibilities = kHighsIllegalInfeasibilityCount;
-  info_.max_dual_infeasibility = kHighsIllegalInfeasibilityMeasure;
-  info_.sum_dual_infeasibilities = kHighsIllegalInfeasibilityMeasure;
-  this->solution_.invalidate();
+  info_w().primal_solution_status = kSolutionStatusNone;
+  info_w().dual_solution_status = kSolutionStatusNone;
+  info_w().num_primal_infeasibilities = kHighsIllegalInfeasibilityCount;
+  info_w().max_primal_infeasibility = kHighsIllegalInfeasibilityMeasure;
+  info_w().sum_primal_infeasibilities = kHighsIllegalInfeasibilityMeasure;
+  info_w().num_dual_infeasibilities = kHighsIllegalInfeasibilityCount;
+  info_w().max_dual_infeasibility = kHighsIllegalInfeasibilityMeasure;
+  info_w().sum_dual_infeasibilities = kHighsIllegalInfeasibilityMeasure;
+  this->solution_w().invalidate();
 }
 
 void Highs::invalidateBasis() {
-  info_.basis_validity = kBasisValidityInvalid;
-  this->basis_.invalidate();
+  info_w().basis_validity = kBasisValidityInvalid;
+  this->basis_w().invalidate();
 }
 
-void Highs::invalidateInfo() { info_.invalidate(); }
+void Highs::invalidateInfo() { info_w().invalidate(); }
 
 void Highs::invalidateRunData() { run_data_.invalidate(); }
 
@@ -4152,16 +4152,16 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
   // variables not at integer values to achieve a feasible
   // solution. Valuable in the case where users make a heuristic
   // (partial) assignment of discrete variables
-  assert(model_.isMip() && solution_.value_valid);
+  assert(model_.isMip() && solution_r().value_valid);
   HighsLp& lp = model_.lp_;
   // Determine whether the solution contains undefined values, in
   // order to decide whether to check its feasibility
-  const bool contains_undefined_values = solution_.hasUndefined();
+  const bool contains_undefined_values = solution_r().hasUndefined();
   if (!contains_undefined_values) {
     bool valid, integral, feasible;
     // Determine whether this solution is integer feasible
     HighsStatus return_status = assessLpPrimalSolution(
-        "", options_, lp, solution_, valid, integral, feasible);
+        "", options_, lp, solution_r(), valid, integral, feasible);
     assert(return_status != HighsStatus::kError);
     assert(valid);
     // If the current solution is integer feasible, then it can be
@@ -4180,10 +4180,10 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
   HighsInt num_fixed_discrete_variable = 0;
   HighsInt num_unfixed_discrete_variable = 0;
   for (HighsInt iCol = 0; iCol < lp.num_col_; iCol++) {
-    const double primal = solution_.col_value[iCol];
+    const double primal = solution_r().col_value[iCol];
     // Default value is lower bound, unless primal is integer for a
     // discrete variable
-    solution_.col_value[iCol] = lp.col_lower_[iCol];
+    solution_r().col_value[iCol] = lp.col_lower_[iCol];
     if (lp.integrality_[iCol] == HighsVarType::kContinuous) continue;
     // Fix discrete variable if its value is defined and integer
     if (primal == kHighsUndefined) {
@@ -4209,7 +4209,7 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
       }
     }
   }
-  assert(!solution_.hasUndefined());
+  assert(!solution_r().hasUndefined());
   const HighsInt num_discrete_variable =
       num_unfixed_discrete_variable + num_fixed_discrete_variable;
   const HighsInt num_continuous_variable = lp.num_col_ - num_discrete_variable;
@@ -4258,14 +4258,14 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
   // been used to fix (a subset of) discrete variables - so a valid
   // solution will be obtained from optimizeModel() if the local model is
   // feasible - or it's not worth using the user solution
-  solution_.clear();
+  solution_r().clear();
   if (call_run) {
     // Solve the model, using mip_max_start_nodes for
     // mip_max_nodes...
     const HighsInt mip_max_nodes = options_.mip_max_nodes;
     options_.mip_max_nodes = options_.mip_max_start_nodes;
     // Solve the model
-    basis_.clear();
+    basis_r().clear();
     if (this->profiling_) {
       // Should not already be a sub-MIP, as handling a user-supplied
       // solution
@@ -4297,7 +4297,7 @@ HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
 HighsStatus Highs::callSolveLp(HighsLp& lp, const std::string& message) {
   HighsStatus return_status = HighsStatus::kOk;
 
-  HighsLpSolverObject solver_object(lp, basis_, solution_, info_, ekk_instance_,
+  HighsLpSolverObject solver_object(lp, basis_r(), solution_r(), info_r(), ekk_instance_,
                                     callback_, options_, timer_);
   solver_object.setProfiling(this->profiling_);
 
@@ -4307,7 +4307,7 @@ HighsStatus Highs::callSolveLp(HighsLp& lp, const std::string& message) {
   // Solve the LP
   return_status = solveLp(solver_object, message);
   // Extract the model status
-  model_status_ = solver_object.model_status_;
+  model_status_r() = solver_object.model_status_;
   return return_status;
 }
 #endif
@@ -4324,9 +4324,9 @@ HighsStatus Highs::callSolveQp() {
         options_.log_options, HighsLogType::kError,
         "Hessian dimension = %d is incompatible with matrix dimension = %d\n",
         int(hessian.dim_), int(lp.num_col_));
-    model_status_ = HighsModelStatus::kModelError;
-    solution_.value_valid = false;
-    solution_.dual_valid = false;
+    model_status_r() = HighsModelStatus::kModelError;
+    solution_r().value_valid = false;
+    solution_r().dual_valid = false;
     return HighsStatus::kError;
   }
 
@@ -4340,8 +4340,8 @@ HighsStatus Highs::callSolveQp() {
 
   if (use_hipo) {
     if (this->profiling_) this->profiling_->start(kSubSolverHipo);
-    return_status = solveHipo(options_, timer_, lp, hessian, basis_, solution_,
-                              model_status_, info_, callback_);
+    return_status = solveHipo(options_, timer_, lp, hessian, basis_r(), solution_r(),
+                              model_status_r(), info_r(), callback_);
     if (this->profiling_) this->profiling_->stop(kSubSolverHipo);
     if (return_status == HighsStatus::kError) return return_status;
   } else {
@@ -4480,8 +4480,8 @@ HighsStatus Highs::callSolveQp() {
     highsLogUser(options_.log_options, HighsLogType::kInfo,
                  "  Iteration        Objective     NullspaceDim\n");
 
-    QpAsmStatus status = solveqp(instance, settings, stats, model_status_,
-                                 basis_, solution_, timer_);
+    QpAsmStatus status = solveqp(instance, settings, stats, model_status_r(),
+                                 basis_r(), solution_r(), timer_);
     if (this->profiling_) this->profiling_->stop(kSubSolverQpAsm);
 
     // QP solver can fail, so should return something other than
@@ -4493,15 +4493,15 @@ HighsStatus Highs::callSolveQp() {
                                                     : HighsStatus::kOk;
 
     // Set the QP-specific values of info_
-    info_.simplex_iteration_count += stats.phase1_iterations;
-    info_.qp_iteration_count += stats.num_iterations;
+    info_r().simplex_iteration_count += stats.phase1_iterations;
+    info_r().qp_iteration_count += stats.num_iterations;
   }
 
   // Get the objective and any KKT failures
-  info_.objective_function_value = model_.objectiveValue(solution_.col_value);
-  getKktFailures(options_, model_, solution_, basis_, info_);
-  info_.valid = true;
-  if (model_status_ == HighsModelStatus::kOptimal) return checkOptimality("QP");
+  info_r().objective_function_value = model_.objectiveValue(solution_r().col_value);
+  getKktFailures(options_, model_, solution_r(), basis_r(), info_r());
+  info_r().valid = true;
+  if (model_status_r() == HighsModelStatus::kOptimal) return checkOptimality("QP");
   return return_status;
 }
 #endif  // HIGHS_RUST: highs/qpsolver/QpRust.cpp
@@ -4509,22 +4509,22 @@ HighsStatus Highs::callSolveQp() {
 #ifndef HIGHS_RUST
 HighsStatus Highs::callSolveMip() {
   // Record whether there is a valid primal solution on entry
-  const bool user_solution = solution_.value_valid;
+  const bool user_solution = solution_r().value_valid;
   std::vector<double> user_solution_col_value;
   std::vector<double> user_solution_row_value;
   if (user_solution) {
     // Save the col and row values
-    user_solution_col_value = std::move(solution_.col_value);
-    user_solution_row_value = std::move(solution_.row_value);
+    user_solution_col_value = std::move(solution_r().col_value);
+    user_solution_row_value = std::move(solution_r().row_value);
   }
   // Ensure that any solver data for users in Highs class members are
   // cleared
   invalidateSolverData();
   if (user_solution) {
     // Recover the col and row values
-    solution_.col_value = std::move(user_solution_col_value);
-    solution_.row_value = std::move(user_solution_row_value);
-    solution_.value_valid = true;
+    solution_r().col_value = std::move(user_solution_col_value);
+    solution_r().row_value = std::move(user_solution_row_value);
+    solution_r().value_valid = true;
   }
   // Run the MIP solver
   HighsInt log_dev_level = options_.log_dev_level;
@@ -4536,11 +4536,11 @@ HighsStatus Highs::callSolveMip() {
   if (has_semi_variables) {
     // Replace any semi-variables by a continuous/integer variable and
     // a (temporary) binary. Any initial solution must accommodate this.
-    use_lp = withoutSemiVariables(model_.lp_, solution_,
+    use_lp = withoutSemiVariables(model_.lp_, solution_r(),
                                   options_.primal_feasibility_tolerance);
   }
   HighsLp& lp = has_semi_variables ? use_lp : model_.lp_;
-  HighsMipSolver solver(callback_, options_, lp, solution_);
+  HighsMipSolver solver(callback_, options_, lp, solution_r());
   solver.setProfiling(this->profiling_);
   profiling_->start(kSubSolverMip);
   solver.run();
@@ -4550,7 +4550,7 @@ HighsStatus Highs::callSolveMip() {
   // model status
   HighsStatus return_status =
       highsStatusFromHighsModelStatus(solver.modelstatus_);
-  model_status_ = solver.modelstatus_;
+  model_status_r() = solver.modelstatus_;
   // Extract the solution
   if (solver.solution_objective_ != kHighsInf) {
     // There is a primal solution
@@ -4562,54 +4562,54 @@ HighsStatus Highs::callSolveMip() {
     // #2547 This resize is unnecessary
     //
     // solution_.col_value.resize(model_.lp_.num_col_);
-    solution_.col_value = solver.solution_;
+    solution_r().col_value = solver.solution_;
     this->saved_objective_and_solution_ = solver.saved_objective_and_solution_;
-    model_.lp_.a_matrix_.productQuad(solution_.row_value, solution_.col_value);
-    solution_.value_valid = true;
+    model_.lp_.a_matrix_.productQuad(solution_r().row_value, solution_r().col_value);
+    solution_r().value_valid = true;
   } else {
     // There is no primal solution: should be so by default
-    assert(!solution_.value_valid);
+    assert(!solution_r().value_valid);
   }
   // Check that no modified upper bounds for semi-variables are active
-  if (solution_.value_valid &&
-      activeModifiedUpperBounds(options_, model_.lp_, solution_.col_value)) {
-    solution_.value_valid = false;
-    model_status_ = HighsModelStatus::kSolveError;
+  if (solution_r().value_valid &&
+      activeModifiedUpperBounds(options_, model_.lp_, solution_r().col_value)) {
+    solution_r().value_valid = false;
+    model_status_r() = HighsModelStatus::kSolveError;
     return_status = HighsStatus::kError;
   }
   // There is no dual solution: should be so by default
-  assert(!solution_.dual_valid);
+  assert(!solution_r().dual_valid);
   // There is no basis: should be so by default
-  assert(!basis_.valid);
+  assert(!basis_r().valid);
   // Get the objective and any KKT failures
-  info_.objective_function_value = solver.solution_objective_;
+  info_r().objective_function_value = solver.solution_objective_;
   // Remember to judge primal feasibility according to
   // mip_feasibility_tolerance, so take a copy of the original
   // value...
   double primal_feasibility_tolerance = options_.primal_feasibility_tolerance;
   options_.primal_feasibility_tolerance = options_.mip_feasibility_tolerance;
   // NB getKktFailures sets the primal and dual solution status
-  getKktFailures(options_, model_, solution_, basis_, info_);
+  getKktFailures(options_, model_, solution_r(), basis_r(), info_r());
   // Set the MIP-specific values of info_
-  info_.mip_node_count = solver.node_count_;
-  info_.mip_dual_bound = solver.dual_bound_;
-  info_.mip_gap = solver.gap_;
-  info_.primal_dual_integral = solver.primal_dual_integral_;
+  info_r().mip_node_count = solver.node_count_;
+  info_r().mip_dual_bound = solver.dual_bound_;
+  info_r().mip_gap = solver.gap_;
+  info_r().primal_dual_integral = solver.primal_dual_integral_;
   // Get the number of LP iterations, avoiding overflow if the int64_t
   // value is too large
   int64_t mip_total_lp_iterations = solver.total_lp_iterations_;
-  info_.simplex_iteration_count = mip_total_lp_iterations > kHighsIInf
+  info_r().simplex_iteration_count = mip_total_lp_iterations > kHighsIInf
                                       ? -1
                                       : HighsInt(mip_total_lp_iterations);
-  info_.valid = true;
-  if (model_status_ == HighsModelStatus::kOptimal)
+  info_r().valid = true;
+  if (model_status_r() == HighsModelStatus::kOptimal)
     return_status = checkOptimality("MIP");
   // Overwrite max infeasibility to include integrality if there is a solution
   if (solver.solution_objective_ != kHighsInf) {
     const double mip_max_bound_violation =
         std::max(solver.row_violation_, solver.bound_violation_);
     const double delta_max_bound_violation =
-        std::abs(mip_max_bound_violation - info_.max_primal_infeasibility);
+        std::abs(mip_max_bound_violation - info_r().max_primal_infeasibility);
     // Possibly report a mis-match between the max bound violation
     // returned by the MIP solver, and the value obtained from the
     // solution
@@ -4617,12 +4617,12 @@ HighsStatus Highs::callSolveMip() {
       highsLogDev(options_.log_options, HighsLogType::kWarning,
                   "Inconsistent max bound violation: MIP solver (%10.4g); LP "
                   "(%10.4g); Difference of %10.4g\n",
-                  mip_max_bound_violation, info_.max_primal_infeasibility,
+                  mip_max_bound_violation, info_r().max_primal_infeasibility,
                   delta_max_bound_violation);
-    info_.max_integrality_violation = solver.integrality_violation_;
-    if (info_.max_integrality_violation > options_.mip_feasibility_tolerance) {
-      info_.primal_solution_status = kSolutionStatusInfeasible;
-      assert(model_status_ == HighsModelStatus::kInfeasible);
+    info_r().max_integrality_violation = solver.integrality_violation_;
+    if (info_r().max_integrality_violation > options_.mip_feasibility_tolerance) {
+      info_r().primal_solution_status = kSolutionStatusInfeasible;
+      assert(model_status_r() == HighsModelStatus::kInfeasible);
     }
   }
   // ... and remember to recover the primal feasibility tolerance
@@ -4680,24 +4680,24 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
     HighsPostsolveStatus postsolve_status = runPostsolve();
 
     if (postsolve_status == HighsPostsolveStatus::kSolutionRecovered) {
-      this->solution_ = presolve_.data_.recovered_solution_;
-      this->model_status_ = HighsModelStatus::kUnknown;
+      this->solution_r() = presolve_.data_.recovered_solution_;
+      this->model_status_r() = HighsModelStatus::kUnknown;
       invalidateInfo();
       HighsLp& lp = this->model_.lp_;
-      this->info_.objective_function_value =
-          computeObjectiveValue(lp, this->solution_);
+      this->info_r().objective_function_value =
+          computeObjectiveValue(lp, this->solution_r());
       const bool is_qp = this->model_.isQp();
       assert(!is_qp);
       const bool get_residuals = true;
       getKktFailures(this->options_, is_qp, this->model_.lp_,
-                     this->model_.lp_.col_cost_, this->solution_, this->info_,
+                     this->model_.lp_.col_cost_, this->solution_r(), this->info_r(),
                      get_residuals);
-      double& max_integrality_violation = this->info_.max_integrality_violation;
+      double& max_integrality_violation = this->info_r().max_integrality_violation;
       max_integrality_violation = 0;
       for (HighsInt iCol = 0; iCol < lp.num_col_; iCol++) {
         if (lp.integrality_[iCol] == HighsVarType::kInteger) {
           max_integrality_violation =
-              std::max(fractionality(this->solution_.col_value[iCol]),
+              std::max(fractionality(this->solution_r().col_value[iCol]),
                        max_integrality_violation);
         }
       }
@@ -4752,14 +4752,14 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
       highsLogDev(options_.log_options, HighsLogType::kVerbose,
                   "Postsolve finished\n");
       // Set solution and its status
-      solution_.clear();
-      solution_ = presolve_.data_.recovered_solution_;
-      assert(solution_.value_valid);
-      if (!solution_.dual_valid) {
-        solution_.col_dual.assign(model_.lp_.num_col_, 0);
-        solution_.row_dual.assign(model_.lp_.num_row_, 0);
+      solution_r().clear();
+      solution_r() = presolve_.data_.recovered_solution_;
+      assert(solution_r().value_valid);
+      if (!solution_r().dual_valid) {
+        solution_r().col_dual.assign(model_.lp_.num_col_, 0);
+        solution_r().row_dual.assign(model_.lp_.num_row_, 0);
       }
-      basis_ = presolve_.data_.recovered_basis_;
+      basis_r() = presolve_.data_.recovered_basis_;
       // Validity of the solution and basis should be inherited
       //
       // solution_.value_valid = true;
@@ -4771,8 +4771,8 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
       // basis_.useful = true;
       // basis_.col_status = presolve_.data_.recovered_basis_.col_status;
       // basis_.row_status = presolve_.data_.recovered_basis_.row_status;
-      basis_.debug_origin_name += ": after postsolve";
-      if (basis_.valid) {
+      basis_r().debug_origin_name += ": after postsolve";
+      if (basis_r().valid) {
         // Save the options to allow the best simplex strategy to be
         // used
         HighsOptions save_options = options_;
@@ -4786,7 +4786,7 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
         // The basis returned from postsolve is just basic/nonbasic
         // and EKK expects a refined basis, so set it up now
         HighsLp& incumbent_lp = model_.lp_;
-        refineBasis(incumbent_lp, solution_, basis_);
+        refineBasis(incumbent_lp, solution_r(), basis_r());
         // Scrap the EKK data from solving the presolved LP
         ekk_instance_.invalidate();
         ekk_instance_.lp_name_ = "Postsolve LP";
@@ -4805,7 +4805,7 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
         assert(!is_qp);
         const bool get_residuals = true;
         getKktFailures(this->options_, is_qp, this->model_.lp_,
-                       this->model_.lp_.col_cost_, this->solution_, this->info_,
+                       this->model_.lp_.col_cost_, this->solution_r(), this->info_r(),
                        get_residuals);
         if (return_status == HighsStatus::kError) {
           // Set undo_mods = false, since passing models requiring
@@ -4814,7 +4814,7 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
           return returnFromOptimizeModel(return_status, undo_mods);
         }
       } else {
-        this->basis_.clear();
+        this->basis_r().clear();
         // callLpKktCheck will set LPs with model status
         // HighsModelStatus::kUnknown; to HighsModelStatus::kOptimal
         // if relative primal and dual infeasibilities, and the
@@ -4827,17 +4827,17 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
         // To prevent this from being done with MIPs - if spurious
         // dual values have been set by a user! - set their model
         // status to HighsModelStatus::kNotset
-        this->model_status_ = this->model_.lp_.isMip()
+        this->model_status_r() = this->model_.lp_.isMip()
                                   ? HighsModelStatus::kNotset
                                   : HighsModelStatus::kUnknown;
         this->callLpKktCheck(this->model_.lp_);
-        info_.valid = true;
+        info_r().valid = true;
         highsLogUser(options_.log_options, HighsLogType::kInfo,
                      "\nPure postsolve yields primal %s basis: model "
                      "status is %s\n",
-                     solution_.dual_valid ? "and dual solution, but no"
+                     solution_r().dual_valid ? "and dual solution, but no"
                                           : "but no dual solution or",
-                     modelStatusToString(model_status_).c_str());
+                     modelStatusToString(model_status_r()).c_str());
       }
     } else {
       highsLogUser(options_.log_options, HighsLogType::kError,
@@ -4850,7 +4850,7 @@ HighsStatus Highs::callRunPostsolve(const HighsSolution& solution,
       return returnFromOptimizeModel(HighsStatus::kError, undo_mods);
     }
   }
-  call_status = highsStatusFromHighsModelStatus(model_status_);
+  call_status = highsStatusFromHighsModelStatus(model_status_r());
   return_status =
       interpretCallStatus(options_.log_options, call_status, return_status,
                           "highsStatusFromHighsModelStatus");
@@ -4897,39 +4897,39 @@ void Highs::forceHighsSolutionBasisSize() {
   const HighsInt num_col = this->model_.lp_.num_col_;
   const HighsInt num_row = this->model_.lp_.num_row_;
   // Values
-  if (solution_.col_value.size() < static_cast<size_t>(num_col) ||
-      solution_.row_value.size() < static_cast<size_t>(num_row)) {
-    solution_.value_valid = false;
-    info_.primal_solution_status = kSolutionStatusNone;
+  if (solution_r().col_value.size() < static_cast<size_t>(num_col) ||
+      solution_r().row_value.size() < static_cast<size_t>(num_row)) {
+    solution_r().value_valid = false;
+    info_r().primal_solution_status = kSolutionStatusNone;
   }
-  solution_.col_value.resize(num_col, 0);
-  solution_.row_value.resize(num_row, 0);
+  solution_r().col_value.resize(num_col, 0);
+  solution_r().row_value.resize(num_row, 0);
   // Duals
-  if (solution_.col_dual.size() < static_cast<size_t>(num_col) ||
-      solution_.row_dual.size() < static_cast<size_t>(num_row)) {
-    solution_.dual_valid = false;
-    info_.dual_solution_status = kSolutionStatusNone;
+  if (solution_r().col_dual.size() < static_cast<size_t>(num_col) ||
+      solution_r().row_dual.size() < static_cast<size_t>(num_row)) {
+    solution_r().dual_valid = false;
+    info_r().dual_solution_status = kSolutionStatusNone;
   }
-  solution_.col_dual.resize(num_col, 0);
-  solution_.row_dual.resize(num_row, 0);
+  solution_r().col_dual.resize(num_col, 0);
+  solution_r().row_dual.resize(num_row, 0);
   // Basis
-  if (basis_.col_status.size() != static_cast<size_t>(num_col) ||
-      basis_.row_status.size() != static_cast<size_t>(num_row)) {
-    basis_.valid = false;
-    basis_.useful = false;
-    info_.basis_validity = kBasisValidityInvalid;
+  if (basis_r().col_status.size() != static_cast<size_t>(num_col) ||
+      basis_r().row_status.size() != static_cast<size_t>(num_row)) {
+    basis_r().valid = false;
+    basis_r().useful = false;
+    info_r().basis_validity = kBasisValidityInvalid;
   }
-  basis_.col_status.resize(num_col, HighsBasisStatus::kNonbasic);
-  basis_.row_status.resize(num_row, HighsBasisStatus::kBasic);
+  basis_r().col_status.resize(num_col, HighsBasisStatus::kNonbasic);
+  basis_r().row_status.resize(num_row, HighsBasisStatus::kBasic);
 }
 #endif
 
 void Highs::setHighsModelStatusAndClearSolutionAndBasis(
     const HighsModelStatus model_status) {
-  model_status_ = model_status;
+  model_status_w() = model_status;
   invalidateSolution();
   invalidateBasis();
-  info_.valid = true;
+  info_w().valid = true;
 }
 
 HighsStatus Highs::openWriteFile(const std::string& filename,
@@ -4974,18 +4974,18 @@ HighsStatus Highs::returnFromWriteSolution(FILE* file,
 HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
                                            const bool undo_mods) {
   assert(!called_return_from_optimize_model);
-  HighsStatus return_status = highsStatusFromHighsModelStatus(model_status_);
+  HighsStatus return_status = highsStatusFromHighsModelStatus(model_status_r());
   if (return_status != run_return_status) {
     highsLogDev(
         options_.log_options, HighsLogType::kError,
         "Highs::returnFromOptimizeModel: run_return_status = %d != %d = "
-        "return_status = highsStatusFromHighsModelStatus(model_status_ = %s)\n",
+        "return_status = highsStatusFromHighsModelStatus(model_status_r() = %s)\n",
         int(run_return_status), int(return_status),
-        modelStatusToString(model_status_).c_str());
+        modelStatusToString(model_status_r()).c_str());
   }
   assert(return_status == run_return_status);
   //  return_status = run_return_status;
-  switch (model_status_) {
+  switch (model_status_r()) {
       // First consider the error returns
     case HighsModelStatus::kNotset:
     case HighsModelStatus::kLoadError:
@@ -5018,8 +5018,8 @@ HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
       // assert(info_.primal_solution_status == kSolutionStatusFeasible);
       //
       // assert(info_.dual_solution_status == kSolutionStatusFeasible);
-      assert(model_status_ == HighsModelStatus::kNotset ||
-             model_status_ == HighsModelStatus::kOptimal);
+      assert(model_status_r() == HighsModelStatus::kNotset ||
+             model_status_r() == HighsModelStatus::kOptimal);
       assert(return_status == HighsStatus::kOk);
       break;
 
@@ -5065,14 +5065,14 @@ HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
   }
   // Now to check what's available with each model status
   //
-  const bool have_info = info_.valid;
-  const bool have_primal_solution = solution_.value_valid;
-  const bool have_dual_solution = solution_.dual_valid;
+  const bool have_info = info_r().valid;
+  const bool have_primal_solution = solution_r().value_valid;
+  const bool have_dual_solution = solution_r().dual_valid;
   // Can't have a dual solution without a primal solution
   assert(have_primal_solution || !have_dual_solution);
   //  const bool have_solution = have_primal_solution && have_dual_solution;
-  const bool have_basis = basis_.valid;
-  switch (model_status_) {
+  const bool have_basis = basis_r().valid;
+  switch (model_status_r()) {
     case HighsModelStatus::kNotset:
     case HighsModelStatus::kLoadError:
     case HighsModelStatus::kModelError:
@@ -5107,29 +5107,29 @@ HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
       assert(1 == 0);
   }
   if (have_primal_solution) {
-    if (debugPrimalSolutionRightSize(options_, model_.lp_, solution_) ==
+    if (debugPrimalSolutionRightSize(options_, model_.lp_, solution_r()) ==
         HighsDebugStatus::kLogicalError)
       return_status = HighsStatus::kError;
   }
   if (have_dual_solution) {
-    if (debugDualSolutionRightSize(options_, model_.lp_, solution_) ==
+    if (debugDualSolutionRightSize(options_, model_.lp_, solution_r()) ==
         HighsDebugStatus::kLogicalError)
       return_status = HighsStatus::kError;
   }
   if (have_basis) {
-    if (debugBasisRightSize(options_, model_.lp_, basis_) ==
+    if (debugBasisRightSize(options_, model_.lp_, basis_r()) ==
         HighsDebugStatus::kLogicalError)
       return_status = HighsStatus::kError;
   }
   if (have_primal_solution) {
     // Debug the Highs solution - needs primal values at least
     if (debugHighsSolution("Return from optimizeModel()", options_, model_,
-                           solution_, basis_, model_status_,
-                           info_) == HighsDebugStatus::kLogicalError)
+                           solution_r(), basis_r(), model_status_r(),
+                           info_r()) == HighsDebugStatus::kLogicalError)
       return_status = HighsStatus::kError;
   }
-  if (debugInfo(options_, model_.lp_, basis_, solution_, info_,
-                model_status_) == HighsDebugStatus::kLogicalError)
+  if (debugInfo(options_, model_.lp_, basis_r(), solution_r(), info_r(),
+                model_status_r()) == HighsDebugStatus::kLogicalError)
     return_status = HighsStatus::kError;
 
   // Record that returnFromOptimizeModel() has been called
@@ -5157,7 +5157,7 @@ HighsStatus Highs::returnFromHighs(HighsStatus highs_return_status) {
   forceHighsSolutionBasisSize();
 
   const bool consistent =
-      debugHighsBasisConsistent(options_, model_.lp_, basis_) !=
+      debugHighsBasisConsistent(options_, model_.lp_, basis_r()) !=
       HighsDebugStatus::kLogicalError;
   if (!consistent) {
     highsLogUser(
@@ -5214,36 +5214,36 @@ void Highs::reportSolvedLpQpStats() {
     highsLogUser(log_options, HighsLogType::kInfo, "Model name          : %s\n",
                  model_.lp_.model_name_.c_str());
   highsLogUser(log_options, HighsLogType::kInfo, "Model status        : %s\n",
-               modelStatusToString(model_status_).c_str());
-  if (info_.valid) {
-    if (info_.simplex_iteration_count)
+               modelStatusToString(model_status_r()).c_str());
+  if (info_r().valid) {
+    if (info_r().simplex_iteration_count)
       highsLogUser(log_options, HighsLogType::kInfo,
                    "Simplex   iterations: %" HIGHSINT_FORMAT "\n",
-                   info_.simplex_iteration_count);
-    if (info_.ipm_iteration_count)
+                   info_r().simplex_iteration_count);
+    if (info_r().ipm_iteration_count)
       highsLogUser(log_options, HighsLogType::kInfo,
                    "IPM       iterations: %" HIGHSINT_FORMAT "\n",
-                   info_.ipm_iteration_count);
-    if (info_.crossover_iteration_count)
+                   info_r().ipm_iteration_count);
+    if (info_r().crossover_iteration_count)
       highsLogUser(log_options, HighsLogType::kInfo,
                    "Crossover iterations: %" HIGHSINT_FORMAT "\n",
-                   info_.crossover_iteration_count);
-    if (info_.pdlp_iteration_count)
+                   info_r().crossover_iteration_count);
+    if (info_r().pdlp_iteration_count)
       highsLogUser(log_options, HighsLogType::kInfo,
                    "PDLP      iterations: %" HIGHSINT_FORMAT "\n",
-                   info_.pdlp_iteration_count);
-    if (info_.qp_iteration_count)
+                   info_r().pdlp_iteration_count);
+    if (info_r().qp_iteration_count)
       highsLogUser(log_options, HighsLogType::kInfo,
                    "QP ASM    iterations: %" HIGHSINT_FORMAT "\n",
-                   info_.qp_iteration_count);
+                   info_r().qp_iteration_count);
     highsLogUser(log_options, HighsLogType::kInfo,
                  "Objective value     : %17.10e\n",
-                 info_.objective_function_value);
+                 info_r().objective_function_value);
   }
-  if (solution_.dual_valid)
+  if (solution_r().dual_valid)
     highsLogUser(log_options, HighsLogType::kInfo,
                  "P-D objective error : %17.10e\n",
-                 info_.primal_dual_objective_error);
+                 info_r().primal_dual_objective_error);
   if (!options_.timeless_log) {
     double run_time = timer_.read();
     highsLogUser(log_options, HighsLogType::kInfo,
@@ -5268,15 +5268,15 @@ HighsStatus Highs::crossover(const HighsSolution& user_solution) {
     return_status = HighsStatus::kError;
   } else {
     clearSolver();
-    solution_ = user_solution;
+    solution_r() = user_solution;
     // Use IPX crossover to try to form a basic solution
-    return_status = callCrossover(options_, model_.lp_, basis_, solution_,
-                                  model_status_, info_, callback_);
+    return_status = callCrossover(options_, model_.lp_, basis_r(), solution_r(),
+                                  model_status_r(), info_r(), callback_);
     if (return_status == HighsStatus::kError) return return_status;
     // Get the objective and any KKT failures
-    info_.objective_function_value =
-        model_.lp_.objectiveValue(solution_.col_value);
-    getLpKktFailures(options_, model_.lp_, solution_, basis_, info_);
+    info_r().objective_function_value =
+        model_.lp_.objectiveValue(solution_r().col_value);
+    getLpKktFailures(options_, model_.lp_, solution_r(), basis_r(), info_r());
   }
   return returnFromHighs(return_status);
 }

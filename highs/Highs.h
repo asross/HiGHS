@@ -456,7 +456,7 @@ class Highs {
   /**
    * @brief Get a const reference to the internal info values.
    */
-  const HighsInfo& getInfo() const { return info_; }
+  const HighsInfo& getInfo() const { return info_r(); }
 
   /**
    * @brief Get an info value as HighsInt/int64_t/double, and only if
@@ -566,7 +566,7 @@ class Highs {
    * @brief Return a const reference to the internal HighsSolution
    * instance
    */
-  const HighsSolution& getSolution() const { return solution_; }
+  const HighsSolution& getSolution() const { return solution_r(); }
 
   /**
    * @brief Return a const reference to the internal IIS LP instance
@@ -594,12 +594,14 @@ class Highs {
   /**
    * @brief Return a const reference to the internal HighsBasis instance
    */
-  const HighsBasis& getBasis() const { return basis_; }
+  const HighsBasis& getBasis() const { return basis_r(); }
 
   /**
    * @brief Return the status for the incumbent model.
    */
-  const HighsModelStatus& getModelStatus() const { return model_status_; }
+  const HighsModelStatus& getModelStatus() const {
+    return model_status_r();
+  }
 
   /**
    * @brief Returns the current model's presolve status
@@ -677,7 +679,9 @@ class Highs {
   /**
    * @brief Get the current model objective function value
    */
-  double getObjectiveValue() const { return info_.objective_function_value; }
+  double getObjectiveValue() const {
+    return info_r().objective_function_value;
+  }
 
   /**
    * @brief Try to get the current dual objective function value
@@ -1554,7 +1558,7 @@ class Highs {
 
   HighsInt getSimplexIterationCount() {
     deprecationMessage("getSimplexIterationCount", "None");
-    return info_.simplex_iteration_count;
+    return info_r().simplex_iteration_count;
   }
 
   HighsStatus setHighsLogfile(FILE* logfile = nullptr);
@@ -1632,8 +1636,52 @@ class Highs {
 
   // End of deprecated methods
  private:
+#ifdef HIGHS_RUST
+  // The solution, basis, info and model status are the engine's (its
+  // LpRun, rust/src/lp_data/lp_run.rs); these are their mirrors, which the
+  // API hands out. C++ reads them through the _r() accessors; C++ that
+  // changes them goes through the _w() ones, which mark the mirror newer,
+  // and the engine takes the mirror at the next call into it
+  // (HighsRunRust.cpp topIn); every call into the engine leaves its values
+  // in the mirror (topOut)
+  HighsSolution solution_c_;
+  HighsBasis basis_c_;
+  HighsInfo info_c_;
+  HighsModelStatus model_status_c_ = HighsModelStatus::kNotset;
+  // The mirror has changes the engine lacks
+  bool run_cpp_newer_ = true;
+  const HighsSolution& solution_r() const { return solution_c_; }
+  HighsSolution& solution_w() {
+    run_cpp_newer_ = true;
+    return solution_c_;
+  }
+  const HighsBasis& basis_r() const { return basis_c_; }
+  HighsBasis& basis_w() {
+    run_cpp_newer_ = true;
+    return basis_c_;
+  }
+  const HighsInfo& info_r() const { return info_c_; }
+  HighsInfo& info_w() {
+    run_cpp_newer_ = true;
+    return info_c_;
+  }
+  const HighsModelStatus& model_status_r() const { return model_status_c_; }
+  HighsModelStatus& model_status_w() {
+    run_cpp_newer_ = true;
+    return model_status_c_;
+  }
+#else
   HighsSolution solution_;
   HighsBasis basis_;
+  const HighsSolution& solution_r() const { return solution_; }
+  HighsSolution& solution_w() { return solution_; }
+  const HighsBasis& basis_r() const { return basis_; }
+  HighsBasis& basis_w() { return basis_; }
+  const HighsInfo& info_r() const { return info_; }
+  HighsInfo& info_w() { return info_; }
+  const HighsModelStatus& model_status_r() const { return model_status_; }
+  HighsModelStatus& model_status_w() { return model_status_; }
+#endif
   ICrashInfo icrash_info_;
 
 #ifdef HIGHS_RUST
@@ -1700,7 +1748,9 @@ class Highs {
 
   HighsCallback callback_;
   HighsOptions options_;
+#ifndef HIGHS_RUST
   HighsInfo info_;
+#endif
   HighsRunData run_data_;
   HighsRanging ranging_;
   HighsIis iis_;
@@ -1708,7 +1758,9 @@ class Highs {
 
   HighsPresolveStatus model_presolve_status_ =
       HighsPresolveStatus::kNotPresolved;
+#ifndef HIGHS_RUST
   HighsModelStatus model_status_ = HighsModelStatus::kNotset;
+#endif
 
   bool standard_form_valid_;
   double standard_form_offset_;

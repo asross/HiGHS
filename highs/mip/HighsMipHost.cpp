@@ -7,9 +7,10 @@
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /**@file mip/HighsMipHost.cpp
  * @brief The Highs object's side of the Rust MIP solver
- * (rust/src/mip/host): the solve's entry and result, and what the solver
- * calls on the Highs object (rust/src/mip/host/mod.rs HighsFns): the
- * HighsProfiling clocks, the user callback and the improving solution file
+ * (rust/src/mip/host), whose solve and presolve are its engine's
+ * (rust/src/lp_data/top.rs): what the solver calls on the Highs object
+ * (rust/src/mip/host/mod.rs HighsFns): the HighsProfiling clocks, the user
+ * callback and the improving solution file
  */
 #include "mip/HighsMipHost.h"
 
@@ -51,67 +52,10 @@ struct RsHighsFns {
   void (*improving_file)(void*, int, const double*, int);
 };
 
-// rust/src/mip/host/entry.rs MipIn
-struct RsMipIn {
-  void* host;
-  void* profiling;
-  RsLog log;
-  highs_rs::LpHandle* opts;
-  const RsLp* lp;
-  const char* model_name;
-  size_t model_name_len;
-  const double* col_value;
-  size_t num_col_value;
-  const double* row_value;
-  size_t num_row_value;
-  bool value_valid;
-  HighsInt presolve_reduction_limit;
-};
-
-// rust/src/mip/host/entry.rs MipOut
-struct RsMipOut {
-  int model_status;
-  double solution_objective;
-  int64_t node_count;
-  int64_t total_lp_iterations;
-  double dual_bound;
-  double primal_bound;
-  double gap;
-  double primal_dual_integral;
-  double row_violation;
-  double bound_violation;
-  double integrality_violation;
-  const double* solution;
-  size_t num_solution;
-  size_t num_saved;
-  int presolve_status;
-  RsLp presolved;
-  const char* presolved_name;
-  size_t presolved_name_len;
-  const char* data;
-  size_t data_len;
-  const void* reductions;
-  size_t num_reductions;
-  const HighsInt* orig_col_index;
-  size_t num_col;
-  const HighsInt* orig_row_index;
-  size_t num_row;
-  const uint8_t* linearly_transformable;
-  size_t num_lt;
-  HighsInt orig_num_col;
-  HighsInt orig_num_row;
-  void* solver;
-};
-
 }  // namespace
 
 extern "C" {
 void highs_rs_mip_register(const RsHighsFns* f);
-RsMipOut* highs_rs_mip_solve(const RsMipIn* in);
-RsMipOut* highs_rs_mip_presolve(const RsMipIn* in);
-const double* highs_rs_mip_saved(const RsMipOut* o, size_t k,
-                                 double* objective, size_t* n);
-void highs_rs_mip_out_free(RsMipOut* o);
 }
 
 namespace {
@@ -302,66 +246,8 @@ void cbImprovingFile(void* ctx, int op, const double* sol, int n) {
 const RsHighsFns kHighsFns = {cbProfiling, cbCallback, cbUserSolution,
                               cbCutPoolOutput, cbImprovingFile};
 
-// The solve's input; `lpv` and `opts` live as long as it
-RsMipIn mipIn(MipHost& host, HighsProfiling* profiling, const RsLp& lpv,
-              highs_rs::LpHandle* opts, const HighsSolution& solution) {
-  highs_rs_mip_register(&kHighsFns);
-  const HighsLp& lp = *host.lp;
-  RsMipIn in;
-  in.host = &host;
-  in.profiling = profiling;
-  in.log = rsLog(host.options->log_options);
-  in.opts = opts;
-  in.lp = &lpv;
-  in.model_name = lp.model_name_.data();
-  in.model_name_len = lp.model_name_.size();
-  in.value_valid = solution.value_valid;
-  in.col_value = solution.col_value.data();
-  in.num_col_value = solution.col_value.size();
-  in.row_value = solution.row_value.data();
-  in.num_row_value = solution.row_value.size();
-  in.presolve_reduction_limit = host.options->presolve_reduction_limit;
-  return in;
-}
-
-template <typename T, typename V>
-void take(std::vector<T>& vec, const V& r) {
-  vec.assign(r.ptr, r.ptr + r.len);
-}
-
 }  // namespace
 
-HighsMipRun::HighsMipRun(HighsCallback& callback, const HighsOptions& options,
-                         const HighsLp& lp, const HighsSolution& solution,
-                         HighsProfiling* profiling) {
-  MipHost host{&callback, &options, &lp, nullptr};
-  HighsLpHandle opts;
-  rsSyncOptions(opts.p, options);
-  HighsLp& lpm = const_cast<HighsLp&>(lp);
-  const RsLp lpv = rsLp(lpm);
-  const RsMipIn in = mipIn(host, profiling, lpv, opts.p, solution);
-  RsMipOut* out = highs_rs_mip_solve(&in);
-  modelstatus_ = HighsModelStatus(out->model_status);
-  solution_objective_ = out->solution_objective;
-  node_count_ = out->node_count;
-  total_lp_iterations_ = out->total_lp_iterations;
-  dual_bound_ = out->dual_bound;
-  primal_bound_ = out->primal_bound;
-  gap_ = out->gap;
-  primal_dual_integral_ = out->primal_dual_integral;
-  row_violation_ = out->row_violation;
-  bound_violation_ = out->bound_violation;
-  integrality_violation_ = out->integrality_violation;
-  solution_.assign(out->solution, out->solution + out->num_solution);
-  for (size_t k = 0; k < out->num_saved; ++k) {
-    HighsObjectiveSolution record;
-    size_t n;
-    const double* v = highs_rs_mip_saved(out, k, &record.objective, &n);
-    record.col_value.assign(v, v + n);
-    saved_objective_and_solution_.push_back(std::move(record));
-  }
-  highs_rs_mip_out_free(out);
-}
 
 void* highsMipHostNew(HighsCallback& callback, const HighsOptions& options,
                       const HighsLp& lp, const bool semi) {
@@ -378,64 +264,5 @@ void* highsMipHostNew(HighsCallback& callback, const HighsOptions& options,
 
 void highsMipHostFree(void* host) { delete static_cast<MipHost*>(host); }
 
-HighsPresolveStatus highsMipPresolve(HighsCallback& callback,
-                                     const HighsOptions& options,
-                                     const HighsLp& lp,
-                                     const HighsSolution& solution,
-                                     HighsProfiling* profiling,
-                                     HighsLp& presolved,
-                                     presolve::HighsPostsolveStack& stack) {
-  MipHost host{&callback, &options, &lp, nullptr};
-  HighsLpHandle opts;
-  rsSyncOptions(opts.p, options);
-  HighsLp& lpm = const_cast<HighsLp&>(lp);
-  const RsLp lpv = rsLp(lpm);
-  const RsMipIn in = mipIn(host, profiling, lpv, opts.p, solution);
-  RsMipOut* out = highs_rs_mip_presolve(&in);
-  const HighsPresolveStatus status = HighsPresolveStatus(out->presolve_status);
-  // the presolved model: the model's other members, the presolve's data
-  presolved = lp;
-  const RsLp& v = out->presolved;
-  presolved.num_col_ = v.num_col;
-  presolved.num_row_ = v.num_row;
-  take(presolved.col_cost_, v.col_cost);
-  take(presolved.col_lower_, v.col_lower);
-  take(presolved.col_upper_, v.col_upper);
-  take(presolved.row_lower_, v.row_lower);
-  take(presolved.row_upper_, v.row_upper);
-  HighsSparseMatrix& a = presolved.a_matrix_;
-  a.format_ = MatrixFormat(v.a.format);
-  a.num_col_ = v.a.num_col;
-  a.num_row_ = v.a.num_row;
-  take(a.start_, v.a.start);
-  take(a.p_end_, v.a.p_end);
-  take(a.index_, v.a.index);
-  take(a.value_, v.a.value);
-  presolved.sense_ = ObjSense(v.sense);
-  presolved.offset_ = v.offset;
-  const HighsVarType* integrality =
-      reinterpret_cast<const HighsVarType*>(v.integrality.ptr);
-  presolved.integrality_.assign(integrality, integrality + v.integrality.len);
-  presolved.model_name_.assign(out->presolved_name, out->presolved_name_len);
-  // the names follow the index maps
-  if (lp.col_names_.size() > 0) {
-    std::vector<std::string> names(out->num_col);
-    for (size_t i = 0; i != out->num_col; ++i)
-      names[i] = lp.col_names_[out->orig_col_index[i]];
-    presolved.col_names_ = std::move(names);
-  }
-  if (lp.row_names_.size() > 0) {
-    std::vector<std::string> names(out->num_row);
-    for (size_t i = 0; i != out->num_row; ++i)
-      names[i] = lp.row_names_[out->orig_row_index[i]];
-    presolved.row_names_ = std::move(names);
-  }
-  stack.rustSet(out->data, out->data_len, out->reductions, out->num_reductions,
-                out->orig_col_index, out->num_col, out->orig_row_index,
-                out->num_row, out->linearly_transformable, out->num_lt,
-                out->orig_num_col, out->orig_num_row);
-  highs_rs_mip_out_free(out);
-  return status;
-}
 
 #endif  // HIGHS_RUST

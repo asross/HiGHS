@@ -295,15 +295,7 @@ RsRunStr rsRunStr(const std::string& s) { return {s.data(), s.size()}; }
 }  // namespace
 
 extern "C" {
-int highs_rs_called_optimize_model(const RsHighs* h);
-int highs_rs_return_from_optimize_model(const RsHighs* h, int status,
-                                        bool undo_mods);
 int highs_rs_return_from_highs(const RsHighs* h, int status);
-int highs_rs_run_presolve(const RsHighs* h, bool force_lp_presolve,
-                          bool force_presolve);
-int highs_rs_run_postsolve(const RsHighs* h);
-void highs_rs_lps_run_import(void* lps, const RsRunData* d);
-void highs_rs_lps_run_export(void* lps, RsRunData* d);
 bool highs_rs_lps_presolve_export(void* lps, RsLpVec* lp, RsPresolveExport* out);
 }
 
@@ -342,7 +334,9 @@ enum : uint32_t {
 }  // namespace
 
 extern "C" {
-void highs_rs_lph_top_import(highs_rs::LpHandle* p, const RsTopData* d);
+void highs_rs_lph_top_import(highs_rs::LpHandle* p, const RsTopData* d,
+                             bool run);
+bool highs_rs_lph_top_run_matches(highs_rs::LpHandle* p, const RsTopData* d);
 uint32_t highs_rs_lph_top_changed(highs_rs::LpHandle* p);
 void highs_rs_lph_top_export(highs_rs::LpHandle* p, RsTopData* d);
 RsPresolveRecords highs_rs_lph_top_records(highs_rs::LpHandle* p);
@@ -465,12 +459,6 @@ highs_rs::LphHost rsEngineHost(Highs* highs) {
 }
 
 // The engine's model is a copy of `lp`
-static void rsImportModel(highs_rs::LpHandle* e, const HighsLp& lp) {
-  const RsLp v = rsLp(lp);
-  highs_rs::highs_rs_lph_import_model(e, &v, lp.model_name_.data(),
-                                      lp.model_name_.size());
-}
-
 // `lp` takes the engine model's scale factors (and its matrix, if the run
 // rebuilt it: HEkk::lpBack)
 static void rsModelBack(highs_rs::LpHandle* e, HighsLp& lp) {
@@ -566,7 +554,9 @@ void Highs::lpToRust() {
     }
     return;
   }
-  rsImportModel(ekk_instance_.p, lp);
+  const RsLp v = rsLp(lp);
+  highs_rs::highs_rs_lph_import_model(ekk_instance_.p, &v, lp.model_name_.data(),
+                                      lp.model_name_.size());
   lp_cpp_newer_ = false;
 }
 
@@ -658,26 +648,16 @@ static_assert(sizeof(highs_rs::HEkkShared) == 144,
 struct HighsRunRust {
   explicit HighsRunRust(Highs& highs) : h(highs) {}
   Highs& h;
-  // The options saved by kSaveOptions
-  std::unique_ptr<HighsOptions> saved_options;
   // An exception thrown by a step (a cancelled task's HighsTask::Interrupt),
   // rethrown once Rust has returned; no step is made after it
   std::exception_ptr pending;
   // The state of the drivers (drivers.rs) between steps
-  HighsLp mip_lp;
-  std::unique_ptr<HighsMipRun> mip_solver;
-  double saved_tolerance = 0;
-  HighsInt saved_mip_max_nodes = 0;
-  std::vector<double> saved_lower, saved_upper, saved_cost;
-  std::vector<HighsVarType> saved_integrality;
+  std::vector<double> saved_cost;
   HighsHessian saved_hessian;
   std::string saved_presolve;
   bool saved_solve_relaxation = false;
   bool saved_allow_unbounded_or_infeasible = false;
-  const HighsSolution* user_solution = nullptr;
-  const HighsBasis* user_basis = nullptr;
   HighsModel* user_model = nullptr;
-  HighsHessian* user_hessian = nullptr;
   HighsModel read_model;
   HighsBasis read_basis;
 
@@ -735,22 +715,22 @@ struct HighsRunRust {
 
   // The Highs object's data for the LP run on Rust data
   RsRunData runData(RsBasisVec& basis) {
-    basis = rsBasisVec(h.basis_);
+    basis = rsBasisVec(h.basis_w());
     RsRunData d;
-    d.col_value = rsVec(h.solution_.col_value);
-    d.col_dual = rsVec(h.solution_.col_dual);
-    d.row_value = rsVec(h.solution_.row_value);
-    d.row_dual = rsVec(h.solution_.row_dual);
-    d.value_valid = &h.solution_.value_valid;
-    d.dual_valid = &h.solution_.dual_valid;
+    d.col_value = rsVec(h.solution_w().col_value);
+    d.col_dual = rsVec(h.solution_w().col_dual);
+    d.row_value = rsVec(h.solution_w().row_value);
+    d.row_dual = rsVec(h.solution_w().row_dual);
+    d.value_valid = &h.solution_w().value_valid;
+    d.dual_valid = &h.solution_w().dual_valid;
     d.basis = &basis;
     d.origin = {reinterpret_cast<uint8_t*>(
-                    const_cast<char*>(h.basis_.debug_origin_name.data())),
-                h.basis_.debug_origin_name.size()};
-    d.origin_ctx = &h.basis_.debug_origin_name;
+                    const_cast<char*>(h.basis_r().debug_origin_name.data())),
+                h.basis_r().debug_origin_name.size()};
+    d.origin_ctx = &h.basis_w().debug_origin_name;
     d.set_origin = setOrigin;
-    d.info = static_cast<HighsInfoStruct*>(&h.info_);
-    d.model_status = &h.model_status_;
+    d.info = static_cast<HighsInfoStruct*>(&h.info_w());
+    d.model_status = &h.model_status_w();
     return d;
   }
 
@@ -781,9 +761,14 @@ struct HighsRunRust {
         std::abort();
     }
     h.lpToRust();
+    // (the views below are made through the writers' accessors)
+    const bool run_newer = h.run_cpp_newer_;
     RsBasisVec basis;
     const RsTopData d = topData(basis);
-    highs_rs_lph_top_import(e, &d);
+    if (!run_newer && kRsCheckSync && !highs_rs_lph_top_run_matches(e, &d))
+      std::abort();
+    highs_rs_lph_top_import(e, &d, run_newer);
+    h.run_cpp_newer_ = false;
   }
 
   // The engine's data back into the Highs object's copies after a call
@@ -812,7 +797,9 @@ struct HighsRunRust {
     }
     if (changed & kXClearPresolve) h.clearPresolve();
     highs_rs_lph_top_export(e, &d);
-    rsBasisVecBack(basis, h.basis_);
+    rsBasisVecBack(basis, h.basis_w());
+    // The mirror is the engine's
+    h.run_cpp_newer_ = false;
     if (changed & kXTakeModel) {
       // The passed model's names and the members the engine's model does
       // not hold
@@ -998,16 +985,16 @@ struct HighsRunRust {
     v.ctx = this;
     v.op = op;
     v.clock = clock;
-    v.model_status = &h.model_status_;
+    v.model_status = &h.model_status_w();
     v.presolve_status = &h.model_presolve_status_;
-    v.info = static_cast<HighsInfoStruct*>(&h.info_);
+    v.info = static_cast<HighsInfoStruct*>(&h.info_w());
     v.run_data = static_cast<HighsRunDataStruct*>(&h.run_data_);
-    v.value_valid = &h.solution_.value_valid;
-    v.dual_valid = &h.solution_.dual_valid;
-    v.basis_valid = &h.basis_.valid;
-    v.basis_alien = &h.basis_.alien;
-    v.basis_useful = &h.basis_.useful;
-    v.basis_was_alien = &h.basis_.was_alien;
+    v.value_valid = &h.solution_w().value_valid;
+    v.dual_valid = &h.solution_w().dual_valid;
+    v.basis_valid = &h.basis_w().valid;
+    v.basis_alien = &h.basis_w().alien;
+    v.basis_useful = &h.basis_w().useful;
+    v.basis_was_alien = &h.basis_w().was_alien;
     v.called_return = &h.called_return_from_optimize_model;
     v.o.solver = rsRunStr(o.solver);
     v.o.run_crossover = rsRunStr(o.run_crossover);
@@ -1046,30 +1033,6 @@ struct HighsRunRust {
   int64_t step(RunOp which, int64_t arg, void* p, const char* m, size_t len) {
     HighsOptions& options = h.options_;
     switch (which) {
-      case RunOp::kClearSolver:
-        h.clearSolver();
-        return 0;
-      case RunOp::kHandleInfCost:
-        return st(h.handleInfCost());
-      case RunOp::kExactResizeModel:
-        // Both copies of the model (HighsLp::exactResize changes no
-        // values of a model whose vectors have its dimensions)
-        h.model_cache_.lp_.exactResize();
-        h.model_cache_.hessian_.exactResize();
-        if (!h.lp_cpp_newer_)
-          highs_rs::highs_rs_lph_exact_resize_model(h.ekk_instance_.p);
-        return 0;
-      case RunOp::kCompleteSolution:
-        return st(h.completeSolutionFromDiscreteAssignment());
-      case RunOp::kInvalidateInfo:
-        h.invalidateInfo();
-        return 0;
-      case RunOp::kInvalidateRunData:
-        h.invalidateRunData();
-        return 0;
-      case RunOp::kInvalidateBasis:
-        h.invalidateBasis();
-        return 0;
       case RunOp::kFacts: {
         RsFacts& f = *static_cast<RsFacts*>(p);
         const HighsLp& lp = lpOf(arg);
@@ -1084,131 +1047,9 @@ struct HighsRunRust {
         f.model_name = rsRunStr(lp.model_name_);
         return 0;
       }
-      case RunOp::kEnsureColwise:
-        if (!h.model_r().lp_.a_matrix_.isColwise())
-          h.model_w().lp_.ensureColwise();
-        return 0;
-      case RunOp::kHasLargeValue:
-        // (hasLargeValue only reads)
-        return const_cast<HighsSparseMatrix&>(h.model_r().lp_.a_matrix_)
-            .hasLargeValue(options.large_matrix_value);
-      case RunOp::kDebugAssess: {
-        HighsStatus return_status = HighsStatus::kOk;
-        HighsStatus call_status = assessLp(h.model_w().lp_, options);
-        assert(call_status == HighsStatus::kOk);
-        return_status = interpretCallStatus(options.log_options, call_status,
-                                            return_status, "assessLp");
-        if (return_status == HighsStatus::kError) return st(return_status);
-        if (checkOptions(options.log_options, options.records) !=
-            OptionStatus::kOk)
-          return st(HighsStatus::kError);
-        return st(return_status);
-      }
-      case RunOp::kAssessSemiVariables:
-        if (h.model_r().lp_.integrality_.empty()) {
-          // assessSemiVariables changes nothing
-          *static_cast<bool*>(p) = false;
-          return st(HighsStatus::kOk);
-        }
-        return st(assessSemiVariables(h.model_w().lp_, options,
-                                      *static_cast<bool*>(p)));
-      case RunOp::kRelaxSemiVariables: {
-        bool made = false;
-        relaxSemiVariables(h.model_w().lp_, made);
-        return made;
-      }
-      case RunOp::kOkHessianDiagonal:
-        return okHessianDiagonal(options, h.model_cache_.hessian_,
-                                 h.model_r().lp_.sense_);
-      case RunOp::kCallSolveQp:
-        return st(h.callSolveQp());
-      case RunOp::kCallSolveMip:
-        return st(h.callSolveMip());
-      case RunOp::kBasisForSolution:
-        return st(h.basisForSolution());
-      case RunOp::kBasisClear:
-        h.basis_.clear();
-        return 0;
-      case RunOp::kRefineBasis:
-        refineBasis(h.model_r().lp_, h.solution_, h.basis_);
-        return 0;
-      case RunOp::kPrepareReducedLp: {
-        HighsLp& reduced_lp = h.presolve_.getReducedProblem();
-        reduced_lp.origin_name_ = "Reduced LP";
-        reduced_lp.setMatrixDimensions();
-        if (kAllowDeveloperAssert) {
-          assert(assessLp(reduced_lp, options) == HighsStatus::kOk);
-        } else {
-          reduced_lp.a_matrix_.assessSmallValues(options.log_options,
-                                                 options.small_matrix_value);
-        }
-        return st(cleanBounds(options, reduced_lp));
-      }
       case RunOp::kEkkClear:
         h.ekk_instance_.clear();
         return 0;
-      case RunOp::kReducedToEmpty:
-        h.solution_.clear();
-        h.basis_.clear();
-        h.basis_.debug_origin_name = "Presolve to empty";
-        h.basis_.valid = true;
-        h.basis_.alien = false;
-        h.basis_.useful = true;
-        h.basis_.was_alien = false;
-        h.solution_.value_valid = true;
-        h.solution_.dual_valid = true;
-        return 0;
-      case RunOp::kSaveOptions:
-        saved_options.reset(new HighsOptions(options));
-        return 0;
-      case RunOp::kRestoreOptions:
-        options = *saved_options;
-        return 0;
-      case RunOp::kCopyToPresolve:
-        h.presolve_.data_.recovered_solution_ = h.solution_;
-        h.presolve_.data_.recovered_basis_ = h.basis_;
-        return 0;
-      case RunOp::kKktCheck:
-        h.callLpKktCheck(lpOf(arg), std::string(m, len));
-        return 0;
-      case RunOp::kRecoveredValidity: {
-        const HighsSolution& s = h.presolve_.data_.recovered_solution_;
-        return int64_t(s.value_valid) | (int64_t(s.dual_valid) << 1);
-      }
-      case RunOp::kPostsolveUndo:
-        h.presolve_.data_.postSolveStack.undo(
-            options, h.presolve_.data_.recovered_solution_,
-            h.presolve_.data_.recovered_basis_);
-        assert(h.model_r().lp_.a_matrix_.isColwise());
-        calculateRowValuesQuad(h.model_r().lp_,
-                               h.presolve_.data_.recovered_solution_);
-        if (arg && h.model_r().lp_.sense_ == ObjSense::kMaximize)
-          h.presolve_.negateReducedLpColDuals();
-        return 0;
-      case RunOp::kSetPostsolveStatus:
-        h.presolve_.postsolve_status_ = HighsPostsolveStatus(arg);
-        return 0;
-      case RunOp::kTakeRecoveredSolution:
-        h.solution_.clear();
-        h.solution_ = h.presolve_.data_.recovered_solution_;
-        return 0;
-      case RunOp::kTakeRecoveredBasis:
-        h.basis_.col_status = h.presolve_.data_.recovered_basis_.col_status;
-        h.basis_.row_status = h.presolve_.data_.recovered_basis_.row_status;
-        h.basis_.debug_origin_name += ": after postsolve";
-        return 0;
-      case RunOp::kDebugPostsolveSolution:
-        return debugHighsSolution("After returning from postsolve", options,
-                                  h.model_r(), h.solution_, h.basis_) ==
-               HighsDebugStatus::kLogicalError;
-      case RunOp::kUndoMods: {
-        HighsStatus return_status = HighsStatus(arg);
-        h.restoreInfCost(return_status);
-        if (h.model_r().lp_.hasMods()) h.model_w().lp_.unapplyMods();
-        return st(return_status);
-      }
-      case RunOp::kDebugReturn:
-        return debugReturn();
       case RunOp::kForceSolutionBasisSize:
         h.forceHighsSolutionBasisSize();
         return 0;
@@ -1224,49 +1065,6 @@ struct HighsRunRust {
       case RunOp::kEkkFactorCompatible:
         return highs_rs::highs_rs_lph_factor_row_compatible(
             h.ekk_instance_.p, h.lpNumRow());
-      case RunOp::kPresolveClear:
-        h.presolve_.clear();
-        return 0;
-      case RunOp::kMipPresolve: {
-        // the MIP presolve is Rust's (rust/src/mip/host)
-        const HighsPresolveStatus status = highsMipPresolve(
-            h.callback_, options, h.model_r().lp_, h.solution_, h.profiling_,
-            h.presolve_.data_.reduced_lp_, h.presolve_.data_.postSolveStack);
-        h.presolve_.presolve_status_ = status;
-        return int64_t(status);
-      }
-      case RunOp::kPresolveInit:
-        h.presolve_.init(h.model_r().lp_, h.timer_);
-        h.presolve_.options_ = &options;
-        return 0;
-      case RunOp::kPresolveRun:
-        return int64_t(h.presolve_.run());
-      case RunOp::kPresolveLog:
-        h.presolve_log_ = h.presolve_.getPresolveLog();
-        return int64_t(h.presolve_.presolve_status_);
-      case RunOp::kPresolveRemoved: {
-        const HighsInt* removed = static_cast<const HighsInt*>(p);
-        h.presolve_.info_.n_cols_removed = removed[0];
-        h.presolve_.info_.n_rows_removed = removed[1];
-        h.presolve_.info_.n_nnz_removed = removed[2];
-        if (arg) h.presolve_.getReducedProblem().clearScale();
-        return 0;
-      }
-      case RunOp::kClearReducedIntegrality:
-        h.presolve_.data_.reduced_lp_.integrality_.clear();
-        return 0;
-      case RunOp::kPresolveTime:
-        (arg ? h.presolve_.info_.postsolve_time
-             : h.presolve_.info_.presolve_time) = *static_cast<double*>(p);
-        return 0;
-      case RunOp::kLpView:
-        if (arg == 2) {
-          // Rust changed the model's LP through its view
-          h.model_w();
-          return 0;
-        }
-        *static_cast<RsLp*>(p) = rsLp(lpOf(arg));
-        return 0;
       default:
         return driverStep(which, arg, p, m, len);
     }
@@ -1283,113 +1081,6 @@ struct HighsRunRust {
 #define lpR (h.model_r().lp_)
 #define lpW (h.model_w().lp_)
     switch (which) {
-      case RunOp::kMipRun: {
-        const bool user_solution = h.solution_.value_valid;
-        std::vector<double> user_col_value, user_row_value;
-        if (user_solution) {
-          user_col_value = std::move(h.solution_.col_value);
-          user_row_value = std::move(h.solution_.row_value);
-        }
-        h.invalidateSolverData();
-        if (user_solution) {
-          h.solution_.col_value = std::move(user_col_value);
-          h.solution_.row_value = std::move(user_row_value);
-          h.solution_.value_valid = true;
-        }
-        const HighsInt log_dev_level = options.log_dev_level;
-        assert(lpR.a_matrix_.format_ != MatrixFormat::kRowwise);
-        const bool has_semi_variables = lpR.hasSemiVariables();
-        if (has_semi_variables)
-          mip_lp = withoutSemiVariables(lpR, h.solution_,
-                                        options.primal_feasibility_tolerance);
-        // the MIP solver is Rust's (rust/src/mip/host)
-        h.profiling_->start(kSubSolverMip);
-        mip_solver.reset(new HighsMipRun(h.callback_, options,
-                                         has_semi_variables ? mip_lp : lpR,
-                                         h.solution_, h.profiling_));
-        h.profiling_->stop(kSubSolverMip);
-        HighsMipRun& solver = *mip_solver;
-        options.log_dev_level = log_dev_level;
-        RsMipResult& r = *static_cast<RsMipResult*>(p);
-        r.model_status = HighsInt(solver.modelstatus_);
-        r.solution_objective = solver.solution_objective_;
-        r.node_count = solver.node_count_;
-        r.total_lp_iterations = solver.total_lp_iterations_;
-        r.dual_bound = solver.dual_bound_;
-        r.gap = solver.gap_;
-        r.primal_dual_integral = solver.primal_dual_integral_;
-        r.row_violation = solver.row_violation_;
-        r.bound_violation = solver.bound_violation_;
-        r.integrality_violation = solver.integrality_violation_;
-        return 0;
-      }
-      case RunOp::kMipTakeSolution:
-        h.solution_.col_value = mip_solver->solution_;
-        h.saved_objective_and_solution_ =
-            mip_solver->saved_objective_and_solution_;
-        lpR.a_matrix_.productQuad(h.solution_.row_value, h.solution_.col_value);
-        h.solution_.value_valid = true;
-        return 0;
-      case RunOp::kActiveModifiedUpperBounds:
-        return activeModifiedUpperBounds(options, lpR, h.solution_.col_value);
-      case RunOp::kSwapPrimalTolerance:
-        if (arg == 0) {
-          saved_tolerance = options.primal_feasibility_tolerance;
-          options.primal_feasibility_tolerance = *static_cast<double*>(p);
-        } else {
-          options.primal_feasibility_tolerance = saved_tolerance;
-        }
-        return 0;
-      case RunOp::kKktFailures:
-        getKktFailures(options, h.model_r(), h.solution_, h.basis_, h.info_);
-        return 0;
-      case RunOp::kMipFinish:
-        mip_solver.reset();
-        return 0;
-      case RunOp::kSolutionHasUndefined:
-        return h.solution_.hasUndefined();
-      case RunOp::kSolutionFeasible: {
-        bool valid, integral, feasible;
-        HighsStatus status = assessLpPrimalSolution(
-            "", options, lpR, h.solution_, valid, integral, feasible);
-        assert(status != HighsStatus::kError);
-        (void)status;
-        return feasible;
-      }
-      case RunOp::kSaveColBounds:
-        if (arg == 0) {
-          saved_lower = lpR.col_lower_;
-          saved_upper = lpR.col_upper_;
-          saved_integrality = lpR.integrality_;
-        } else {
-          lpW.col_lower_ = saved_lower;
-          lpW.col_upper_ = saved_upper;
-          lpW.integrality_ = saved_integrality;
-        }
-        return 0;
-      case RunOp::kClearIntegrality:
-        lpW.integrality_.clear();
-        return 0;
-      case RunOp::kSolutionClear:
-        h.solution_.clear();
-        return 0;
-      case RunOp::kSwapMipMaxNodes:
-        if (arg == 0) {
-          saved_mip_max_nodes = options.mip_max_nodes;
-          options.mip_max_nodes = options.mip_max_start_nodes;
-        } else {
-          options.mip_max_nodes = saved_mip_max_nodes;
-        }
-        return 0;
-      case RunOp::kOptimizeModel: {
-        if (h.profiling_) assert(!h.profiling_->isSubMip());
-        const HighsStatus status = h.optimizeModel();
-        if (h.profiling_) h.resetProfiling();
-        return st(status);
-      }
-      case RunOp::kSolutionView:
-        *static_cast<RsSolution*>(p) = rsSolution(h.solution_);
-        return 0;
       case RunOp::kRayRecord: {
         const HighsEngine& ekk = h.ekk_instance_;
         RsRayRecord& r = *static_cast<RsRayRecord*>(p);
@@ -1510,220 +1201,8 @@ struct HighsRunRust {
             std::vector<double>(primal_ray_value, primal_ray_value + num_col));
         return 0;
       }
-      case RunOp::kNeedsMods:
-        return h.model_r().needsMods(options.infinite_cost);
-      case RunOp::kReportModelStats:
-        h.reportModelStats();
-        return 0;
-      case RunOp::kClearPresolve:
-        h.clearPresolve();
-        return 0;
-      case RunOp::kInitializeMultiThreading:
-        return st(h.initializeMultiThreading());
-      case RunOp::kPresolveProfiled: {
-        HighsProfiling profiling;
-        const bool already_profiling = h.profiling_;
-        if (!already_profiling) h.initializeProfiling(&profiling);
-        const HighsPresolveStatus status =
-            h.runPresolve(options.solve_relaxation, true);
-        if (!already_profiling) h.clearProfiling();
-        return int64_t(status);
-      }
-      case RunOp::kReportPresolveReductions:
-        reportPresolveReductions(options.log_options, h.model_presolve_status_,
-                                 lpR, h.presolve_.getReducedProblem());
-        return 0;
-      case RunOp::kPresolvedModel:
-        if (arg == 0) {
-          h.presolved_model_ = h.model_r();
-        } else {
-          h.presolved_model_.lp_ = h.presolve_.getReducedProblem();
-          h.presolved_model_.lp_.setMatrixDimensions();
-        }
-        return 0;
-      case RunOp::kCrossover:
-        if (arg == 0) {
-          // callCrossover on the engine (lp_handle.rs crossover): the
-          // model, options, solution, basis, info and model status
-          // copied in and out
-          h.solution_ = *user_solution;
-          RsBasisVec basis;
-          RsRunData d = runData(basis);
-          highs_rs::LpHandle* e = h.ekk_instance_.p;
-          highs_rs_lps_run_import(h.ekk_instance_.lps, &d);
-          rsSyncOptions(e, options);
-          h.lpToRust();
-          const int status = highs_rs::highs_rs_lph_crossover(e);
-          highs_rs_lps_run_export(h.ekk_instance_.lps, &d);
-          rsBasisVecBack(basis, h.basis_);
-          if (status == 2) throw HighsTask::Interrupt();
-          return status;
-        }
-        h.info_.objective_function_value =
-            lpR.objectiveValue(h.solution_.col_value);
-        getLpKktFailures(options, lpR, h.solution_, h.basis_, h.info_);
-        return 0;
-      case RunOp::kPostsolveArgs: {
-        RsPostsolveArgs& a = *static_cast<RsPostsolveArgs*>(p);
-        a.col_value_size = user_solution->col_value.size();
-        a.col_dual_size = user_solution->col_dual.size();
-        a.row_dual_size = user_solution->row_dual.size();
-        a.dual_valid = user_solution->dual_valid;
-        a.basis_col_size = user_basis->col_status.size();
-        a.basis_row_size = user_basis->row_status.size();
-        a.basis_valid = user_basis->valid;
-        return 0;
-      }
-      case RunOp::kPostsolveBasisConsistent:
-        return isBasisConsistent(h.presolve_.getReducedProblem(), *user_basis);
-      case RunOp::kPostsolveSetSolution: {
-        HighsSolution& recovered = h.presolve_.data_.recovered_solution_;
-        if (arg == 0) {
-          recovered = *user_solution;
-          recovered.row_value.assign(h.presolve_.getReducedProblem().num_row_,
-                                     0);
-          recovered.value_valid = true;
-        } else if (arg == 1) {
-          recovered.dual_valid = false;
-          recovered.col_dual.clear();
-          recovered.row_dual.clear();
-          h.presolve_.data_.recovered_basis_.valid = false;
-        } else {
-          recovered.dual_valid = (arg - 2) & 1;
-          h.presolve_.data_.recovered_basis_ = *user_basis;
-          h.presolve_.data_.recovered_basis_.valid = (arg - 2) & 2;
-        }
-        return 0;
-      }
-      case RunOp::kPostsolveKkt:
-        if (arg)
-          h.info_.objective_function_value =
-              computeObjectiveValue(lpR, h.solution_);
-        assert(!h.model_r().isQp());
-        getKktFailures(options, false, lpR, lpR.col_cost_, h.solution_, h.info_,
-                       true);
-        return 0;
-      case RunOp::kPostsolveTakeRecovered:
-        h.solution_.clear();
-        h.solution_ = h.presolve_.data_.recovered_solution_;
-        assert(h.solution_.value_valid);
-        if (!h.solution_.dual_valid) {
-          h.solution_.col_dual.assign(lpR.num_col_, 0);
-          h.solution_.row_dual.assign(lpR.num_row_, 0);
-        }
-        h.basis_ = h.presolve_.data_.recovered_basis_;
-        h.basis_.debug_origin_name += ": after postsolve";
-        return 0;
-      case RunOp::kOptionsPostsolveCleanup:
-        options.simplex_strategy = kSimplexStrategyChoose;
-        options.simplex_min_concurrency = 1;
-        options.simplex_max_concurrency = 1;
-        return 0;
-      case RunOp::kSetBasis: {
-        const HighsBasis& basis = *user_basis;
-        switch (arg) {
-          case 0:
-            for (HighsInt iCol = 0; iCol < lpR.num_col_; iCol++)
-              h.basis_.col_status[iCol] =
-                  basis.col_status[iCol] == HighsBasisStatus::kBasic
-                      ? HighsBasisStatus::kNonbasic
-                      : basis.col_status[iCol];
-            h.basis_.alien = false;
-            return 0;
-          case 1: {
-            int64_t* sizes = static_cast<int64_t*>(p);
-            sizes[0] = h.basis_.col_status.size();
-            sizes[1] = h.basis_.row_status.size();
-            sizes[2] = lpR.num_col_;
-            sizes[3] = lpR.num_row_;
-            return isBasisRightSize(lpR, basis);
-          }
-          case 2: {
-            HighsBasis modifiable_basis = basis;
-            modifiable_basis.was_alien = true;
-            HighsProfiling profiling;
-            const bool already_profiling = h.profiling_;
-            if (!already_profiling)
-              h.initializeSingleThreadedProfiling(&profiling);
-            HighsStatus return_status =
-                rsFormBasis(h, modifiable_basis, false);
-            if (!already_profiling) h.clearProfiling();
-            if (return_status != HighsStatus::kOk) return st(return_status);
-            h.basis_ = std::move(modifiable_basis);
-            return 0;
-          }
-          case 3:
-            return isBasisConsistent(lpR, basis);
-          default:
-            h.basis_ = basis;
-            return 0;
-        }
-      }
-      case RunOp::kSetBasisOrigin:
-        h.basis_.debug_origin_name.assign(m, len);
-        return 0;
-      case RunOp::kBasisDebug: {
-        RsBasisDebug& d = *static_cast<RsBasisDebug*>(p);
-        d.id = h.basis_.debug_id;
-        d.update_count = h.basis_.debug_update_count;
-        d.origin = rsRunStr(h.basis_.debug_origin_name);
-        return 0;
-      }
-      case RunOp::kNewHighsBasis:
-        h.newHighsBasis();
-        return 0;
-      case RunOp::kHessianDims: {
-        HighsInt* d = static_cast<HighsInt*>(p);
-        d[0] = h.model_cache_.hessian_.dim_;
-        d[1] = d[0] ? h.model_cache_.hessian_.numNz() : 0;
-        return 0;
-      }
-      case RunOp::kAssessHessian:
-        return st(assessHessian(h.model_cache_.hessian_, options));
-      case RunOp::kHessianClear:
-        h.model_cache_.hessian_.clear();
-        return 0;
-      case RunOp::kCompleteHessian:
-        completeHessian(lpR.num_col_, h.model_cache_.hessian_);
-        return 0;
       case RunOp::kLogHeader:
         h.logHeader();
-        return 0;
-      case RunOp::kClearModel:
-        h.clearModel();
-        return 0;
-      case RunOp::kTakeModel:
-        lpW = std::move(user_model->lp_);
-        h.model_cache_.hessian_ = std::move(user_model->hessian_);
-        lpW.origin_name_ = "Original";
-        assert(lpR.a_matrix_.formatOk());
-        return 0;
-      case RunOp::kEmptyMatrix:
-        lpW.a_matrix_.format_ = MatrixFormat::kColwise;
-        lpW.a_matrix_.start_.assign(lpW.num_col_ + 1, 0);
-        lpW.a_matrix_.index_.clear();
-        lpW.a_matrix_.value_.clear();
-        return 0;
-      case RunOp::kFormatOk:
-        return arg ? h.model_cache_.hessian_.formatOk() : lpR.a_matrix_.formatOk();
-      case RunOp::kPrepareModelLp:
-        lpW.setMatrixDimensions();
-        assert(!lpR.is_scaled_);
-        assert(!lpR.is_moved_);
-        lpW.resetScale();
-        return 0;
-      case RunOp::kAssessLp:
-        return st(assessLp(lpW, options));
-      case RunOp::kMatrixImages:
-        if (options.write_matrix_image)
-          writeLpMatrixPicToFile(options, "LpMatrix", lpR);
-        if (options.write_hessian_image)
-          writeHessianPicToFile(options, "Hessian", h.model_cache_.hessian_);
-        return 0;
-      case RunOp::kClearSolver2:
-        return st(h.clearSolver());
-      case RunOp::kTakeHessian:
-        h.model_cache_.hessian_ = std::move(*user_hessian);
         return 0;
       case RunOp::kReadModelFile: {
         const std::string filename(m, len);
@@ -1743,15 +1222,15 @@ struct HighsRunRust {
         return st(h.passModel(std::move(read_model)));
       case RunOp::kReadBasis:
         if (arg == 0) {
-          read_basis = h.basis_;
+          read_basis = h.basis_r();
           return st(readBasisFile(options.log_options, lpW, read_basis,
                                   std::string(m, len)));
         } else if (arg == 1) {
           return isBasisConsistent(lpR, read_basis);
         }
-        h.basis_ = read_basis;
-        h.basis_.valid = true;
-        h.basis_.useful = true;
+        h.basis_w() = read_basis;
+        h.basis_w().valid = true;
+        h.basis_w().useful = true;
         h.newHighsBasis();
         return 0;
       case RunOp::kWriteModelPrepare: {
@@ -1811,72 +1290,29 @@ struct HighsRunRust {
           assert(call_status != HighsStatus::kError);
           return st(call_status);
         }
-        writeBasisFile(write_file, options, lpR, h.basis_);
+        writeBasisFile(write_file, options, lpR, h.basis_r());
         if (write_file != stdout) fclose(write_file);
         return 0;
       case RunOp::kSolutionBasisSizes:
         if (arg == 0) {
           int64_t* sizes = static_cast<int64_t*>(p);
-          sizes[0] = h.solution_.col_value.size();
-          sizes[1] = h.solution_.row_value.size();
-          sizes[2] = h.solution_.col_dual.size();
-          sizes[3] = h.solution_.row_dual.size();
-          sizes[4] = h.basis_.col_status.size();
-          sizes[5] = h.basis_.row_status.size();
+          sizes[0] = h.solution_r().col_value.size();
+          sizes[1] = h.solution_r().row_value.size();
+          sizes[2] = h.solution_r().col_dual.size();
+          sizes[3] = h.solution_r().row_dual.size();
+          sizes[4] = h.basis_r().col_status.size();
+          sizes[5] = h.basis_r().row_status.size();
         } else {
           const HighsInt num_col = h.lpNumCol();
           const HighsInt num_row = h.lpNumRow();
-          h.solution_.col_value.resize(num_col, 0);
-          h.solution_.row_value.resize(num_row, 0);
-          h.solution_.col_dual.resize(num_col, 0);
-          h.solution_.row_dual.resize(num_row, 0);
-          h.basis_.col_status.resize(num_col, HighsBasisStatus::kNonbasic);
-          h.basis_.row_status.resize(num_row, HighsBasisStatus::kBasic);
+          h.solution_w().col_value.resize(num_col, 0);
+          h.solution_w().row_value.resize(num_row, 0);
+          h.solution_w().col_dual.resize(num_col, 0);
+          h.solution_w().row_dual.resize(num_row, 0);
+          h.basis_w().col_status.resize(num_col, HighsBasisStatus::kNonbasic);
+          h.basis_w().row_status.resize(num_row, HighsBasisStatus::kBasic);
         }
         return 0;
-      case RunOp::kLpRustBegin: {
-        // The run's data, options and model (a copy) are the engine's
-        RsBasisVec basis;
-        const RsRunData d = runData(basis);
-        highs_rs::LpHandle* e = h.ekk_instance_.p;
-        highs_rs_lps_run_import(h.ekk_instance_.lps, &d);
-        rsSyncOptions(e, options);
-        h.lpToRust();
-        highs_rs::highs_rs_lph_set_profiling(e, h.profiling_);
-        *static_cast<void**>(p) = e;
-        return 0;
-      }
-      case RunOp::kLpRustEnd: {
-        // arg: the Highs object's presolve data are kept
-        RsBasisVec basis;
-        RsRunData d = runData(basis);
-        highs_rs_lps_run_export(h.ekk_instance_.lps, &d);
-        rsBasisVecBack(basis, h.basis_);
-        // Both copies of the model take the scale factors (and matrix)
-        rsModelBack(h.ekk_instance_.p, h.model_cache_.lp_);
-        if (!arg) presolveExport();
-        return 0;
-      }
-      case RunOp::kPdlpTemplate:
-        rsPdlpTemplate(options, p);
-        return 0;
-      case RunOp::kPdlpProfiling:
-        if (arg)
-          h.profiling_->start(kSubSolverPdlp);
-        else
-          h.profiling_->stop(kSubSolverPdlp);
-        return 0;
-      case RunOp::kSetInterrupt:
-        pending = std::make_exception_ptr(HighsTask::Interrupt());
-        return 0;
-      case RunOp::kAssessSmallValues: {
-        // HighsSparseMatrix::assessSmallValues once Rust found a small value
-        const RsMut<double>& v = *static_cast<const RsMut<double>*>(p);
-        const std::vector<double> values(v.ptr, v.ptr + v.len);
-        analyseVectorValues(&options.log_options, "Small values in matrix",
-                            HighsInt(values.size()), values, false, "");
-        return 0;
-      }
       default:
         break;
     }
@@ -1890,31 +1326,6 @@ struct HighsRunRust {
 #undef lpW
 
   // The debug checks of returnFromOptimizeModel: 1 for a logical error
-  int64_t debugReturn() {
-    HighsOptions& options_ = h.options_;
-    bool error = false;
-    if (h.solution_.value_valid &&
-        debugPrimalSolutionRightSize(options_, h.model_r().lp_, h.solution_) ==
-            HighsDebugStatus::kLogicalError)
-      error = true;
-    if (h.solution_.dual_valid &&
-        debugDualSolutionRightSize(options_, h.model_r().lp_, h.solution_) ==
-            HighsDebugStatus::kLogicalError)
-      error = true;
-    if (h.basis_.valid &&
-        debugBasisRightSize(options_, h.model_r().lp_, h.basis_) ==
-            HighsDebugStatus::kLogicalError)
-      error = true;
-    if (h.solution_.value_valid &&
-        debugHighsSolution("Return from optimizeModel()", options_, h.model_r(),
-                           h.solution_, h.basis_, h.model_status_,
-                           h.info_) == HighsDebugStatus::kLogicalError)
-      error = true;
-    if (debugInfo(options_, h.model_r().lp_, h.basis_, h.solution_, h.info_,
-                  h.model_status_) == HighsDebugStatus::kLogicalError)
-      error = true;
-    return error;
-  }
 };
 
 static int64_t rsTopOp(void* ctx, int code, int64_t arg, void* p) {
@@ -1927,40 +1338,8 @@ static double rsTopClock(void* ctx, int which, int action) {
   return HighsRunRust::clock(&r, which, action);
 }
 
-extern "C" {
-int highs_rs_call_solve_mip(const RsHighs* h);
-int highs_rs_check_optimality(const RsHighs* h, const char* solver_type,
-                              size_t len);
-int highs_rs_complete_solution(const RsHighs* h);
-int highs_rs_get_ray(const RsHighs* h, bool primal, bool* has_ray,
-                     double* value, size_t len);
-int highs_rs_presolve(const RsHighs* h);
-int highs_rs_crossover(const RsHighs* h);
-}
-
-HighsStatus Highs::callSolveMip() {
-  HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_call_solve_mip(&v));
-  r.rethrow();
-  return status;
-}
-
-HighsStatus Highs::checkOptimality(const std::string& solver_type) {
-  HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  return HighsStatus(
-      highs_rs_check_optimality(&v, solver_type.data(), solver_type.size()));
-}
-
-HighsStatus Highs::completeSolutionFromDiscreteAssignment() {
-  assert(model_r().isMip() && solution_.value_valid);
-  HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_complete_solution(&v));
-  r.rethrow();
-  return status;
-}
+extern "C" int highs_rs_get_ray(const RsHighs* h, bool primal, bool* has_ray,
+                                double* value, size_t len);
 
 HighsStatus Highs::getDualRayInterface(bool& has_dual_ray,
                                        double* dual_ray_value) {
@@ -1999,8 +1378,6 @@ HighsStatus Highs::crossover(const HighsSolution& user_solution) {
   });
 }
 
-extern "C" int highs_rs_call_run_postsolve(const RsHighs* h);
-extern "C" int highs_rs_pass_model(const RsHighs* h, int which);
 extern "C" bool highs_rs_format_ok(const RsLog* log, bool hessian,
                                    HighsInt num_nz, HighsInt format);
 
@@ -2082,8 +1459,6 @@ bool Highs::qFormatOk(const HighsInt num_nz, const HighsInt format) {
   const RsLog log = rsLog(options_.log_options);
   return highs_rs_format_ok(&log, true, num_nz, format);
 }
-extern "C" int highs_rs_set_basis(const RsHighs* h, bool alien,
-                                  const char* origin, size_t len);
 
 HighsStatus Highs::setBasis(const HighsBasis& basis,
                             const std::string& origin) {
@@ -2094,8 +1469,8 @@ HighsStatus Highs::setBasis(const HighsBasis& basis,
         ekk_instance_.p, &b, basis.debug_origin_name.data(),
         basis.debug_origin_name.size(), origin.data(), origin.size());
   });
-  assert(basis_.debug_origin_name != "");
-  assert(!basis_.alien || status != HighsStatus::kOk);
+  assert(basis_r().debug_origin_name != "");
+  assert(!basis_r().alien || status != HighsStatus::kOk);
   return status;
 }
 
@@ -2119,40 +1494,11 @@ HighsStatus Highs::calledOptimizeModel() {
   });
 }
 
-HighsStatus Highs::returnFromOptimizeModel(const HighsStatus run_return_status,
-                                           const bool undo_mods) {
-  HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsStatus status = HighsStatus(highs_rs_return_from_optimize_model(
-      &v, int(run_return_status), undo_mods));
-  r.rethrow();
-  return status;
-}
-
 HighsStatus Highs::returnFromHighs(HighsStatus highs_return_status) {
   HighsRunRust r(*this);
   const RsHighs v = r.view();
   const HighsStatus status =
       HighsStatus(highs_rs_return_from_highs(&v, int(highs_return_status)));
-  r.rethrow();
-  return status;
-}
-
-HighsPresolveStatus Highs::runPresolve(const bool force_lp_presolve,
-                                       const bool force_presolve) {
-  HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsPresolveStatus status = HighsPresolveStatus(
-      highs_rs_run_presolve(&v, force_lp_presolve, force_presolve));
-  r.rethrow();
-  return status;
-}
-
-HighsPostsolveStatus Highs::runPostsolve() {
-  HighsRunRust r(*this);
-  const RsHighs v = r.view();
-  const HighsPostsolveStatus status =
-      HighsPostsolveStatus(highs_rs_run_postsolve(&v));
   r.rethrow();
   return status;
 }
@@ -2355,30 +1701,30 @@ HighsStatus Highs::setSolution(const HighsSolution& solution) {
     return_status = HighsStatus::kError;
   }
   if (new_primal_solution) {
-    solution_.col_value = solution.col_value;
+    solution_w().col_value = solution.col_value;
     if (lpNumRow() > 0) {
-      solution_.row_value.resize(lpNumRow());
+      solution_w().row_value.resize(lpNumRow());
       if (!model_r().lp_.a_matrix_.isColwise())
         model_w().lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
-          options_.log_options, calculateRowValuesQuad(model_r().lp_, solution_),
+          options_.log_options, calculateRowValuesQuad(model_r().lp_, solution_w()),
           return_status, "calculateRowValuesQuad");
       if (return_status == HighsStatus::kError) return return_status;
     }
-    solution_.value_valid = true;
+    solution_w().value_valid = true;
   }
   if (new_dual_solution) {
-    solution_.row_dual = solution.row_dual;
+    solution_w().row_dual = solution.row_dual;
     if (lpNumCol() > 0) {
-      solution_.col_dual.resize(lpNumCol());
+      solution_w().col_dual.resize(lpNumCol());
       if (!model_r().lp_.a_matrix_.isColwise())
         model_w().lp_.a_matrix_.ensureColwise();
       return_status = interpretCallStatus(
-          options_.log_options, calculateColDualsQuad(model_r().lp_, solution_),
+          options_.log_options, calculateColDualsQuad(model_r().lp_, solution_w()),
           return_status, "calculateColDuals");
       if (return_status == HighsStatus::kError) return return_status;
     }
-    solution_.dual_valid = true;
+    solution_w().dual_valid = true;
   }
   return returnFromHighs(return_status);
 }
@@ -2414,22 +1760,22 @@ HighsStatus Highs::userScaleSolution(HighsUserScaleData& data,
   if (!data.user_objective_scale && !data.user_bound_scale)
     return HighsStatus::kOk;
   const HighsLp& lp = this->model_r().lp_;
-  const bool primal = info_.primal_solution_status != kSolutionStatusNone;
-  const bool dual = info_.dual_solution_status != kSolutionStatusNone;
+  const bool primal = info_r().primal_solution_status != kSolutionStatusNone;
+  const bool dual = info_r().dual_solution_status != kSolutionStatusNone;
   auto part = [](std::vector<double>& v, const bool use, const HighsInt n) {
     return use ? RsMut<double>{v.data(), size_t(n)} : RsMut<double>{nullptr, 0};
   };
   const double objective_function_value = highs_rs_user_scale_solution(
       &data, rsMut(lp.integrality_), primal, dual,
-      part(solution_.col_value, primal, lp.num_col_),
-      part(solution_.row_value, primal, lp.num_row_),
-      part(solution_.col_dual, dual, lp.num_col_),
-      part(solution_.row_dual, dual, lp.num_row_),
-      info_.objective_function_value, lp.offset_);
+      part(solution_w().col_value, primal, lp.num_col_),
+      part(solution_w().row_value, primal, lp.num_row_),
+      part(solution_w().col_dual, dual, lp.num_col_),
+      part(solution_w().row_dual, dual, lp.num_row_),
+      info_r().objective_function_value, lp.offset_);
   if (!update_kkt) return return_status;
-  info_.objective_function_value = objective_function_value;
-  getKktFailures(options_, model_r(), solution_, basis_, info_);
-  return reportKktFailures(model_r().lp_, options_, info_,
+  info_w().objective_function_value = objective_function_value;
+  getKktFailures(options_, model_r(), solution_w(), basis_w(), info_w());
+  return reportKktFailures(model_r().lp_, options_, info_r(),
                            "After removing user scaling")
              ? HighsStatus::kWarning
              : return_status;
@@ -2471,78 +1817,6 @@ void highs_rs_report_model_stats(const RsLog* log, bool dev, const char* name,
 
 static RsMut<uint8_t> rsBasisStatusOf(std::vector<HighsBasisStatus>& s) {
   return {reinterpret_cast<uint8_t*>(s.data()), s.size()};
-}
-
-HighsStatus Highs::handleInfCost() {
-  if (!model_r().lp_.has_infinite_cost_) return HighsStatus::kOk;
-  HighsLp& lp = this->model_w().lp_;
-  const size_t n = lp.num_col_;
-  std::vector<HighsInt> index(n);
-  std::vector<double> cost(n), lower(n), upper(n);
-  RsInfCostMods m = {rsMut(index), rsMut(cost), rsMut(lower), rsMut(upper),
-                     0};
-  const RsLog log = rsLog(options_.log_options);
-  if (HighsStatus(highs_rs_handle_inf_cost(
-          &log, options_.infinite_cost, lp.sense_ == ObjSense::kMinimize,
-          lp.isMip(), rsMut(lp.integrality_), rsMut(lp.col_cost_),
-          rsMut(lp.col_lower_), rsMut(lp.col_upper_), &m)) ==
-      HighsStatus::kError)
-    return HighsStatus::kError;
-  HighsLpMods& mods = lp.mods_;
-  mods.save_inf_cost_variable_index.insert(
-      mods.save_inf_cost_variable_index.end(), index.begin(),
-      index.begin() + m.num);
-  mods.save_inf_cost_variable_cost.insert(
-      mods.save_inf_cost_variable_cost.end(), cost.begin(),
-      cost.begin() + m.num);
-  mods.save_inf_cost_variable_lower.insert(
-      mods.save_inf_cost_variable_lower.end(), lower.begin(),
-      lower.begin() + m.num);
-  mods.save_inf_cost_variable_upper.insert(
-      mods.save_inf_cost_variable_upper.end(), upper.begin(),
-      upper.begin() + m.num);
-  lp.has_infinite_cost_ = false;
-  return HighsStatus::kOk;
-}
-
-void Highs::restoreInfCost(HighsStatus& return_status) {
-  if (model_r().lp_.mods_.save_inf_cost_variable_index.size() == 0) return;
-  HighsLp& lp = this->model_w().lp_;
-  HighsLpMods& mods = lp.mods_;
-  highs_rs_restore_inf_cost(
-      rsMut(mods.save_inf_cost_variable_index),
-      rsMut(mods.save_inf_cost_variable_cost),
-      rsMut(mods.save_inf_cost_variable_lower),
-      rsMut(mods.save_inf_cost_variable_upper),
-      solution_.value_valid ? rsMut(solution_.col_value)
-                            : RsMut<double>{nullptr, 0},
-      basis_.valid ? rsBasisStatusOf(basis_.col_status)
-                   : RsMut<uint8_t>{nullptr, 0},
-      rsMut(lp.col_cost_), rsMut(lp.col_lower_), rsMut(lp.col_upper_),
-      &this->info_.objective_function_value);
-  lp.has_infinite_cost_ = true;
-  if (this->model_status_ == HighsModelStatus::kInfeasible) {
-    this->model_status_ = HighsModelStatus::kUnknown;
-    setHighsModelStatusAndClearSolutionAndBasis(this->model_status_);
-    return_status = highsStatusFromHighsModelStatus(model_status_);
-  }
-}
-
-HighsStatus Highs::basisForSolution() {
-  const HighsLp& lp = model_r().lp_;
-  assert(!lp.isMip() || options_.solve_relaxation);
-  assert(solution_.value_valid);
-  invalidateBasis();
-  HighsBasis basis;
-  basis.col_status.resize(lp.num_col_);
-  basis.row_status.resize(lp.num_row_);
-  const RsLog log = rsLog(options_.log_options);
-  highs_rs_basis_for_solution(
-      &log, options_.primal_feasibility_tolerance, rsMut(lp.col_lower_),
-      rsMut(lp.col_upper_), rsMut(solution_.col_value), rsMut(lp.row_lower_),
-      rsMut(lp.row_upper_), rsMut(solution_.row_value),
-      rsBasisStatusOf(basis.col_status), rsBasisStatusOf(basis.row_status));
-  return this->setBasis(basis);
 }
 
 void Highs::reportModelStats() const {

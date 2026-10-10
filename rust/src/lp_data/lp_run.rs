@@ -210,20 +210,6 @@ impl LpRun {
     }
 }
 
-/// # Safety
-/// `lps` a solver, `d` valid views
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_lps_run_import(lps: *mut LpSolver, d: *const CRunData) {
-    (*lps).run.import(&*d);
-}
-
-/// # Safety
-/// As highs_rs_lps_run_import
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_lps_run_export(lps: *mut LpSolver, d: *mut CRunData) {
-    (*lps).run.export(&mut *d);
-}
-
 // ---- The LP part of the run on the Rust data
 
 /// The Rust LP run: the Highs object's steps and the engine

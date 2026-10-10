@@ -542,9 +542,3 @@ pub unsafe fn call_solve_qp(h: &CQpHost) -> Status {
     status
 }
 
-/// # Safety
-/// As call_solve_qp
-#[no_mangle]
-pub unsafe extern "C" fn highs_rs_call_solve_qp(h: *const CQpHost) -> i32 {
-    call_solve_qp(&*h) as i32
-}
